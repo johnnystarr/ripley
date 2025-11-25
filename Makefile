@@ -44,7 +44,7 @@ uninstall:
 # Run the application with default settings
 run:
 	@echo "🎵 Running Ripley..."
-	@cargo run --release -- --output-folder ~/Music/Ripped
+	@cargo run --release
 
 # Check code without building
 check:

@@ -81,12 +81,17 @@ If these files don't exist, Ripley will continue to work but skip audio notifica
 ### Basic Usage
 
 ```bash
+# Uses default output folder: ~/Desktop/Rips/Music
+ripley
+
+# Or specify a custom folder
 ripley --output-folder ~/Music/Ripped
 ```
 
 ### Advanced Options
 
 ```bash
+# All options (output-folder is optional, defaults to ~/Desktop/Rips/Music)
 ripley --output-folder ~/Music/Ripped \
        --quality 8 \
        --eject-when-done true \
@@ -97,7 +102,7 @@ ripley --output-folder ~/Music/Ripped \
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--output-folder` | `-o` | Output directory for ripped files (required) | - |
+| `--output-folder` | `-o` | Output directory for ripped files | `~/Desktop/Rips/Music` |
 | `--quality` | `-q` | FLAC compression level (0-8) | 5 |
 | `--eject-when-done` | `-e` | Auto-eject disc after ripping | true |
 | `--skip-metadata` | `-s` | Skip metadata fetching (offline mode) | false |

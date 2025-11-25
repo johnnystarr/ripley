@@ -12,9 +12,12 @@ use crate::ripper;
 use crate::tui::Tui;
 
 pub async fn run(args: Args) -> Result<()> {
+    // Get output folder (using default if not specified)
+    let output_folder = args.get_output_folder();
+    
     // Validate output directory
-    if !args.output_folder.exists() {
-        tokio::fs::create_dir_all(&args.output_folder).await?;
+    if !output_folder.exists() {
+        tokio::fs::create_dir_all(&output_folder).await?;
     }
 
     // Initialize sounds directory
@@ -25,7 +28,7 @@ pub async fn run(args: Args) -> Result<()> {
     let tui_state = Arc::clone(&tui.state);
 
     tui.add_log("🎵 Ripley started - monitoring for audio CDs...".to_string()).await;
-    tui.add_log(format!("Output directory: {}", args.output_folder.display())).await;
+    tui.add_log(format!("Output directory: {}", output_folder.display())).await;
     tui.add_log(format!("FLAC quality: {}", args.quality)).await;
 
     // Track active rip tasks
@@ -148,10 +151,11 @@ async fn rip_disc(
     let album_info_clone = album_info.clone();
     let tui_state_clone = Arc::clone(&tui_state);
 
+    let output_folder = args.get_output_folder();
     let result = ripper::rip_cd(
         device,
         &metadata,
-        &args.output_folder,
+        &output_folder,
         args.quality,
         move |progress| {
             let device = device_clone.clone();
