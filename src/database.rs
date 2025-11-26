@@ -100,6 +100,14 @@ impl IssueType {
     }
 }
 
+/// Show entry for TV shows/series
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Show {
+    pub id: Option<i64>,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Database manager for logs and issues
 pub struct Database {
     conn: Mutex<Connection>,
@@ -175,6 +183,16 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Create shows table for managing show list
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS shows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
             )",
             [],
         )?;
@@ -427,6 +445,97 @@ impl Database {
     /// Set the last used title for ripping
     pub fn set_last_title(&self, title: &str) -> Result<()> {
         self.set_setting("last_rip_title", title)
+    }
+
+    /// Get the last selected show ID
+    pub fn get_last_show_id(&self) -> Result<Option<i64>> {
+        match self.get_setting("last_show_id")? {
+            Some(id_str) => Ok(id_str.parse().ok()),
+            None => Ok(None),
+        }
+    }
+
+    /// Set the last selected show ID
+    pub fn set_last_show_id(&self, show_id: i64) -> Result<()> {
+        self.set_setting("last_show_id", &show_id.to_string())
+    }
+
+    /// Add a new show
+    pub fn add_show(&self, name: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "INSERT INTO shows (name, created_at) VALUES (?1, ?2)",
+            params![name, Utc::now().to_rfc3339()],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get all shows
+    pub fn get_shows(&self) -> Result<Vec<Show>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, created_at FROM shows ORDER BY name ASC"
+        )?;
+
+        let shows = stmt.query_map([], |row| {
+            Ok(Show {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(shows)
+    }
+
+    /// Get a show by ID
+    pub fn get_show(&self, id: i64) -> Result<Option<Show>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, created_at FROM shows WHERE id = ?1"
+        )?;
+
+        let result = stmt.query_row([id], |row| {
+            Ok(Show {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        });
+
+        match result {
+            Ok(show) => Ok(Some(show)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Update a show
+    pub fn update_show(&self, id: i64, name: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE shows SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Delete a show
+    pub fn delete_show(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute("DELETE FROM shows WHERE id = ?1", [id])?;
+
+        Ok(())
     }
 }
 

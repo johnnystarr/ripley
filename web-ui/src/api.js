@@ -134,6 +134,46 @@ class ApiClient {
     });
   }
 
+  // Get all shows
+  async getShows() {
+    return this.request('/shows');
+  }
+
+  // Create a new show
+  async createShow(name) {
+    return this.request('/shows', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  // Get a single show
+  async getShow(id) {
+    return this.request(`/shows/${id}`);
+  }
+
+  // Update a show
+  async updateShow(id, name) {
+    return this.request(`/shows/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  // Delete a show
+  async deleteShow(id) {
+    return this.request(`/shows/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Select a show (set as default)
+  async selectShow(id) {
+    return this.request(`/shows/${id}/select`, {
+      method: 'POST',
+    });
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {

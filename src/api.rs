@@ -5,7 +5,7 @@ use axum::{
     },
     http,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put, delete},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ use tracing::info;
 
 use crate::cli::RipArgs;
 use crate::config::Config;
-use crate::database::{Database, LogEntry, Issue};
+use crate::database::{Database, LogEntry, Issue, Show};
 
 /// Start the REST API server
 pub async fn start_server(
@@ -282,6 +282,12 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/issues/:id/resolve", post(resolve_issue))
         .route("/settings/last-title", get(get_last_title))
         .route("/settings/last-title", post(set_last_title))
+        .route("/shows", get(get_shows))
+        .route("/shows", post(create_show))
+        .route("/shows/:id", get(get_show))
+        .route("/shows/:id", put(update_show))
+        .route("/shows/:id", delete(delete_show))
+        .route("/shows/:id/select", post(select_show))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -660,6 +666,113 @@ async fn set_last_title(
         Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to set last title: {}", e),
+        }),
+    }
+}
+
+/// Get all shows
+async fn get_shows(State(state): State<ApiState>) -> Result<Json<Vec<Show>>, ErrorResponse> {
+    match state.db.get_shows() {
+        Ok(shows) => Ok(Json(shows)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get shows: {}", e),
+        }),
+    }
+}
+
+/// Create a new show
+#[derive(Debug, Deserialize)]
+struct CreateShowRequest {
+    name: String,
+}
+
+async fn create_show(
+    State(state): State<ApiState>,
+    Json(request): Json<CreateShowRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.add_show(&request.name) {
+        Ok(id) => Ok(Json(serde_json::json!({ "id": id, "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to create show: {}", e),
+        }),
+    }
+}
+
+/// Get a single show
+async fn get_show(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<Show>, ErrorResponse> {
+    match state.db.get_show(id) {
+        Ok(Some(show)) => Ok(Json(show)),
+        Ok(None) => Err(ErrorResponse {
+            error: "Show not found".to_string(),
+        }),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get show: {}", e),
+        }),
+    }
+}
+
+/// Update a show
+#[derive(Debug, Deserialize)]
+struct UpdateShowRequest {
+    name: String,
+}
+
+async fn update_show(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(request): Json<UpdateShowRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_show(id, &request.name) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update show: {}", e),
+        }),
+    }
+}
+
+/// Delete a show
+async fn delete_show(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.delete_show(id) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to delete show: {}", e),
+        }),
+    }
+}
+
+/// Select a show (set as last used and update title)
+async fn select_show(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    // Get the show to get its name
+    match state.db.get_show(id) {
+        Ok(Some(show)) => {
+            // Set last show ID
+            if let Err(e) = state.db.set_last_show_id(id) {
+                return Err(ErrorResponse {
+                    error: format!("Failed to set last show: {}", e),
+                });
+            }
+            // Also update the last title
+            if let Err(e) = state.db.set_last_title(&show.name) {
+                return Err(ErrorResponse {
+                    error: format!("Failed to set title: {}", e),
+                });
+            }
+            Ok(Json(serde_json::json!({ "success": true, "name": show.name })))
+        }
+        Ok(None) => Err(ErrorResponse {
+            error: "Show not found".to_string(),
+        }),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to select show: {}", e),
         }),
     }
 }

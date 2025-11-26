@@ -15,6 +15,7 @@ import {
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
+import Dropdown from '../components/Dropdown';
 
 export default function Dashboard() {
   const [drives, setDrives] = useState([]);
@@ -23,6 +24,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [lastTitle, setLastTitle] = useState('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [shows, setShows] = useState([]);
+  const [selectedShowId, setSelectedShowId] = useState(null);
 
   // Fetch drives and logs on mount
   useEffect(() => {
@@ -30,6 +33,7 @@ export default function Dashboard() {
     fetchLogs();
     fetchActiveIssues();
     fetchLastTitle();
+    fetchShows();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -127,16 +131,45 @@ export default function Dashboard() {
       const data = await api.getLastTitle();
       if (data.title) {
         setLastTitle(data.title);
+        // Find matching show
+        const matchingShow = shows.find(s => s.name === data.title);
+        if (matchingShow) {
+          setSelectedShowId(matchingShow.id);
+        }
       }
     } catch (err) {
       console.error('Failed to fetch last title:', err);
     }
+  }, [shows]);
+
+  const fetchShows = useCallback(async () => {
+    try {
+      const data = await api.getShows();
+      setShows(data);
+    } catch (err) {
+      console.error('Failed to fetch shows:', err);
+    }
   }, []);
+
+  const handleShowSelect = useCallback(async (showId) => {
+    try {
+      await api.selectShow(showId);
+      setSelectedShowId(showId);
+      const show = shows.find(s => s.id === showId);
+      if (show) {
+        setLastTitle(show.name);
+      }
+      toast.success('Show selected - will be used for all new rips');
+    } catch (err) {
+      toast.error('Failed to select show: ' + err.message);
+    }
+  }, [shows]);
 
   const handleSaveTitle = useCallback(async () => {
     try {
       await api.setLastTitle(lastTitle);
       setIsEditingTitle(false);
+      setSelectedShowId(null); // Clear show selection when manually setting title
       toast.success('Title saved - will be used for all new rips');
     } catch (err) {
       toast.error('Failed to save title: ' + err.message);
@@ -199,57 +232,74 @@ export default function Dashboard() {
 
       <h1 className="text-3xl font-bold text-slate-100">Dashboard</h1>
 
-      {/* Default Title Setting */}
+      {/* Show Selection */}
       <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-100">Default Rip Title</h2>
-            <p className="text-slate-400 text-sm mt-1">
-              Set a title that will be used for all new rips until you change it
-            </p>
-          </div>
-          {!isEditingTitle && (
-            <button
-              onClick={() => setIsEditingTitle(true)}
-              className="text-cyan-400 hover:text-cyan-300 transition-colors"
-            >
-              <FontAwesomeIcon icon={faEdit} className="mr-2" />
-              Edit
-            </button>
-          )}
+        <div className="mb-3">
+          <h2 className="text-lg font-semibold text-slate-100">Select Show</h2>
+          <p className="text-slate-400 text-sm mt-1">
+            Choose a show from your list - it will be used for all new rips until you change it
+          </p>
         </div>
         
-        {isEditingTitle ? (
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={lastTitle}
-              onChange={(e) => setLastTitle(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSaveTitle()}
-              placeholder="e.g., Foster's Home for Imaginary Friends"
-              className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-              autoFocus
-            />
-            <button
-              onClick={handleSaveTitle}
-              className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
-            >
-              <FontAwesomeIcon icon={faSave} />
-            </button>
-            <button
-              onClick={() => {
-                setIsEditingTitle(false);
-                fetchLastTitle();
-              }}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-            >
-              <FontAwesomeIcon icon={faTimes} />
-            </button>
-          </div>
+        {shows.length > 0 ? (
+          <Dropdown
+            label="Show"
+            value={selectedShowId || ''}
+            options={[
+              { value: '', label: 'No show selected' },
+              ...shows.map(show => ({ value: show.id, label: show.name }))
+            ]}
+            onChange={(value) => value && handleShowSelect(value)}
+          />
         ) : (
-          <div className="text-slate-100 font-mono text-lg">
-            {lastTitle || <span className="text-slate-500 italic">No title set</span>}
+          <div className="text-slate-400 text-center py-8">
+            <p className="mb-3">No shows available</p>
+            <a href="/shows" className="text-cyan-400 hover:text-cyan-300 underline">
+              Add shows in the Shows tab
+            </a>
           </div>
+        )}
+        
+        {isEditingTitle && (
+          <div className="mt-4 pt-4 border-t border-slate-700">
+            <p className="text-slate-400 text-sm mb-2">Or enter a custom title:</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={lastTitle}
+                onChange={(e) => setLastTitle(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSaveTitle()}
+                placeholder="e.g., Foster's Home for Imaginary Friends"
+                className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                autoFocus
+              />
+              <button
+                onClick={handleSaveTitle}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
+              >
+                <FontAwesomeIcon icon={faSave} />
+              </button>
+              <button
+                onClick={() => {
+                  setIsEditingTitle(false);
+                  fetchLastTitle();
+                }}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+              >
+                <FontAwesomeIcon icon={faTimes} />
+              </button>
+            </div>
+          </div>
+        )}
+        
+        {!isEditingTitle && shows.length > 0 && (
+          <button
+            onClick={() => setIsEditingTitle(true)}
+            className="mt-3 text-cyan-400 hover:text-cyan-300 transition-colors text-sm"
+          >
+            <FontAwesomeIcon icon={faEdit} className="mr-2" />
+            Use custom title instead
+          </button>
         )}
       </div>
 
