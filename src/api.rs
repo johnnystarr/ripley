@@ -285,7 +285,6 @@ async fn run_rip_operation(
     state: ApiState,
     request: StartRipRequest,
 ) -> anyhow::Result<()> {
-    let config = state.config.read().await;
     
     let _ = state.event_tx.send(ApiEvent::Log {
         message: "Starting rip operation...".to_string(),
@@ -332,7 +331,19 @@ async fn run_rename_operation(
     });
     
     // Call existing rename functionality
-    // Note: We may need to refactor rename::run_rename to return structured data
+    // Note: We'll need to refactor rename::run_rename to work without prompts
+    // For now, log the parameters that would be used
+    if let Some(ref title) = request.title {
+        let _ = state.event_tx.send(ApiEvent::Log {
+            message: format!("Using title: {}", title),
+        });
+    }
+    let _ = state.event_tx.send(ApiEvent::Log {
+        message: format!(
+            "Options: skip_speech={}, skip_filebot={}",
+            request.skip_speech, request.skip_filebot
+        ),
+    });
     
     let _ = state.event_tx.send(ApiEvent::Log {
         message: "Rename operation completed".to_string(),
