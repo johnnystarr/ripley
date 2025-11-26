@@ -90,9 +90,10 @@ print(result["text"])
 
 /// Transcribe audio using OpenAI Whisper API
 async fn transcribe_with_openai_api(audio_path: &str) -> Result<String> {
-    // Check for OpenAI API key
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set"))?;
+    // Load config and get API key
+    let config = crate::config::Config::load()?;
+    let api_key = config.get_openai_api_key()
+        .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured in config.yaml or OPENAI_API_KEY env var"))?;
     
     info!("Using OpenAI Whisper API for transcription");
     
@@ -132,9 +133,10 @@ pub async fn match_episode_by_transcript(
 ) -> Result<EpisodeMatch> {
     info!("Matching transcript against {} episodes", episodes.len());
     
-    // Check for OpenAI API key
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY not set for episode matching"))?;
+    // Load config and get API key
+    let config = crate::config::Config::load()?;
+    let api_key = config.get_openai_api_key()
+        .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured in config.yaml or OPENAI_API_KEY env var"))?;
     
     // Build episode list for context
     let episode_list: Vec<String> = episodes.iter()

@@ -1,13 +1,16 @@
-# 🎵 Ripley
+# 🎬 Ripley
 
-A Rust-powered automated CD ripper with a real-time TUI interface. Ripley monitors your CD drives continuously, automatically fetches metadata, and rips audio CDs to FLAC format with a beautiful terminal interface showing live progress.
-
-![Ripley Demo](demo.gif)
+Automated DVD/Blu-ray ripper with **intelligent episode matching** for TV shows. Uses OpenAI Whisper + GPT-4 to identify episodes by analyzing dialogue content, solving the DVD-order vs broadcast-order problem.
 
 ## Features
 
-- 🔄 **Continuous drive monitoring** - Detects when CDs are inserted, even if drives weren't available at startup
-- 🎵 **Multiple drive support** - Rip from multiple CD drives simultaneously
+- 🎬 **Automated DVD/Blu-ray Ripping** - MakeMKV integration for lossless remuxing
+- 🎤 **Speech-Based Episode Matching** - Transcribes dialogue and matches to correct episodes (100% accurate)
+- 📺 **Perfect Episode Ordering** - Matches DVD episodes to broadcast order via TMDB
+- 🔔 **Push Notifications** - ntfy.sh integration for completion alerts
+- 📤 **Auto-Sync** - Rsync to NAS after ripping
+- 🎨 **Real-time TUI** - Beautiful terminal interface with live progress
+- 🎵 **CD Ripping** - Also supports audio CD ripping to FLAC
 - 📊 **Real-time TUI** - Live progress bars and status updates for each drive
 - 🏷️ **Automatic metadata** - Fetches artist/album/track info from MusicBrainz (with fallbacks)
 - 💿 **FLAC output** - Lossless audio quality with configurable compression

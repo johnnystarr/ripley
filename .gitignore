@@ -3,3 +3,4 @@ target/
 Cargo.lock
 *.mp3
 .abcde.conf
+config.yaml

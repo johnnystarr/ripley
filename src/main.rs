@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod drive;
 mod dvd_metadata;
 mod dvd_ripper;
@@ -9,7 +10,6 @@ mod tui;
 mod app;
 mod notifications;
 mod filebot;
-mod ocr;
 mod rsync;
 mod speech_match;
 
