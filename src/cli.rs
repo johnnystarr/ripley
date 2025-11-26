@@ -26,6 +26,10 @@ pub struct Args {
     /// Manually specify the title for DVD/Blu-ray metadata lookup (e.g., "Foster's Home for Imaginary Friends")
     #[arg(short, long, value_name = "TITLE")]
     pub title: Option<String>,
+
+    /// Skip Filebot renaming after ripping (Filebot runs by default to fix DVD vs broadcast order mismatches)
+    #[arg(long, default_value = "false")]
+    pub skip_filebot: bool,
 }
 
 impl Args {
@@ -49,6 +53,7 @@ mod tests {
             eject_when_done: true,
             skip_metadata: false,
             title: None,
+            skip_filebot: false,
         };
         
         assert_eq!(args.quality, 5);
@@ -63,6 +68,7 @@ mod tests {
             eject_when_done: false,
             skip_metadata: true,
             title: None,
+            skip_filebot: false,
         };
         
         assert_eq!(args.get_output_folder(), custom_path);
@@ -79,6 +85,7 @@ mod tests {
             eject_when_done: true,
             skip_metadata: false,
             title: None,
+            skip_filebot: false,
         };
         
         let folder = args.get_output_folder();
@@ -97,6 +104,7 @@ mod tests {
                 eject_when_done: true,
                 skip_metadata: false,
                 title: None,
+                skip_filebot: false,
             };
             assert!(args.quality <= 8);
         }

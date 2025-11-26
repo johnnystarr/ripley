@@ -358,27 +358,21 @@ async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_nu
     
     let file_path = file_path.ok_or_else(|| anyhow!("Could not find MKV file for title {}", title_num))?;
     
-    // Find the episode that corresponds to this title
+    // Don't trust episode titles from database - DVD order doesn't match
+    // Use minimal naming to force Filebot to analyze actual video content
     if metadata.media_type == MediaType::TVShow {
-        if let Some(episode) = metadata.episodes.iter().find(|e| e.title_index == title_num) {
-            let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
-            let episode_title = crate::ripper::to_pascal_case_with_periods(&episode.title);
-            let new_name = format!(
-                "{}.S{:02}E{:02}.{}.mkv",
-                show_name,
-                episode.season,
-                episode.episode,
-                episode_title
-            );
-            
-            let new_path = output_dir.join(&new_name);
-            
-            info!("Renaming {} -> {} (Title {} = S{:02}E{:02})", 
-                  file_path.display(), new_name, title_num, episode.season, episode.episode);
-            fs::rename(&file_path, &new_path).await?;
-        } else {
-            info!("No episode metadata for title {}, keeping original name", title_num);
-        }
+        let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
+        
+        // Use minimal naming: ShowName.01.mkv, ShowName.02.mkv, etc.
+        // This forces Filebot to analyze the actual video duration/content
+        // to match against the correct broadcast order episodes
+        let new_name = format!("{}.{:02}.mkv", show_name, title_num);
+        let new_path = output_dir.join(&new_name);
+        
+        info!("Renaming {} -> {} (DVD Title {} - Filebot will analyze)", 
+              file_path.display(), new_name, title_num);
+        
+        fs::rename(&file_path, &new_path).await?;
     } else if metadata.media_type == MediaType::Movie {
         let movie_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
         let new_name = if let Some(year) = &metadata.year {

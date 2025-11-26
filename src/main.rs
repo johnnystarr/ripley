@@ -8,6 +8,9 @@ mod audio;
 mod tui;
 mod app;
 mod notifications;
+mod filebot;
+mod ocr;
+mod rsync;
 
 use anyhow::Result;
 use cli::Args;

@@ -92,6 +92,35 @@ pub async fn get_dvd_id(device: &str) -> Result<String> {
     Ok(dvd_id)
 }
 
+/// Extract season number from volume name
+/// Examples:
+/// - "VOLUME 2" -> Some(2)
+/// - "SEASON 3" -> Some(3)
+/// - "S02" -> Some(2)
+/// - "VOL 1" -> Some(1)
+pub fn extract_season_from_volume(name: &str) -> Option<u32> {
+    let patterns = [
+        r"(?i)VOLUME\s*(\d+)",
+        r"(?i)VOL\s*(\d+)",
+        r"(?i)SEASON\s*(\d+)",
+        r"(?i)S(\d+)",
+    ];
+    
+    for pattern in &patterns {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            if let Some(caps) = re.captures(name) {
+                if let Some(num) = caps.get(1) {
+                    if let Ok(season) = num.as_str().parse::<u32>() {
+                        return Some(season);
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
 /// Clean and normalize a DVD volume name for searching
 /// Examples:
 /// - "FOSTERS_DISC_ONE" -> "Foster's Home for Imaginary Friends"
@@ -184,7 +213,12 @@ fn generate_search_variations(name: &str) -> Vec<String> {
 
 /// Fetch DVD metadata from TMDB by searching with title
 pub async fn fetch_dvd_metadata(_disc_id: &str, volume_name: Option<&str>) -> Result<DvdMetadata> {
-    debug!("fetch_dvd_metadata called with volume_name: {:?}", volume_name);
+    fetch_dvd_metadata_with_episode(_disc_id, volume_name, None).await
+}
+
+/// Fetch DVD metadata from TMDB with optional starting episode hint
+pub async fn fetch_dvd_metadata_with_episode(_disc_id: &str, volume_name: Option<&str>, start_episode: Option<u32>) -> Result<DvdMetadata> {
+    debug!("fetch_dvd_metadata called with volume_name: {:?}, start_episode: {:?}", volume_name, start_episode);
     
     // Check if TMDB API key is configured
     if TMDB_API_KEY.is_empty() {
@@ -212,7 +246,7 @@ pub async fn fetch_dvd_metadata(_disc_id: &str, volume_name: Option<&str>) -> Re
         // Try each search variation
         for search_term in &search_terms {
             info!("🔎 Trying TV search: '{}'", search_term);
-            if let Ok(metadata) = search_tv_show(&client, search_term).await {
+            if let Ok(metadata) = search_tv_show_with_episode(&client, search_term, start_episode).await {
                 info!("✅ Found TV show: {}", metadata.title);
                 return Ok(metadata);
             }
@@ -233,8 +267,13 @@ pub async fn fetch_dvd_metadata(_disc_id: &str, volume_name: Option<&str>) -> Re
     create_dummy_dvd_metadata(volume_name)
 }
 
-/// Search TMDB for a TV show
+/// Search TMDB for a TV show (fetches first season only - backward compatible)
 async fn search_tv_show(client: &reqwest::Client, query: &str) -> Result<DvdMetadata> {
+    search_tv_show_with_episode(client, query, None).await
+}
+
+/// Search TMDB for a TV show with optional starting episode hint
+async fn search_tv_show_with_episode(client: &reqwest::Client, query: &str, start_episode: Option<u32>) -> Result<DvdMetadata> {
     let url = format!(
         "{}/search/tv?api_key={}&query={}",
         TMDB_API_BASE,
@@ -318,8 +357,57 @@ async fn search_tv_show(client: &reqwest::Client, query: &str) -> Result<DvdMeta
     
     info!("Found TV show: {} (ID: {})", title, show_id);
     
-    // Get episode details for the first season (most DVDs are single-season)
-    let episodes = fetch_tv_episodes(client, show_id, 1).await?;
+    // Determine which seasons to fetch based on starting episode
+    let seasons_to_fetch = if let Some(start_ep) = start_episode {
+        // Estimate which season this episode might be in
+        // Assume ~13-26 episodes per season
+        let estimated_season = ((start_ep - 1) / 20) + 1;
+        info!("Starting episode {} hints at season {}, fetching seasons {}-{}", 
+              start_ep, estimated_season, estimated_season.saturating_sub(1).max(1), estimated_season + 1);
+        vec![
+            estimated_season.saturating_sub(1).max(1), 
+            estimated_season,
+            estimated_season + 1
+        ]
+    } else {
+        // Default: fetch first 3 seasons to cover most disc sets
+        vec![1, 2, 3]
+    };
+    
+    // Fetch episodes from multiple seasons
+    let mut all_episodes = Vec::new();
+    for season in seasons_to_fetch {
+        match fetch_tv_episodes(client, show_id, season).await {
+            Ok(mut eps) => {
+                info!("✅ Fetched {} episodes from season {}", eps.len(), season);
+                all_episodes.append(&mut eps);
+            }
+            Err(e) => {
+                debug!("Could not fetch season {}: {}", season, e);
+                // Continue with other seasons
+            }
+        }
+    }
+    
+    if all_episodes.is_empty() {
+        return Err(anyhow!("No episodes found for any season"));
+    }
+    
+    // If we have a starting episode hint, filter to episodes >= that number
+    let episodes = if let Some(start_ep) = start_episode {
+        info!("Filtering episodes to those >= episode {}", start_ep);
+        all_episodes.into_iter()
+            .filter(|ep| {
+                // Calculate absolute episode number (for multi-season)
+                let abs_episode = ep.episode;
+                abs_episode >= start_ep || ep.season > 1
+            })
+            .collect()
+    } else {
+        all_episodes
+    };
+    
+    info!("Total {} episodes available for matching", episodes.len());
     
     Ok(DvdMetadata {
         title,
@@ -400,36 +488,45 @@ pub fn match_episodes_by_duration(
     
     info!("Found {} titles that look like TV episodes (18-50 min)", episode_titles.len());
     
-    // Match episodes to titles by finding closest runtime
-    let mut used_titles: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // Match TITLES to EPISODES (not episodes to titles)
+    // For each disc title, find the best matching episode by runtime
+    let mut matched_episodes = Vec::new();
+    let mut used_episodes: std::collections::HashSet<u32> = std::collections::HashSet::new();
     
-    for episode in &mut episodes {
-        if let Some(ep_runtime) = episode.runtime_minutes {
-            // Find best matching title by runtime (within 5 minutes tolerance)
-            let best_match = episode_titles.iter()
-                .filter(|(idx, _)| !used_titles.contains(idx))
-                .min_by_key(|(_, title_min)| {
-                    let diff = (*title_min as i32 - ep_runtime as i32).abs();
-                    diff
-                })
-                .filter(|(_, title_min)| {
-                    let diff = (*title_min as i32 - ep_runtime as i32).abs();
-                    diff <= 5 // Within 5 minutes
-                });
+    for (title_idx, title_min) in &episode_titles {
+        // Find best matching episode by runtime (within 5 minutes tolerance)
+        let best_match = episodes.iter()
+            .filter(|ep| !used_episodes.contains(&ep.episode))
+            .filter(|ep| ep.runtime_minutes.is_some())
+            .min_by_key(|ep| {
+                let ep_runtime = ep.runtime_minutes.unwrap();
+                let diff = (*title_min as i32 - ep_runtime as i32).abs();
+                diff
+            })
+            .filter(|ep| {
+                let ep_runtime = ep.runtime_minutes.unwrap();
+                let diff = (*title_min as i32 - ep_runtime as i32).abs();
+                diff <= 5 // Within 5 minutes tolerance
+            });
+        
+        if let Some(episode) = best_match {
+            let ep_runtime = episode.runtime_minutes.unwrap();
+            info!("Matched Title {} ({} min) to S{}E{:02} '{}' ({} min)", 
+                  title_idx, title_min, episode.season, episode.episode, episode.title, ep_runtime);
             
-            if let Some((title_idx, title_min)) = best_match {
-                info!("Matched S{}E{} ({} min) to Title {} ({} min)", 
-                      episode.season, episode.episode, ep_runtime, title_idx, title_min);
-                episode.title_index = *title_idx as u32;
-                used_titles.insert(*title_idx);
-            } else {
-                warn!("Could not match S{}E{} ({} min) to any disc title", 
-                      episode.season, episode.episode, ep_runtime);
-            }
+            let mut matched_ep = episode.clone();
+            matched_ep.title_index = *title_idx as u32;
+            matched_episodes.push(matched_ep);
+            used_episodes.insert(episode.episode);
+        } else {
+            warn!("Could not match Title {} ({} min) to any episode", title_idx, title_min);
         }
     }
     
-    episodes
+    // Sort by episode number to maintain order
+    matched_episodes.sort_by_key(|ep| ep.episode);
+    
+    matched_episodes
 }
 
 /// Parse duration string "H:MM:SS" or "HH:MM:SS" to minutes

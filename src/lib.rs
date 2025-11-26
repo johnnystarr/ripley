@@ -5,5 +5,6 @@ pub mod drive;
 pub mod dvd_metadata;
 pub mod dvd_ripper;
 pub mod metadata;
+pub mod ocr;
 pub mod ripper;
 pub mod tui;

@@ -323,26 +323,52 @@ async fn rip_dvd_disc(
         }
     };
     
-    let dvd_metadata = if !args.skip_metadata {
-        // Use manually specified title if provided, otherwise fall back to volume name
-        let search_name = args.title.as_deref().or(volume_name.as_deref());
+    // For DVDs/Blu-rays, prompt for title only (Filebot will handle episode matching)
+    let title_to_search = if !args.skip_metadata {
+        // Prompt for title (with default from --title flag or volume name)
+        let default_title = args.title.clone().or(volume_name.clone());
         
-        if let Some(name) = search_name {
-            if args.title.is_some() {
-                add_log(&tui_state, device, format!("🔎 Using manual title: '{}'", name)).await;
-            } else {
-                add_log(&tui_state, device, format!("🔎 Searching TMDB with volume name: '{}'", name)).await;
-                add_log(&tui_state, device, "💡 Tip: Use --title \"Show Name\" for accurate metadata".to_string()).await;
-            }
-        } else {
-            add_log(&tui_state, device, "⚠️  No title specified and no volume name found".to_string()).await;
+        add_log(&tui_state, device, "📝 Please enter TV show title...".to_string()).await;
+        {
+            let mut state = tui_state.lock().await;
+            state.input_mode = crate::tui::InputMode::AwaitingTitleInput {
+                device: device.to_string(),
+                default_title: default_title.clone(),
+            };
+            state.current_input = default_title.clone().unwrap_or_default();
         }
         
-        match crate::dvd_metadata::fetch_dvd_metadata("", search_name).await {
+        // Wait for title input
+        let title = loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            let state = tui_state.lock().await;
+            
+            if matches!(state.input_mode, crate::tui::InputMode::Normal) {
+                // Input was submitted or cancelled
+                break state.current_input.clone();
+            }
+        };
+        
+        if title.is_empty() {
+            add_log(&tui_state, device, "❌ No title provided, skipping metadata".to_string()).await;
+            None
+        } else {
+            add_log(&tui_state, device, format!("📺 Using title: '{}'", title)).await;
+            Some(title)
+        }
+    } else {
+        add_log(&tui_state, device, "⏭️  Skipping metadata (--skip-metadata)".to_string()).await;
+        None
+    };
+    
+    let dvd_metadata = if let Some(ref title) = title_to_search {
+        add_log(&tui_state, device, format!("🔍 Searching TMDB for '{}'...", title)).await;
+        
+        match crate::dvd_metadata::fetch_dvd_metadata("", Some(title.as_str())).await {
             Ok(meta) => {
                 add_log(&tui_state, device, format!("📺 Found: {}", meta.title)).await;
                 if meta.media_type == crate::dvd_metadata::MediaType::TVShow && !meta.episodes.is_empty() {
-                    add_log(&tui_state, device, format!("📝 {} episodes detected", meta.episodes.len())).await;
+                    add_log(&tui_state, device, format!("📝 {} episodes available for matching", meta.episodes.len())).await;
                 }
                 Some(meta)
             }
@@ -352,7 +378,6 @@ async fn rip_dvd_disc(
             }
         }
     } else {
-        add_log(&tui_state, device, "⏭️  Skipping metadata (--skip-metadata)".to_string()).await;
         None
     };
 
@@ -443,6 +468,78 @@ async fn rip_dvd_disc(
             add_log(&tui_state, device, format!("✅ {} rip complete", media_name)).await;
             audio::play_notification("complete").await?;
             
+            // Run OCR + Filebot by default (unless --skip-filebot) if we have metadata
+            if !args.skip_filebot && dvd_metadata.is_some() {
+                let metadata = dvd_metadata.as_ref().unwrap();
+                if metadata.media_type == crate::dvd_metadata::MediaType::TVShow {
+                    // Step 1: Run OCR on all videos to extract episode titles
+                    add_log(&tui_state, device, "🔍 Running OCR to extract episode titles (this may take a while)...".to_string()).await;
+                    
+                    let mut ocr_success_count = 0;
+                    let show_title_lower = metadata.title.to_lowercase();
+                    let mut read_dir = tokio::fs::read_dir(&dvd_dir).await?;
+                    while let Some(entry) = read_dir.next_entry().await? {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                            if let Ok(Some(title)) = crate::ocr::extract_episode_title(&path).await {
+                                // Skip if OCR result looks like the show title (not episode title)
+                                let title_lower = title.to_lowercase();
+                                if title_lower.contains(&show_title_lower) || 
+                                   title_lower.contains("home") && title_lower.contains("imaginary") {
+                                    add_log(&tui_state, device, format!("  ⏭️  Skipped show title: {}", title)).await;
+                                    continue;
+                                }
+                                
+                                // Rename file to include OCR'd title
+                                let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                                let new_name = format!("{}.{}.mkv", filename, title.replace(' ', "."));
+                                let new_path = dvd_dir.join(&new_name);
+                                
+                                if let Err(e) = tokio::fs::rename(&path, &new_path).await {
+                                    add_log(&tui_state, device, format!("⚠️  Failed to rename with OCR title: {}", e)).await;
+                                } else {
+                                    add_log(&tui_state, device, format!("  ✓ {}", title)).await;
+                                    ocr_success_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if ocr_success_count > 0 {
+                        add_log(&tui_state, device, format!("✅ OCR extracted {} episode titles", ocr_success_count)).await;
+                    } else {
+                        add_log(&tui_state, device, "⚠️  OCR didn't find episode title cards (will use duration matching)".to_string()).await;
+                    }
+                    
+                    // Step 2: Run Filebot with OCR-enhanced filenames
+                    add_log(&tui_state, device, "🤖 Running Filebot to match with database...".to_string()).await;
+                    
+                    let dvd_dir_clone = dvd_dir.clone();
+                    let show_title = metadata.title.clone();
+                    let tui_state_filebot = Arc::clone(&tui_state);
+                    let device_filebot = device.to_string();
+                    
+                    match crate::filebot::rename_with_filebot(
+                        &dvd_dir_clone,
+                        &show_title,
+                        move |log_msg| {
+                            let device = device_filebot.clone();
+                            let tui_state = Arc::clone(&tui_state_filebot);
+                            tokio::spawn(async move {
+                                add_log(&tui_state, &device, log_msg).await;
+                            });
+                        }
+                    ).await {
+                        Ok(_) => {
+                            add_log(&tui_state, device, "✅ Filebot renaming complete".to_string()).await;
+                        }
+                        Err(e) => {
+                            add_log(&tui_state, device, format!("⚠️  Filebot failed: {}", e)).await;
+                        }
+                    }
+                }
+            }
+            
             // Send notification
             let disc_type = match media_type {
                 drive::MediaType::BluRay => crate::notifications::DiscType::BluRay,
@@ -457,6 +554,16 @@ async fn rip_dvd_disc(
             if let Err(e) = crate::notifications::send_completion_notification(disc_info, true).await {
                 tracing::warn!("Failed to send notification: {}", e);
             }
+            
+            // Start rsync in background for DVD/Blu-ray
+            add_log(&tui_state, device, "📤 Starting rsync to /Volumes/video/RawRips...".to_string()).await;
+            let dvd_dir_clone = dvd_dir.clone();
+            let tui_state_rsync = Arc::clone(&tui_state);
+            tokio::spawn(async move {
+                if let Err(e) = crate::rsync::rsync_to_rawrips(&dvd_dir_clone, tui_state_rsync).await {
+                    tracing::warn!("Rsync failed: {}", e);
+                }
+            });
 
             if args.eject_when_done {
                 drive::eject_disc(device).await?;

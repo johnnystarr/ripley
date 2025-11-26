@@ -26,10 +26,32 @@ pub struct DriveState {
     pub logs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
+pub enum InputMode {
+    Normal,
+    AwaitingTitleInput { device: String, default_title: Option<String> },
+    AwaitingEpisodeInput { device: String, title: String },
+}
+
+#[derive(Debug, Clone)]
 pub struct AppState {
     pub drives: Vec<DriveState>,
+    pub rsync_logs: Vec<String>,
     pub should_quit: bool,
+    pub input_mode: InputMode,
+    pub current_input: String,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            drives: Vec::new(),
+            rsync_logs: Vec::new(),
+            should_quit: false,
+            input_mode: InputMode::Normal,
+            current_input: String::new(),
+        }
+    }
 }
 
 impl AppState {
@@ -54,6 +76,15 @@ impl AppState {
                 album_info: None,
                 logs: vec![formatted],
             });
+        }
+    }
+    
+    pub fn add_rsync_log(&mut self, message: String) {
+        let formatted = format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), message);
+        self.rsync_logs.push(formatted);
+        // Keep only last 100 rsync logs
+        if self.rsync_logs.len() > 100 {
+            self.rsync_logs.remove(0);
         }
     }
     
@@ -96,13 +127,38 @@ impl Tui {
             if event::poll(std::time::Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => {
-                                let mut state = self.state.lock().await;
-                                state.should_quit = true;
-                                break;
+                        let mut state = self.state.lock().await;
+                        
+                        match &state.input_mode {
+                            InputMode::Normal => {
+                                match key.code {
+                                    KeyCode::Char('q') | KeyCode::Esc => {
+                                        state.should_quit = true;
+                                        break;
+                                    }
+                                    _ => {}
+                                }
                             }
-                            _ => {}
+                            InputMode::AwaitingTitleInput { .. } | InputMode::AwaitingEpisodeInput { .. } => {
+                                match key.code {
+                                    KeyCode::Char(c) => {
+                                        state.current_input.push(c);
+                                    }
+                                    KeyCode::Backspace => {
+                                        state.current_input.pop();
+                                    }
+                                    KeyCode::Enter => {
+                                        // Submit input - transition to Normal mode
+                                        state.input_mode = InputMode::Normal;
+                                    }
+                                    KeyCode::Esc => {
+                                        // Cancel input
+                                        state.input_mode = InputMode::Normal;
+                                        state.current_input.clear();
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                 }
@@ -115,6 +171,84 @@ impl Tui {
         }
 
         Ok(())
+    }
+    
+    /// Prompt for TV show title
+    pub async fn prompt_title(&self, device: &str, default_title: Option<String>) -> Result<String> {
+        {
+            let mut state = self.state.lock().await;
+            state.input_mode = InputMode::AwaitingTitleInput { 
+                device: device.to_string(), 
+                default_title: default_title.clone() 
+            };
+            state.current_input = default_title.clone().unwrap_or_default();
+        }
+        
+        // Wait for Enter key
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            let state = self.state.lock().await;
+            
+            if matches!(state.input_mode, InputMode::Normal) {
+                // User cancelled
+                return Err(anyhow::anyhow!("Input cancelled"));
+            }
+            
+            // Check if Enter was pressed by polling events
+            if event::poll(std::time::Duration::from_millis(10))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
+                        let result = state.current_input.clone();
+                        drop(state);
+                        
+                        let mut state = self.state.lock().await;
+                        state.input_mode = InputMode::Normal;
+                        state.current_input.clear();
+                        
+                        return Ok(result);
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Prompt for starting episode number
+    pub async fn prompt_episode(&self, device: &str, title: &str) -> Result<u32> {
+        {
+            let mut state = self.state.lock().await;
+            state.input_mode = InputMode::AwaitingEpisodeInput { 
+                device: device.to_string(), 
+                title: title.to_string() 
+            };
+            state.current_input = "1".to_string(); // Default to episode 1
+        }
+        
+        // Wait for Enter key
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            let state = self.state.lock().await;
+            
+            if matches!(state.input_mode, InputMode::Normal) {
+                // User cancelled
+                return Err(anyhow::anyhow!("Input cancelled"));
+            }
+            
+            // Check if Enter was pressed
+            if event::poll(std::time::Duration::from_millis(10))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
+                        let result = state.current_input.parse::<u32>().unwrap_or(1);
+                        drop(state);
+                        
+                        let mut state = self.state.lock().await;
+                        state.input_mode = InputMode::Normal;
+                        state.current_input.clear();
+                        
+                        return Ok(result);
+                    }
+                }
+            }
+        }
     }
 
     async fn draw(&mut self) -> Result<()> {
@@ -148,20 +282,50 @@ impl Drop for Tui {
 }
 
 fn ui(f: &mut Frame, state: &AppState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(0)
-        .constraints([
-            Constraint::Length(3),          // Header
-            Constraint::Min(5),              // Drives + logs section (flexible)
-        ])
-        .split(f.area());
+    let has_rsync_logs = !state.rsync_logs.is_empty();
+    
+    let chunks = if has_rsync_logs {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .margin(0)
+            .constraints([
+                Constraint::Length(3),          // Header
+                Constraint::Percentage(60),     // Drives + logs section
+                Constraint::Percentage(40),     // Rsync logs
+            ])
+            .split(f.area())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .margin(0)
+            .constraints([
+                Constraint::Length(3),          // Header
+                Constraint::Min(5),              // Drives + logs section (flexible)
+            ])
+            .split(f.area())
+    };
 
     // Header
     render_header(f, chunks[0], state);
 
     // Drives with their individual log windows
     render_drives_with_logs(f, chunks[1], state);
+    
+    // Rsync log window (if active)
+    if has_rsync_logs {
+        render_rsync_logs(f, chunks[2], state);
+    }
+    
+    // Render input dialog overlay if in input mode
+    match &state.input_mode {
+        InputMode::AwaitingTitleInput { device, default_title } => {
+            render_input_dialog(f, "TV Show Title", &format!("Enter title for {} (or press Enter to use default)", device), &state.current_input, default_title.as_deref());
+        }
+        InputMode::AwaitingEpisodeInput { device, title } => {
+            render_input_dialog(f, "Starting Episode", &format!("Disc starts with episode # for '{}'", title), &state.current_input, None);
+        }
+        InputMode::Normal => {}
+    }
 }
 
 fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
@@ -284,6 +448,93 @@ fn render_drive_with_log(f: &mut Frame, area: Rect, drive: &DriveState) {
 
     let logs_widget = List::new(log_items);
     f.render_widget(logs_widget, log_inner);
+}
+
+fn render_rsync_logs(f: &mut Frame, area: Rect, state: &AppState) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("📤 Rsync to /Volumes/video/RawRips")
+        .style(Style::default().fg(Color::Magenta));
+    
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    
+    let available_height = inner.height as usize;
+    let log_items: Vec<ListItem> = state.rsync_logs.iter()
+        .rev()
+        .take(available_height)
+        .rev()
+        .map(|log| ListItem::new(log.as_str()))
+        .collect();
+
+    let logs_widget = List::new(log_items);
+    f.render_widget(logs_widget, inner);
+}
+
+fn render_input_dialog(f: &mut Frame, title: &str, prompt: &str, current_input: &str, default_hint: Option<&str>) {
+    // Center the dialog
+    let area = f.area();
+    let dialog_width = 80.min(area.width - 4);
+    let dialog_height = 9;
+    
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    
+    let dialog_area = Rect {
+        x,
+        y,
+        width: dialog_width,
+        height: dialog_height,
+    };
+    
+    // Clear the area first (render a filled block)
+    let clear_block = Block::default()
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(clear_block, dialog_area);
+    
+    // Render dialog
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default().fg(Color::Yellow).bg(Color::Black));
+    
+    let inner = block.inner(dialog_area);
+    f.render_widget(block, dialog_area);
+    
+    // Layout for dialog content
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),  // Prompt text
+            Constraint::Length(1),  // Spacer
+            Constraint::Length(1),  // Input box
+            Constraint::Length(1),  // Spacer
+            Constraint::Length(1),  // Hint/default
+            Constraint::Length(1),  // Help text
+        ])
+        .split(inner);
+    
+    // Prompt
+    let prompt_widget = Paragraph::new(prompt)
+        .style(Style::default().fg(Color::White));
+    f.render_widget(prompt_widget, chunks[0]);
+    
+    // Input box
+    let input_widget = Paragraph::new(format!("> {}", current_input))
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+    f.render_widget(input_widget, chunks[2]);
+    
+    // Hint/default
+    if let Some(default) = default_hint {
+        let hint_widget = Paragraph::new(format!("Default: {}", default))
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(hint_widget, chunks[4]);
+    }
+    
+    // Help text
+    let help_widget = Paragraph::new("Press Enter to confirm, Esc to cancel")
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(help_widget, chunks[5]);
 }
 
 
