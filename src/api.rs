@@ -3,14 +3,14 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    http::StatusCode,
+    http,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use futures_util::stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::CorsLayer;
@@ -25,7 +25,7 @@ pub async fn start_server(
     config: Config,
     host: String,
     port: u16,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     // Create broadcast channel for events
     let (event_tx, _) = broadcast::channel(100);
     
@@ -115,7 +115,7 @@ pub struct ErrorResponse {
 
 impl IntoResponse for ErrorResponse {
     fn into_response(self) -> Response {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
+        (http::StatusCode::INTERNAL_SERVER_ERROR, Json(self)).into_response()
     }
 }
 
@@ -268,33 +268,15 @@ async fn websocket_handler(
 }
 
 /// Handle WebSocket connection
-async fn handle_websocket(socket: WebSocket, state: ApiState) {
-    let (mut sender, mut receiver) = socket.split();
+async fn handle_websocket(mut socket: WebSocket, state: ApiState) {
     let mut event_rx = state.event_tx.subscribe();
     
-    // Task to receive events and send to WebSocket
-    let mut send_task = tokio::spawn(async move {
-        while let Ok(event) = event_rx.recv().await {
-            let json = serde_json::to_string(&event).unwrap_or_default();
-            if sender.send(Message::Text(json)).await.is_err() {
-                break;
-            }
+    // Send events to WebSocket
+    while let Ok(event) = event_rx.recv().await {
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        if socket.send(Message::Text(json)).await.is_err() {
+            break;
         }
-    });
-    
-    // Task to receive WebSocket messages (for keep-alive pings)
-    let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            if matches!(msg, Message::Close(_)) {
-                break;
-            }
-        }
-    });
-    
-    // Wait for either task to finish
-    tokio::select! {
-        _ = &mut send_task => recv_task.abort(),
-        _ = &mut recv_task => send_task.abort(),
     }
 }
 
@@ -302,7 +284,7 @@ async fn handle_websocket(socket: WebSocket, state: ApiState) {
 async fn run_rip_operation(
     state: ApiState,
     request: StartRipRequest,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     let config = state.config.read().await;
     
     let _ = state.event_tx.send(ApiEvent::Log {
@@ -310,7 +292,7 @@ async fn run_rip_operation(
     });
     
     let args = RipArgs {
-        output_path: request.output_path,
+        output_folder: request.output_path.map(PathBuf::from),
         title: request.title,
         skip_metadata: request.skip_metadata,
         skip_filebot: request.skip_filebot,
@@ -344,7 +326,7 @@ async fn run_rename_operation(
     state: ApiState,
     request: RenameRequest,
     _config: Config,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     let _ = state.event_tx.send(ApiEvent::Log {
         message: format!("Starting rename for directory: {}", request.directory),
     });
