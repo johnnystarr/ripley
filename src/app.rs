@@ -121,9 +121,9 @@ async fn rip_disc(
         s.add_drive_log(device, msg);
     }
 
-    // Handle DVD ripping
-    if matches!(media_type, drive::MediaType::DVD) {
-        return rip_dvd_disc(device, args, tui_state).await;
+    // Handle DVD/Blu-ray ripping (MakeMKV handles both)
+    if matches!(media_type, drive::MediaType::DVD | drive::MediaType::BluRay) {
+        return rip_dvd_disc(device, media_type.clone(), args, tui_state).await;
     }
 
     add_log(&tui_state, device, format!("📀 Detected audio CD in {}", device)).await;
@@ -271,6 +271,7 @@ async fn rip_disc(
 
 async fn rip_dvd_disc(
     device: &str,
+    media_type: drive::MediaType,
     args: Args,
     tui_state: Arc<Mutex<crate::tui::AppState>>,
 ) -> Result<()> {
@@ -280,10 +281,16 @@ async fn rip_dvd_disc(
         s.add_drive_log(device, msg);
     }
 
-    add_log(&tui_state, device, format!("📀 Detected DVD in {}", device)).await;
+    let media_name = match media_type {
+        drive::MediaType::BluRay => "Blu-ray",
+        drive::MediaType::DVD => "DVD",
+        _ => "disc",
+    };
+    
+    add_log(&tui_state, device, format!("📀 Detected {} in {}", media_name, device)).await;
 
-    // Try to get DVD volume name and metadata
-    add_log(&tui_state, device, "🔍 Fetching DVD metadata...".to_string()).await;
+    // Try to get disc volume name and metadata
+    add_log(&tui_state, device, format!("🔍 Fetching {} metadata...", media_name)).await;
     
     let volume_name = get_dvd_volume_name(device).await.ok();
     let dvd_metadata = if !args.skip_metadata {
@@ -304,6 +311,12 @@ async fn rip_dvd_disc(
         None
     };
 
+    let default_label = match media_type {
+        drive::MediaType::BluRay => "Blu-ray Video",
+        drive::MediaType::DVD => "DVD Video",
+        _ => "Video Disc",
+    };
+    
     let album_info = if let Some(ref meta) = dvd_metadata {
         if let Some(year) = &meta.year {
             format!("{} ({})", meta.title, year)
@@ -311,7 +324,7 @@ async fn rip_dvd_disc(
             meta.title.clone()
         }
     } else {
-        volume_name.unwrap_or_else(|| "DVD Video".to_string())
+        volume_name.unwrap_or_else(|| default_label.to_string())
     };
 
     // Update album info
@@ -323,16 +336,25 @@ async fn rip_dvd_disc(
     }
 
     let output_folder = args.get_output_folder();
-    let dvd_output = output_folder.join("DVDs");
+    let media_output = match media_type {
+        drive::MediaType::BluRay => output_folder.join("BluRays"),
+        drive::MediaType::DVD => output_folder.join("DVDs"),
+        _ => output_folder.join("Videos"),
+    };
     
-    // Create DVD-specific output folder with title or timestamp
+    // Create output folder with title or timestamp
     let folder_name = if let Some(ref meta) = dvd_metadata {
         crate::ripper::sanitize_filename(&meta.title)
     } else {
         let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        format!("DVD_{}", timestamp)
+        let prefix = match media_type {
+            drive::MediaType::BluRay => "BluRay",
+            drive::MediaType::DVD => "DVD",
+            _ => "Video",
+        };
+        format!("{}_{}", prefix, timestamp)
     };
-    let dvd_dir = dvd_output.join(folder_name);
+    let dvd_dir = media_output.join(folder_name);
     
     add_log(&tui_state, device, format!("Output: {}", dvd_dir.display())).await;
 
@@ -370,7 +392,7 @@ async fn rip_dvd_disc(
 
     match result {
         Ok(_) => {
-            add_log(&tui_state, device, "✅ DVD rip complete".to_string()).await;
+            add_log(&tui_state, device, format!("✅ {} rip complete", media_name)).await;
             audio::play_notification("complete").await?;
 
             if args.eject_when_done {
@@ -379,7 +401,7 @@ async fn rip_dvd_disc(
             }
         }
         Err(e) => {
-            add_log(&tui_state, device, format!("❌ DVD rip failed: {}", e)).await;
+            add_log(&tui_state, device, format!("❌ {} rip failed: {}", media_name, e)).await;
             audio::play_notification("error").await?;
         }
     }

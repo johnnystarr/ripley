@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 pub enum MediaType {
     AudioCD,
     DVD,
+    BluRay,
     None,
 }
 
@@ -100,6 +101,11 @@ async fn detect_media_type(device: &str) -> Result<MediaType> {
             return Ok(MediaType::AudioCD);
         }
         
+        // Check for Blu-ray (check before DVD as some output might contain both)
+        if stdout.contains("Blu-ray") || stdout.contains("BD") || stdout.contains("BDROM") {
+            return Ok(MediaType::BluRay);
+        }
+        
         // Check for DVD (video or data)
         if stdout.contains("DVD") {
             return Ok(MediaType::DVD);
@@ -117,6 +123,11 @@ async fn detect_media_type(device: &str) -> Result<MediaType> {
     
     if stdout.contains("Audio") || stdout.contains("CDDA") {
         return Ok(MediaType::AudioCD);
+    }
+    
+    // Check for Blu-ray before DVD
+    if stdout.contains("Blu-ray") || stdout.contains("BD-") || stdout.contains("BDROM") {
+        return Ok(MediaType::BluRay);
     }
     
     if stdout.contains("DVD") {
@@ -194,8 +205,10 @@ mod tests {
     fn test_media_type_variants() {
         assert_eq!(MediaType::AudioCD, MediaType::AudioCD);
         assert_eq!(MediaType::DVD, MediaType::DVD);
+        assert_eq!(MediaType::BluRay, MediaType::BluRay);
         assert_eq!(MediaType::None, MediaType::None);
         assert_ne!(MediaType::AudioCD, MediaType::DVD);
+        assert_ne!(MediaType::DVD, MediaType::BluRay);
     }
 
     #[test]

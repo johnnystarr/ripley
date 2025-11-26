@@ -7,10 +7,11 @@
 brew install abcde cd-discid
 ```
 
-### For DVDs
+### For DVDs and Blu-rays
 ```bash
 # Download and install MakeMKV from https://www.makemkv.com/
 # Then ensure makemkvcon is in your PATH
+# Note: For Blu-rays, you may need to update MakeMKV's keys regularly
 ```
 
 ## Build
@@ -106,16 +107,21 @@ Check `~/ripley.log` for detailed error messages.
 - `8` - Slowest, smallest files (recommended for archival)
 
 ## Multi-Drive Support
-✅ Insert CDs/DVDs into multiple drives  
+✅ Insert CDs/DVDs/Blu-rays into multiple drives  
 ✅ Each gets its own progress bar and log  
 ✅ All rip simultaneously  
 ✅ Auto-eject when finished  
-✅ Auto-detects CD vs DVD and uses appropriate ripper  
+✅ Auto-detects CD vs DVD vs Blu-ray and uses appropriate ripper  
 
-## DVD Support
-- **Detection:** Automatically detects DVDs vs Audio CDs
-- **Output:** DVDs ripped to `~/Desktop/Rips/Music/DVDs/DVD_YYYYMMDD_HHMMSS/`
+## DVD & Blu-ray Support
+- **Detection:** Automatically detects DVDs and Blu-rays vs Audio CDs
+- **Output:** 
+  - DVDs: `~/Desktop/Rips/Music/DVDs/Title/`
+  - Blu-rays: `~/Desktop/Rips/Music/BluRays/Title/`
 - **Format:** MKV files (lossless)
 - **Requirements:** MakeMKV installed with `makemkvcon` in PATH
 - **Progress:** Real-time progress tracking in TUI
 - **Logging:** Full makemkvcon output in per-drive logs
+- **Metadata:** TMDB integration for TV shows and movies
+- **Smart Naming:** Episodes as `Show - S01E01 - Title.mkv`
+- **Filtering:** Skips subtitles and videos < 5 minutes
