@@ -171,11 +171,14 @@ where
         .filter_map(|(idx, duration)| {
             if let Some(minutes) = parse_duration_to_minutes(duration) {
                 // Only rip titles that look like individual episodes (18-50 min)
-                // or reasonable movies (60+ min), skip "Play All" compilations (90-180 min)
-                if (minutes >= 18 && minutes <= 50) || minutes >= 120 {
+                // Skip compilations/play-all (typically 90-200 min for multi-episode discs)
+                // For movies, we expect them to be clearly movie-length (> 70 min but handled separately)
+                if minutes >= 18 && minutes <= 70 {
+                    info!("Will rip title {} ({} min)", idx, minutes);
                     Some(*idx as u32)
                 } else {
-                    log_callback(format!("Skipping title {} ({} min) - likely a compilation", idx, minutes));
+                    log_callback(format!("⏭️  Skipping title {} ({} min) - outside episode range", idx, minutes));
+                    info!("Skipping title {} ({} min) - likely compilation or play-all", idx, minutes);
                     None
                 }
             } else {
@@ -302,22 +305,21 @@ where
             return Err(anyhow!("Failed to rip title {}: status {}", title_num, rip_status));
         }
         
-        log_callback(format!("✅ Title {} complete ({:.0}%)", title_num, title_percentage));
-    }
-    
-    info!("Successfully ripped all titles");
-    log_callback("✅ DVD rip complete".to_string());
-    
-    // Rename files based on metadata if available
-    if let Some(meta) = &metadata {
-        log_callback("Renaming files with metadata...".to_string());
-        if let Err(e) = rename_dvd_files(output_dir, meta).await {
-            warn!("Failed to rename files: {}", e);
-            log_callback(format!("⚠️  Could not rename files: {}", e));
-        } else {
-            log_callback("✅ Files renamed".to_string());
+        log_callback(format!("✅ Title {} ripped", title_num));
+        
+        // Rename this title's file immediately if we have metadata
+        if let Some(meta) = &metadata {
+            if let Err(e) = rename_single_title(output_dir, meta, *title_num).await {
+                warn!("Failed to rename title {}: {}", title_num, e);
+                log_callback(format!("⚠️  Could not rename title {}: {}", title_num, e));
+            } else {
+                log_callback(format!("📝 Title {} renamed", title_num));
+            }
         }
     }
+    
+    info!("Successfully ripped and renamed all titles");
+    log_callback("✅ DVD rip complete".to_string());
     
     progress_callback(RipProgress {
         current_track: titles_to_rip.len() as u32,
@@ -330,7 +332,70 @@ where
     Ok(())
 }
 
-/// Rename MKV files based on metadata
+/// Rename a single title's MKV file immediately after ripping
+async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_num: u32) -> Result<()> {
+    use tokio::fs;
+    
+    // Find the MKV file for this title (MakeMKV names them like title_t00.mkv, title_t01.mkv, etc.)
+    let expected_patterns = vec![
+        format!("title_t{:02}.mkv", title_num),
+        format!("title{:02}.mkv", title_num),
+        format!("t{:02}.mkv", title_num),
+    ];
+    
+    let mut entries = fs::read_dir(output_dir).await?;
+    let mut file_path = None;
+    
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+            if expected_patterns.iter().any(|pattern| filename.contains(pattern)) {
+                file_path = Some(path);
+                break;
+            }
+        }
+    }
+    
+    let file_path = file_path.ok_or_else(|| anyhow!("Could not find MKV file for title {}", title_num))?;
+    
+    // Find the episode that corresponds to this title
+    if metadata.media_type == MediaType::TVShow {
+        if let Some(episode) = metadata.episodes.iter().find(|e| e.title_index == title_num) {
+            let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
+            let episode_title = crate::ripper::to_pascal_case_with_periods(&episode.title);
+            let new_name = format!(
+                "{}.S{:02}E{:02}.{}.mkv",
+                show_name,
+                episode.season,
+                episode.episode,
+                episode_title
+            );
+            
+            let new_path = output_dir.join(&new_name);
+            
+            info!("Renaming {} -> {} (Title {} = S{:02}E{:02})", 
+                  file_path.display(), new_name, title_num, episode.season, episode.episode);
+            fs::rename(&file_path, &new_path).await?;
+        } else {
+            info!("No episode metadata for title {}, keeping original name", title_num);
+        }
+    } else if metadata.media_type == MediaType::Movie {
+        let movie_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
+        let new_name = if let Some(year) = &metadata.year {
+            format!("{}.{}.mkv", movie_name, year)
+        } else {
+            format!("{}.mkv", movie_name)
+        };
+        
+        let new_path = output_dir.join(&new_name);
+        info!("Renaming {} -> {}", file_path.display(), new_name);
+        fs::rename(&file_path, &new_path).await?;
+    }
+    
+    Ok(())
+}
+
+/// Rename MKV files based on metadata (batch mode, kept for compatibility)
 async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<()> {
     use tokio::fs;
     

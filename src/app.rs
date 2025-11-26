@@ -248,6 +248,16 @@ async fn rip_disc(
         Ok(_) => {
             add_log(&tui_state, device, format!("✅ Completed: {}", album_info)).await;
             audio::play_notification("complete").await?;
+            
+            // Send notification
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type: crate::notifications::DiscType::CD,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, true).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
 
             if args.eject_when_done {
                 drive::eject_disc(device).await?;
@@ -257,6 +267,16 @@ async fn rip_disc(
         Err(e) => {
             add_log(&tui_state, device, format!("❌ Failed: {} - {}", album_info, e)).await;
             audio::play_notification("error").await?;
+            
+            // Send failure notification
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type: crate::notifications::DiscType::CD,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, false).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
         }
     }
 
@@ -422,6 +442,21 @@ async fn rip_dvd_disc(
         Ok(_) => {
             add_log(&tui_state, device, format!("✅ {} rip complete", media_name)).await;
             audio::play_notification("complete").await?;
+            
+            // Send notification
+            let disc_type = match media_type {
+                drive::MediaType::BluRay => crate::notifications::DiscType::BluRay,
+                drive::MediaType::DVD => crate::notifications::DiscType::DVD,
+                _ => crate::notifications::DiscType::DVD,
+            };
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, true).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
 
             if args.eject_when_done {
                 drive::eject_disc(device).await?;
@@ -431,6 +466,21 @@ async fn rip_dvd_disc(
         Err(e) => {
             add_log(&tui_state, device, format!("❌ {} rip failed: {}", media_name, e)).await;
             audio::play_notification("error").await?;
+            
+            // Send failure notification
+            let disc_type = match media_type {
+                drive::MediaType::BluRay => crate::notifications::DiscType::BluRay,
+                drive::MediaType::DVD => crate::notifications::DiscType::DVD,
+                _ => crate::notifications::DiscType::DVD,
+            };
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, false).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
         }
     }
 

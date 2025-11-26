@@ -7,6 +7,7 @@ mod ripper;
 mod audio;
 mod tui;
 mod app;
+mod notifications;
 
 use anyhow::Result;
 use cli::Args;
