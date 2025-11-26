@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::audio;
 use crate::cli::Args;
@@ -292,9 +292,33 @@ async fn rip_dvd_disc(
     // Try to get disc volume name and metadata
     add_log(&tui_state, device, format!("🔍 Fetching {} metadata...", media_name)).await;
     
-    let volume_name = get_dvd_volume_name(device).await.ok();
+    let volume_name = match get_dvd_volume_name(device).await {
+        Ok(name) => {
+            add_log(&tui_state, device, format!("💿 Volume name: {}", name)).await;
+            Some(name)
+        }
+        Err(e) => {
+            add_log(&tui_state, device, format!("⚠️  Could not get volume name: {}", e)).await;
+            None
+        }
+    };
+    
     let dvd_metadata = if !args.skip_metadata {
-        match crate::dvd_metadata::fetch_dvd_metadata("", volume_name.as_deref()).await {
+        // Use manually specified title if provided, otherwise fall back to volume name
+        let search_name = args.title.as_deref().or(volume_name.as_deref());
+        
+        if let Some(name) = search_name {
+            if args.title.is_some() {
+                add_log(&tui_state, device, format!("🔎 Using manual title: '{}'", name)).await;
+            } else {
+                add_log(&tui_state, device, format!("🔎 Searching TMDB with volume name: '{}'", name)).await;
+                add_log(&tui_state, device, "💡 Tip: Use --title \"Show Name\" for accurate metadata".to_string()).await;
+            }
+        } else {
+            add_log(&tui_state, device, "⚠️  No title specified and no volume name found".to_string()).await;
+        }
+        
+        match crate::dvd_metadata::fetch_dvd_metadata("", search_name).await {
             Ok(meta) => {
                 add_log(&tui_state, device, format!("📺 Found: {}", meta.title)).await;
                 if meta.media_type == crate::dvd_metadata::MediaType::TVShow && !meta.episodes.is_empty() {
@@ -308,6 +332,7 @@ async fn rip_dvd_disc(
             }
         }
     } else {
+        add_log(&tui_state, device, "⏭️  Skipping metadata (--skip-metadata)".to_string()).await;
         None
     };
 
@@ -419,22 +444,30 @@ async fn rip_dvd_disc(
 }
 
 async fn get_dvd_volume_name(device: &str) -> Result<String> {
-    let output = tokio::process::Command::new("drutil")
-        .arg("status")
-        .arg("-drive")
+    debug!("Getting volume name for device: {}", device);
+    
+    // Use diskutil info to get the Volume Name field (more reliable than drutil)
+    let output = tokio::process::Command::new("diskutil")
+        .arg("info")
         .arg(device)
         .output()
         .await?;
     
     let stdout = String::from_utf8_lossy(&output.stdout);
+    debug!("diskutil info output for volume name extraction:\n{}", stdout);
     
-    // Extract volume label
+    // Extract volume label from "Volume Name:" field
     let volume_name = stdout.lines()
-        .find(|line| line.contains("Name:"))
+        .find(|line| line.trim().starts_with("Volume Name:"))
         .and_then(|line| line.split(':').nth(1))
         .map(|s| s.trim().to_string())
-        .ok_or_else(|| anyhow::anyhow!("No volume name found"))?;
+        .filter(|s| !s.is_empty() && s != "Not applicable (no file system)")
+        .ok_or_else(|| {
+            warn!("No 'Volume Name:' field found in diskutil output");
+            anyhow::anyhow!("No volume name found")
+        })?;
     
+    debug!("Extracted volume name: {}", volume_name);
     Ok(volume_name)
 }
 

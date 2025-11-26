@@ -81,38 +81,49 @@ async fn is_optical_drive(device: &str) -> Result<bool> {
 
 /// Detect what type of media is in the optical drive
 async fn detect_media_type(device: &str) -> Result<MediaType> {
-    // Use drutil to check media type
+    // Use drutil to check media type (without device parameter - drutil doesn't support /dev/disk# syntax)
+    // drutil status works for the primary optical drive
     let output = Command::new("drutil")
         .arg("status")
-        .arg("-drive")
-        .arg(device)
         .output();
 
     if let Ok(output) = output {
         let stdout = String::from_utf8_lossy(&output.stdout);
+        debug!("drutil status output: {}", stdout);
         
-        // No media present
-        if stdout.contains("No Media") || stdout.contains("not present") {
-            return Ok(MediaType::None);
-        }
+        // Check if this drutil output corresponds to our device by checking the Name field
+        let device_matches = stdout.lines()
+            .any(|line| line.contains("Name:") && line.contains(device));
         
-        // Check for audio CD
-        if stdout.contains("Audio") || stdout.contains("CDDA") {
-            return Ok(MediaType::AudioCD);
-        }
-        
-        // Check for Blu-ray (check before DVD as some output might contain both)
-        if stdout.contains("Blu-ray") || stdout.contains("BD") || stdout.contains("BDROM") {
-            return Ok(MediaType::BluRay);
-        }
-        
-        // Check for DVD (video or data)
-        if stdout.contains("DVD") {
-            return Ok(MediaType::DVD);
+        if !device_matches {
+            debug!("drutil output doesn't match device {}, falling back to diskutil", device);
+        } else {
+            // No media present
+            if stdout.contains("No Media") || stdout.contains("not present") {
+                return Ok(MediaType::None);
+            }
+            
+            // Check for audio CD by looking at the Type field
+            if stdout.contains("Type: CD-ROM") || stdout.contains("Type: Audio") || stdout.contains("CDDA") {
+                info!("Detected Audio CD in {} (via drutil)", device);
+                return Ok(MediaType::AudioCD);
+            }
+            
+            // Check for DVD by looking at the Type field (not drive model which may contain "BD")
+            if stdout.contains("Type: DVD") {
+                info!("Detected DVD in {} (via drutil)", device);
+                return Ok(MediaType::DVD);
+            }
+            
+            // Check for Blu-ray by looking at the Type field
+            if stdout.contains("Type: BD") || stdout.contains("Type: Blu-ray") {
+                info!("Detected Blu-ray in {} (via drutil)", device);
+                return Ok(MediaType::BluRay);
+            }
         }
     }
 
-    // Fallback: use diskutil to check
+    // Fallback: use diskutil to check file system
     let output = Command::new("diskutil")
         .arg("info")
         .arg(device)
@@ -120,20 +131,34 @@ async fn detect_media_type(device: &str) -> Result<MediaType> {
         .context("Failed to check media type")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    debug!("diskutil info output for {}: {}", device, stdout);
     
-    if stdout.contains("Audio") || stdout.contains("CDDA") {
+    // Try to determine type from file system
+    // Note: diskutil "Device / Media Name" often shows drive model (which may contain "BD-RE")
+    // so we need to be very careful and use more reliable indicators
+    
+    // Check if it's mounted and what file system it has
+    let is_audio_cd = stdout.contains("Type (Bundle):             cda") 
+        || stdout.contains("Audio CD");
+    
+    if is_audio_cd {
+        info!("Detected Audio CD in {} (via diskutil)", device);
         return Ok(MediaType::AudioCD);
     }
     
-    // Check for Blu-ray before DVD
-    if stdout.contains("Blu-ray") || stdout.contains("BD-") || stdout.contains("BDROM") {
-        return Ok(MediaType::BluRay);
-    }
+    // For video discs, check the file system
+    // UDF is used by both DVDs and Blu-rays, so we can't reliably distinguish
+    // If drutil didn't work, we have to make an educated guess or return None
+    let has_udf = stdout.contains("UDF") || stdout.contains("Universal Disk Format");
     
-    if stdout.contains("DVD") {
+    if has_udf {
+        // Could be DVD or Blu-ray - check for BDMV directory would require mounting
+        // For now, default to DVD since that's more common
+        warn!("Detected UDF disc in {}, assuming DVD (drutil detection failed)", device);
         return Ok(MediaType::DVD);
     }
     
+    warn!("Could not determine media type for {}", device);
     Ok(MediaType::None)
 }
 

@@ -27,6 +27,7 @@ pub struct Episode {
     pub episode: u32,
     pub title: String,
     pub title_index: u32, // Which MakeMKV title this corresponds to
+    pub runtime_minutes: Option<u32>, // Episode runtime in minutes from TMDB
 }
 
 /// Get DVD disc ID using libdvdread or similar
@@ -91,13 +92,108 @@ pub async fn get_dvd_id(device: &str) -> Result<String> {
     Ok(dvd_id)
 }
 
+/// Clean and normalize a DVD volume name for searching
+/// Examples:
+/// - "FOSTERS_DISC_ONE" -> "Foster's Home for Imaginary Friends"
+/// - "MOVIE_NAME_2023" -> "Movie Name"
+/// - "TV_SHOW_S01" -> "TV Show"
+fn clean_volume_name(name: &str) -> String {
+    let mut cleaned = name.to_string();
+    
+    // Replace underscores with spaces
+    cleaned = cleaned.replace('_', " ");
+    
+    // Remove common DVD volume patterns
+    let patterns_to_remove = [
+        r"(?i)\s*DISC\s*\d+",           // DISC 1, DISC_2, etc.
+        r"(?i)\s*DISK\s*\d+",           // DISK 1, DISK_2, etc.
+        r"(?i)\s*DVD\s*\d*",            // DVD, DVD1, DVD 2, etc.
+        r"(?i)\s*CD\s*\d+",             // CD 1, CD_2, etc.
+        r"(?i)\s*VOLUME\s*\d+",         // VOLUME 1, etc.
+        r"(?i)\s*VOL\s*\d+",            // VOL 1, etc.
+        r"(?i)\s*SEASON\s*\d+",         // SEASON 1, etc.
+        r"(?i)\s*S\d+",                 // S01, S1, etc.
+        r"(?i)\s*\d{4}$",               // Year at end
+    ];
+    
+    for pattern in &patterns_to_remove {
+        if let Ok(re) = regex::Regex::new(pattern) {
+            cleaned = re.replace_all(&cleaned, "").to_string();
+        }
+    }
+    
+    // Trim whitespace
+    cleaned = cleaned.trim().to_string();
+    
+    // Convert to title case (capitalize first letter of each word)
+    cleaned = cleaned
+        .split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    let rest: String = chars.as_str().to_lowercase();
+                    format!("{}{}", first.to_uppercase(), rest)
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    
+    // Handle possessives: "Fosters" -> "Foster's"
+    // This is a heuristic - if a word ends in 's' and is followed by another word,
+    // try adding an apostrophe
+    cleaned = cleaned.replace("Fosters ", "Foster's ");
+    
+    cleaned
+}
+
+/// Generate multiple search variations from a cleaned volume name
+/// This helps when the disc label is abbreviated or formatted oddly
+fn generate_search_variations(name: &str) -> Vec<String> {
+    let mut variations = Vec::new();
+    
+    // Always try the cleaned name first
+    variations.push(name.to_string());
+    
+    // Try first word only (e.g., "Fosters One" -> "Fosters")
+    if let Some(first_word) = name.split_whitespace().next() {
+        if first_word != name {
+            variations.push(first_word.to_string());
+        }
+    }
+    
+    // Try first two words (e.g., "Fosters One Disc" -> "Fosters One")
+    let words: Vec<&str> = name.split_whitespace().collect();
+    if words.len() >= 2 {
+        variations.push(words[..2].join(" "));
+    }
+    
+    // Try with apostrophe variations
+    if name.contains("Fosters") {
+        variations.push(name.replace("Fosters", "Foster's"));
+    }
+    
+    // Remove duplicate entries
+    variations.sort();
+    variations.dedup();
+    
+    variations
+}
+
 /// Fetch DVD metadata from TMDB by searching with title
 pub async fn fetch_dvd_metadata(_disc_id: &str, volume_name: Option<&str>) -> Result<DvdMetadata> {
+    debug!("fetch_dvd_metadata called with volume_name: {:?}", volume_name);
+    
     // Check if TMDB API key is configured
-    if TMDB_API_KEY == "YOUR_TMDB_API_KEY" {
-        warn!("TMDB API key not configured, skipping metadata lookup");
+    if TMDB_API_KEY.is_empty() {
+        warn!("⚠️  TMDB API key is empty");
+        warn!("⚠️  Update TMDB_API_KEY in src/dvd_metadata.rs to enable metadata lookup");
         return create_dummy_dvd_metadata(volume_name);
     }
+    
+    info!("✅ TMDB API key configured, proceeding with metadata lookup");
     
     let client = reqwest::Client::builder()
         .user_agent("Ripley/0.1.0")
@@ -106,17 +202,31 @@ pub async fn fetch_dvd_metadata(_disc_id: &str, volume_name: Option<&str>) -> Re
     
     // If we have a volume name, search for it
     if let Some(name) = volume_name {
-        info!("Searching TMDB for: {}", name);
+        let cleaned_name = clean_volume_name(name);
+        info!("📡 Raw volume name: '{}', cleaned: '{}'", name, cleaned_name);
         
-        // Try TV show first
-        if let Ok(metadata) = search_tv_show(&client, name).await {
-            return Ok(metadata);
+        // Generate search variations to try
+        let search_terms = generate_search_variations(&cleaned_name);
+        info!("🔍 Will try search terms: {:?}", search_terms);
+        
+        // Try each search variation
+        for search_term in &search_terms {
+            info!("🔎 Trying TV search: '{}'", search_term);
+            if let Ok(metadata) = search_tv_show(&client, search_term).await {
+                info!("✅ Found TV show: {}", metadata.title);
+                return Ok(metadata);
+            }
+            
+            info!("🔎 Trying movie search: '{}'", search_term);
+            if let Ok(metadata) = search_movie(&client, search_term).await {
+                info!("✅ Found movie: {}", metadata.title);
+                return Ok(metadata);
+            }
         }
         
-        // Fall back to movie search
-        if let Ok(metadata) = search_movie(&client, name).await {
-            return Ok(metadata);
-        }
+        warn!("⚠️  No results found on TMDB for any variation of '{}'", name);
+    } else {
+        warn!("⚠️  No volume name provided, cannot search TMDB");
     }
     
     // If no metadata found, return dummy
@@ -132,13 +242,17 @@ async fn search_tv_show(client: &reqwest::Client, query: &str) -> Result<DvdMeta
         urlencoding::encode(query)
     );
     
+    debug!("TMDB TV search URL: {}", url.replace(TMDB_API_KEY, "***"));
+    
     let response = client.get(&url).send().await?;
     
     if !response.status().is_success() {
+        warn!("TMDB API returned error: {}", response.status());
         return Err(anyhow!("TMDB search failed: {}", response.status()));
     }
     
     let data: serde_json::Value = response.json().await?;
+    debug!("TMDB TV search response: {}", serde_json::to_string_pretty(&data).unwrap_or_default());
     
     let results = data["results"].as_array()
         .ok_or_else(|| anyhow!("No results"))?;
@@ -147,8 +261,50 @@ async fn search_tv_show(client: &reqwest::Client, query: &str) -> Result<DvdMeta
         return Err(anyhow!("No TV shows found"));
     }
     
-    // Get the first result
-    let show = &results[0];
+    // Find the best match - prefer titles that contain the search term more prominently
+    // For "Fosters", prefer "Foster's Home..." over "The Fosters" since the query is at the start
+    let query_lower = query.to_lowercase().replace("'", "");
+    let best_match = results.iter()
+        .max_by_key(|show| {
+            if let Some(name) = show["name"].as_str() {
+                let name_lower = name.to_lowercase().replace("'", "");
+                
+                // Score based on match quality (higher is better)
+                let mut score = 0;
+                
+                // Exact match gets highest score
+                if name_lower == query_lower {
+                    score += 1000;
+                }
+                
+                // Contains exact query gets high score
+                if name_lower.contains(&query_lower) {
+                    score += 500;
+                }
+                
+                // All query words present
+                if query_lower.split_whitespace().all(|word| name_lower.contains(word)) {
+                    score += 100;
+                }
+                
+                // Prefer matches where query appears earlier in title
+                if let Some(pos) = name_lower.find(&query_lower) {
+                    score += (100 - pos.min(99)) as i32;
+                }
+                
+                // Use popularity as tiebreaker
+                if let Some(popularity) = show["popularity"].as_f64() {
+                    score += (popularity as i32).min(10);
+                }
+                
+                score
+            } else {
+                0
+            }
+        })
+        .or_else(|| results.first()); // Fall back to first result if scoring fails
+    
+    let show = best_match.ok_or_else(|| anyhow!("No show found"))?;
     let show_id = show["id"].as_i64()
         .ok_or_else(|| anyhow!("No show ID"))?;
     
@@ -204,17 +360,90 @@ async fn fetch_tv_episodes(client: &reqwest::Client, show_id: i64, season: u32) 
             .unwrap_or("Unknown Episode")
             .to_string();
         
+        let runtime_minutes = ep["runtime"].as_u64().map(|r| r as u32);
+        
         episodes.push(Episode {
             season,
             episode: ep_num,
             title,
-            title_index: idx as u32, // Assume titles are in order
+            title_index: idx as u32, // Will be updated by duration matching
+            runtime_minutes,
         });
     }
     
     info!("Found {} episodes for season {}", episodes.len(), season);
     
     Ok(episodes)
+}
+
+/// Match disc title durations to episodes by runtime
+/// Returns updated episodes with correct title_index values
+pub fn match_episodes_by_duration(
+    mut episodes: Vec<Episode>,
+    title_durations: &[(usize, String)], // (title_index, "HH:MM:SS")
+) -> Vec<Episode> {
+    info!("Matching {} episodes to {} disc titles by duration", episodes.len(), title_durations.len());
+    
+    // Convert title durations to minutes
+    let mut title_minutes: Vec<(usize, u32)> = Vec::new();
+    for (idx, duration_str) in title_durations {
+        if let Some(minutes) = parse_duration_to_minutes(duration_str) {
+            title_minutes.push((*idx, minutes));
+            debug!("Title {}: {} = {} minutes", idx, duration_str, minutes);
+        }
+    }
+    
+    // Filter titles that are likely episodes (typically 18-50 minutes for TV)
+    let episode_titles: Vec<(usize, u32)> = title_minutes.into_iter()
+        .filter(|(_, min)| *min >= 18 && *min <= 50)
+        .collect();
+    
+    info!("Found {} titles that look like TV episodes (18-50 min)", episode_titles.len());
+    
+    // Match episodes to titles by finding closest runtime
+    let mut used_titles: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    
+    for episode in &mut episodes {
+        if let Some(ep_runtime) = episode.runtime_minutes {
+            // Find best matching title by runtime (within 5 minutes tolerance)
+            let best_match = episode_titles.iter()
+                .filter(|(idx, _)| !used_titles.contains(idx))
+                .min_by_key(|(_, title_min)| {
+                    let diff = (*title_min as i32 - ep_runtime as i32).abs();
+                    diff
+                })
+                .filter(|(_, title_min)| {
+                    let diff = (*title_min as i32 - ep_runtime as i32).abs();
+                    diff <= 5 // Within 5 minutes
+                });
+            
+            if let Some((title_idx, title_min)) = best_match {
+                info!("Matched S{}E{} ({} min) to Title {} ({} min)", 
+                      episode.season, episode.episode, ep_runtime, title_idx, title_min);
+                episode.title_index = *title_idx as u32;
+                used_titles.insert(*title_idx);
+            } else {
+                warn!("Could not match S{}E{} ({} min) to any disc title", 
+                      episode.season, episode.episode, ep_runtime);
+            }
+        }
+    }
+    
+    episodes
+}
+
+/// Parse duration string "H:MM:SS" or "HH:MM:SS" to minutes
+fn parse_duration_to_minutes(duration: &str) -> Option<u32> {
+    let parts: Vec<&str> = duration.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    
+    let hours: u32 = parts[0].parse().ok()?;
+    let minutes: u32 = parts[1].parse().ok()?;
+    let seconds: u32 = parts[2].parse().ok()?;
+    
+    Some(hours * 60 + minutes + if seconds >= 30 { 1 } else { 0 })
 }
 
 /// Search TMDB for a movie

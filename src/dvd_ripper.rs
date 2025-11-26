@@ -74,6 +74,7 @@ where
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
     let mut title_count = 0;
+    let mut title_durations: Vec<(usize, String)> = Vec::new(); // (title_index, duration)
 
     // Parse scan output
     loop {
@@ -82,13 +83,25 @@ where
                 match result {
                     Ok(Some(line)) => {
                         debug!("makemkvcon scan: {}", line);
-                        log_callback(line.clone());
                         
                         // Count titles
                         if line.starts_with("TCOUNT:") {
                             if let Some(count_str) = line.strip_prefix("TCOUNT:") {
                                 title_count = count_str.trim().parse().unwrap_or(0);
                                 info!("Found {} titles on DVD", title_count);
+                                log_callback(format!("Found {} titles", title_count));
+                            }
+                        }
+                        
+                        // Parse title durations: TINFO:0,9,0,"2:59:37"
+                        if line.starts_with("TINFO:") && line.contains(",9,0,") {
+                            let parts: Vec<&str> = line.split(',').collect();
+                            if parts.len() >= 4 {
+                                if let Some(title_idx) = parts[0].strip_prefix("TINFO:").and_then(|s| s.parse::<usize>().ok()) {
+                                    let duration = parts[3].trim_matches('"').to_string();
+                                    title_durations.push((title_idx, duration.clone()));
+                                    info!("Title {}: {}", title_idx, duration);
+                                }
                             }
                         }
                     }
@@ -120,6 +133,24 @@ where
     if title_count == 0 {
         return Err(anyhow!("No titles found on DVD"));
     }
+    
+    // Match episodes to disc titles by duration if we have metadata
+    let metadata = if let Some(meta) = metadata {
+        if meta.media_type == MediaType::TVShow && !meta.episodes.is_empty() {
+            log_callback("Matching episodes to disc titles by duration...".to_string());
+            let matched_episodes = crate::dvd_metadata::match_episodes_by_duration(
+                meta.episodes.clone(),
+                &title_durations
+            );
+            let mut updated_meta = meta.clone();
+            updated_meta.episodes = matched_episodes;
+            Some(updated_meta)
+        } else {
+            Some(meta.clone())
+        }
+    } else {
+        None
+    };
 
     log_callback(format!("Found {} titles, starting rip...", title_count));
 
@@ -236,7 +267,7 @@ where
         log_callback("✅ DVD rip complete".to_string());
         
         // Rename files based on metadata if available
-        if let Some(meta) = metadata {
+        if let Some(meta) = &metadata {
             log_callback("Renaming files with metadata...".to_string());
             if let Err(e) = rename_dvd_files(output_dir, meta).await {
                 warn!("Failed to rename files: {}", e);

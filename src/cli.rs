@@ -22,6 +22,10 @@ pub struct Args {
     /// Skip metadata fetching (offline mode)
     #[arg(short, long, default_value = "false")]
     pub skip_metadata: bool,
+
+    /// Manually specify the title for DVD/Blu-ray metadata lookup (e.g., "Foster's Home for Imaginary Friends")
+    #[arg(short, long, value_name = "TITLE")]
+    pub title: Option<String>,
 }
 
 impl Args {
