@@ -11,6 +11,7 @@ mod notifications;
 mod filebot;
 mod ocr;
 mod rsync;
+mod speech_match;
 
 use anyhow::Result;
 use cli::Args;

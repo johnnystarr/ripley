@@ -7,4 +7,5 @@ pub mod dvd_ripper;
 pub mod metadata;
 pub mod ocr;
 pub mod ripper;
+pub mod speech_match;
 pub mod tui;

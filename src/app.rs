@@ -472,43 +472,64 @@ async fn rip_dvd_disc(
             if !args.skip_filebot && dvd_metadata.is_some() {
                 let metadata = dvd_metadata.as_ref().unwrap();
                 if metadata.media_type == crate::dvd_metadata::MediaType::TVShow {
-                    // Step 1: Run OCR on all videos to extract episode titles
-                    add_log(&tui_state, device, "🔍 Running OCR to extract episode titles (this may take a while)...".to_string()).await;
+                    // Step 1: Use speech-to-text to identify episodes by dialogue
+                    add_log(&tui_state, device, "🎤 Analyzing dialogue to identify episodes...".to_string()).await;
                     
-                    let mut ocr_success_count = 0;
-                    let show_title_lower = metadata.title.to_lowercase();
+                    let mut matched_count = 0;
                     let mut read_dir = tokio::fs::read_dir(&dvd_dir).await?;
+                    let mut files = Vec::new();
+                    
                     while let Some(entry) = read_dir.next_entry().await? {
                         let path = entry.path();
                         if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
-                            if let Ok(Some(title)) = crate::ocr::extract_episode_title(&path).await {
-                                // Skip if OCR result looks like the show title (not episode title)
-                                let title_lower = title.to_lowercase();
-                                if title_lower.contains(&show_title_lower) || 
-                                   title_lower.contains("home") && title_lower.contains("imaginary") {
-                                    add_log(&tui_state, device, format!("  ⏭️  Skipped show title: {}", title)).await;
-                                    continue;
-                                }
+                            files.push(path);
+                        }
+                    }
+                    
+                    for (idx, path) in files.iter().enumerate() {
+                        add_log(&tui_state, device, format!("  [{}/{}] Extracting audio from {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy())).await;
+                        
+                        // Extract and transcribe audio
+                        match crate::speech_match::extract_and_transcribe_audio(&path).await {
+                            Ok(transcript) => {
+                                add_log(&tui_state, device, format!("    Transcribed {} characters", transcript.len())).await;
                                 
-                                // Rename file to include OCR'd title
-                                let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-                                let new_name = format!("{}.{}.mkv", filename, title.replace(' ', "."));
-                                let new_path = dvd_dir.join(&new_name);
-                                
-                                if let Err(e) = tokio::fs::rename(&path, &new_path).await {
-                                    add_log(&tui_state, device, format!("⚠️  Failed to rename with OCR title: {}", e)).await;
-                                } else {
-                                    add_log(&tui_state, device, format!("  ✓ {}", title)).await;
-                                    ocr_success_count += 1;
+                                // Match against TMDB episodes
+                                match crate::speech_match::match_episode_by_transcript(
+                                    &metadata.title,
+                                    &transcript,
+                                    &metadata.episodes
+                                ).await {
+                                    Ok(ep_match) => {
+                                        let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+                                        let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
+                                            filename, ep_match.season, ep_match.episode, 
+                                            ep_match.title.replace(' ', "."));
+                                        let new_path = dvd_dir.join(&new_name);
+                                        
+                                        if let Err(e) = tokio::fs::rename(&path, &new_path).await {
+                                            add_log(&tui_state, device, format!("    ⚠️  Failed to rename: {}", e)).await;
+                                        } else {
+                                            add_log(&tui_state, device, format!("    ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
+                                                ep_match.season, ep_match.episode, ep_match.title, ep_match.confidence)).await;
+                                            matched_count += 1;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        add_log(&tui_state, device, format!("    ⚠️  Matching failed: {}", e)).await;
+                                    }
                                 }
+                            }
+                            Err(e) => {
+                                add_log(&tui_state, device, format!("    ⚠️  Transcription failed: {}", e)).await;
                             }
                         }
                     }
                     
-                    if ocr_success_count > 0 {
-                        add_log(&tui_state, device, format!("✅ OCR extracted {} episode titles", ocr_success_count)).await;
+                    if matched_count > 0 {
+                        add_log(&tui_state, device, format!("✅ Matched {} episodes by dialogue", matched_count)).await;
                     } else {
-                        add_log(&tui_state, device, "⚠️  OCR didn't find episode title cards (will use duration matching)".to_string()).await;
+                        add_log(&tui_state, device, "⚠️  Speech matching unavailable (need Whisper + OpenAI API)".to_string()).await;
                     }
                     
                     // Step 2: Run Filebot with OCR-enhanced filenames
