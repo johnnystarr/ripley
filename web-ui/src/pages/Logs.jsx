@@ -10,6 +10,7 @@ import {
   faCircleCheck,
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '../api';
+import Dropdown from '../components/Dropdown';
 
 // Custom debounce hook
 function useDebounce(value, delay) {
@@ -156,35 +157,32 @@ export default function Logs() {
           </div>
 
           {/* Level Filter */}
-          <div>
-            <label className="block text-slate-400 text-sm mb-2">Level</label>
-            <select
-              value={selectedLevel}
-              onChange={(e) => setSelectedLevel(e.target.value)}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="all">All Levels</option>
-              <option value="info">Info</option>
-              <option value="success">Success</option>
-              <option value="warning">Warning</option>
-              <option value="error">Error</option>
-            </select>
-          </div>
+          <Dropdown
+            label="Level"
+            value={selectedLevel}
+            onChange={(value) => setSelectedLevel(value)}
+            options={[
+              { value: 'all', label: 'All Levels' },
+              { value: 'info', label: 'Info' },
+              { value: 'success', label: 'Success' },
+              { value: 'warning', label: 'Warning' },
+              { value: 'error', label: 'Error' },
+            ]}
+          />
 
           {/* Drive Filter */}
-          <div>
-            <label className="block text-slate-400 text-sm mb-2">Drive</label>
-            <select
-              value={selectedDrive}
-              onChange={(e) => setSelectedDrive(e.target.value)}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="all">All Drives</option>
-              {uniqueDrives.map(drive => (
-                <option key={drive} value={drive}>{drive}</option>
-              ))}
-            </select>
-          </div>
+          <Dropdown
+            label="Drive"
+            value={selectedDrive}
+            onChange={(value) => setSelectedDrive(value)}
+            options={[
+              { value: 'all', label: 'All Drives' },
+              ...uniqueDrives.map(drive => ({
+                value: drive,
+                label: drive
+              }))
+            ]}
+          />
         </div>
 
         <div className="flex gap-3 mt-4">

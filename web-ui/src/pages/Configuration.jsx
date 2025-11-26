@@ -13,6 +13,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
+import Dropdown from '../components/Dropdown';
 
 export default function Configuration() {
   const [config, setConfig] = useState(null);
@@ -287,20 +288,18 @@ export default function Configuration() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-slate-400 text-sm mb-2">Whisper Model</label>
-            <select
-              value={config.speech_match.whisper_model}
-              onChange={(e) => updateConfig('speech_match.whisper_model', e.target.value)}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="tiny">Tiny (fastest, least accurate)</option>
-              <option value="base">Base (recommended)</option>
-              <option value="small">Small (slower, more accurate)</option>
-              <option value="medium">Medium (very slow)</option>
-              <option value="large">Large (slowest, best accuracy)</option>
-            </select>
-          </div>
+          <Dropdown
+            label="Whisper Model"
+            value={config.speech_match.whisper_model}
+            onChange={(value) => updateConfig('speech_match.whisper_model', value)}
+            options={[
+              { value: 'tiny', label: 'Tiny (fastest, least accurate)' },
+              { value: 'base', label: 'Base (recommended)' },
+              { value: 'small', label: 'Small (slower, more accurate)' },
+              { value: 'medium', label: 'Medium (very slow)' },
+              { value: 'large', label: 'Large (slowest, best accuracy)' },
+            ]}
+          />
 
           <div className="flex items-center justify-between">
             <div>
@@ -350,29 +349,25 @@ export default function Configuration() {
             </button>
           </div>
 
-          <div>
-            <label className="block text-slate-400 text-sm mb-2">Database</label>
-            <select
-              value={config.filebot.database}
-              onChange={(e) => updateConfig('filebot.database', e.target.value)}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="TheTVDB">TheTVDB</option>
-              <option value="TheMovieDB">TheMovieDB</option>
-            </select>
-          </div>
+          <Dropdown
+            label="Database"
+            value={config.filebot.database}
+            onChange={(value) => updateConfig('filebot.database', value)}
+            options={[
+              { value: 'TheTVDB', label: 'TheTVDB' },
+              { value: 'TheMovieDB', label: 'TheMovieDB' },
+            ]}
+          />
 
-          <div>
-            <label className="block text-slate-400 text-sm mb-2">Episode Order</label>
-            <select
-              value={config.filebot.order}
-              onChange={(e) => updateConfig('filebot.order', e.target.value)}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="Airdate">Airdate</option>
-              <option value="DVD">DVD</option>
-            </select>
-          </div>
+          <Dropdown
+            label="Episode Order"
+            value={config.filebot.order}
+            onChange={(value) => updateConfig('filebot.order', value)}
+            options={[
+              { value: 'Airdate', label: 'Airdate' },
+              { value: 'DVD', label: 'DVD' },
+            ]}
+          />
 
           <div className="flex items-center justify-between">
             <div>
