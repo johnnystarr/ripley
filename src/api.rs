@@ -273,6 +273,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/rip/start", post(start_rip))
         .route("/rip/stop", post(stop_rip))
         .route("/drives", get(list_drives))
+        .route("/drives/:device/eject", post(eject_drive))
         .route("/rename", post(rename_files))
         .route("/logs", get(get_logs))
         .route("/logs/search", get(search_logs_handler))
@@ -379,6 +380,43 @@ async fn list_drives(State(_state): State<ApiState>) -> Result<Json<Vec<crate::d
         Ok(drives) => Ok(Json(drives)),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to detect drives: {}", e),
+        }),
+    }
+}
+
+/// Eject a drive
+async fn eject_drive(
+    State(state): State<ApiState>,
+    axum::extract::Path(device): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    // URL decode the device parameter (e.g., %2Fdev%2Fdisk2 -> /dev/disk2)
+    let device = urlencoding::decode(&device)
+        .map_err(|e| ErrorResponse {
+            error: format!("Invalid device path: {}", e),
+        })?
+        .into_owned();
+    
+    match crate::drive::eject_disc(&device).await {
+        Ok(_) => {
+            // Emit DriveEjected event
+            let _ = state.event_tx.send(ApiEvent::DriveEjected {
+                device: device.clone(),
+            });
+            
+            // Log the ejection
+            let _ = state.event_tx.send(ApiEvent::Log {
+                level: "info".to_string(),
+                message: format!("Ejected drive {}", device),
+                drive: Some(device.clone()),
+            });
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("Drive {} ejected successfully", device)
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to eject drive: {}", e),
         }),
     }
 }

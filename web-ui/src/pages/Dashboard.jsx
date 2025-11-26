@@ -126,6 +126,17 @@ export default function Dashboard() {
     }
   };
 
+  const handleEjectDrive = async (device) => {
+    try {
+      await api.ejectDrive(device);
+      toast.success(`Drive ${device} ejected`);
+      // Refresh drives list
+      fetchDrives();
+    } catch (err) {
+      toast.error('Failed to eject drive: ' + err.message);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -254,6 +265,16 @@ export default function Dashboard() {
                         <p className="text-xs text-slate-400 mt-1">{drive.status}</p>
                       )}
                     </div>
+                  )}
+                  
+                  {drive.has_disc && (
+                    <button
+                      onClick={() => handleEjectDrive(drive.device)}
+                      className="mt-3 w-full bg-slate-700 hover:bg-slate-600 text-slate-200 py-1.5 px-3 rounded text-sm transition-colors duration-200 flex items-center justify-center"
+                    >
+                      <FontAwesomeIcon icon={faEject} className="mr-2" />
+                      Eject
+                    </button>
                   )}
                 </div>
               </div>

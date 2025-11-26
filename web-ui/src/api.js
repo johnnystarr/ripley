@@ -61,6 +61,15 @@ class ApiClient {
     return this.request('/drives');
   }
 
+  // Eject a drive
+  async ejectDrive(device) {
+    // URL encode the device path
+    const encodedDevice = encodeURIComponent(device);
+    return this.request(`/drives/${encodedDevice}/eject`, {
+      method: 'POST',
+    });
+  }
+
   // Start ripping
   async startRip(params) {
     return this.request('/rip/start', {
