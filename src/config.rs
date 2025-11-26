@@ -70,31 +70,35 @@ impl Default for Config {
     }
 }
 
+/// Get the path to the config file (tries project root first, then ~/.config/ripley/config.yaml)
+fn get_config_path() -> PathBuf {
+    // Try project root first
+    let project_config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.yaml");
+    
+    if project_config.exists() {
+        return project_config;
+    }
+    
+    // Try home config dir
+    if let Some(home_dir) = dirs::home_dir() {
+        let home_config = home_dir.join(".config").join("ripley").join("config.yaml");
+        if home_config.exists() {
+            return home_config;
+        }
+    }
+    
+    // Default to project root even if it doesn't exist
+    project_config
+}
+
 impl Config {
     /// Load config from config.yaml in the project root or ~/.config/ripley/config.yaml
     pub fn load() -> Result<Self> {
-        // Try project root first
-        let project_config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.yaml");
+        let config_path = get_config_path();
         
-        // Try home config dir
-        let home_config = dirs::home_dir()
-            .map(|h| h.join(".config").join("ripley").join("config.yaml"));
-        
-        let config_path = if project_config.exists() {
-            Some(project_config)
-        } else if let Some(ref path) = home_config {
-            if path.exists() {
-                Some(path.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
-        if let Some(path) = config_path {
-            info!("Loading config from {}", path.display());
-            Self::load_from_file(&path)
+        if config_path.exists() {
+            info!("Loading config from {}", config_path.display());
+            Self::load_from_file(&config_path)
         } else {
             warn!("No config.yaml found, using defaults");
             Ok(Config::default())
@@ -131,6 +135,15 @@ impl Config {
     pub fn get_tmdb_api_key(&self) -> Option<String> {
         self.tmdb_api_key.clone()
     }
+}
+
+/// Save config to the default config file
+pub fn save_config(config: &Config) -> Result<()> {
+    let config_path = get_config_path();
+    let contents = serde_yaml::to_string(config)?;
+    std::fs::write(config_path, contents)?;
+    info!("Configuration saved");
+    Ok(())
 }
 
 #[cfg(test)]

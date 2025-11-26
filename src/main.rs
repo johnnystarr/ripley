@@ -1,3 +1,4 @@
+mod api;
 mod cli;
 mod config;
 mod drive;
@@ -80,6 +81,16 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Some(Command::Serve { port, host }) => {
+            eprintln!("\x1b[35m🌐 Ripley REST API Server\x1b[0m");
+            eprintln!("\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
+            
+            // Load configuration
+            let config = config::Config::load()?;
+            
+            // Start API server
+            api::start_server(config, host.clone(), *port).await?;
+        }
         None => {
             // No subcommand provided - print help with a friendly message
             eprintln!("\x1b[33m⚠️  No command specified.\x1b[0m\n");
@@ -87,7 +98,8 @@ async fn main() -> Result<()> {
             eprintln!("\x1b[36m   Run '\x1b[1;32mripley --help\x1b[0;36m' to see all available commands.\x1b[0m\n");
             eprintln!("\x1b[1mQuick Start:\x1b[0m");
             eprintln!("  \x1b[32mripley rip\x1b[0m       Start the interactive disc ripper");
-            eprintln!("  \x1b[32mripley rename\x1b[0m    Rename existing video files\n");
+            eprintln!("  \x1b[32mripley rename\x1b[0m    Rename existing video files");
+            eprintln!("  \x1b[32mripley serve\x1b[0m     Start REST API server\n");
             
             std::process::exit(1);
         }

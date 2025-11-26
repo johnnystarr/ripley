@@ -15,6 +15,11 @@ crossterm = "0.28"
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
 
+# REST API
+axum = { version = "0.7", features = ["ws"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+
 # HTTP client for MusicBrainz
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }

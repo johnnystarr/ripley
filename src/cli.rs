@@ -73,6 +73,20 @@ pub enum Command {
         #[arg(help = "Only use speech/subtitle matching")]
         skip_filebot: bool,
     },
+
+    /// 🌐 Start REST API server for remote control (for web UI)
+    #[command(visible_alias = "api")]
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, value_name = "PORT", default_value = "3000")]
+        #[arg(help = "HTTP port for API server")]
+        port: u16,
+
+        /// Host address to bind to
+        #[arg(long, value_name = "HOST", default_value = "127.0.0.1")]
+        #[arg(help = "Network interface to bind (use 0.0.0.0 for all)")]
+        host: String,
+    },
 }
 
 fn get_styles() -> clap::builder::Styles {
