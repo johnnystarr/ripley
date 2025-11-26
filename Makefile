@@ -1,19 +1,31 @@
-.PHONY: build test clean install help
+.PHONY: build test clean install help dev
 
 # Default target
 .DEFAULT_GOAL := help
 
-# Build the project in release mode
+# Build the project in release mode (includes web UI)
 build:
+	@echo "🔨 Building Web UI..."
+	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (release mode)..."
 	@cargo build --release
 	@echo "✅ Build complete: target/release/ripley"
 
-# Build debug version
+# Build debug version (includes web UI)
 debug:
+	@echo "🔨 Building Web UI..."
+	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (debug mode)..."
 	@cargo build
 	@echo "✅ Debug build complete: target/debug/ripley"
+
+# Run development server with hot reload
+dev:
+	@echo "🚀 Starting Ripley development server..."
+	@echo "   API server: http://localhost:3000/api"
+	@echo "   Web UI: http://localhost:5173"
+	@echo ""
+	@bash -c 'set -m; trap "trap - SIGTERM && kill -- -$$$$" SIGINT SIGTERM EXIT; (cd web-ui && npm run dev) & cargo run -- serve --dev --port 3000'
 
 # Run tests
 test:
@@ -80,8 +92,9 @@ help:
 	@echo "Ripley - Automated Optical Disc Ripper"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  make build      - Build release binary"
-	@echo "  make debug      - Build debug binary"
+	@echo "  make build      - Build release binary (includes web UI)"
+	@echo "  make debug      - Build debug binary (includes web UI)"
+	@echo "  make dev        - Run development server with hot reload"
 	@echo "  make test       - Run tests"
 	@echo "  make clean      - Remove build artifacts"
 	@echo "  make install    - Install to ~/.cargo/bin"

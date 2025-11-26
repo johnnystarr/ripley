@@ -56,14 +56,20 @@ pub async fn start_server(
     
     info!("🌐 REST API server starting on http://{}", addr);
     eprintln!("\x1b[32m✓\x1b[0m Server listening on \x1b[1mhttp://{}\x1b[0m", addr);
-    eprintln!("\x1b[36m  • Web UI:\x1b[0m        http://{}/", addr);
+    
+    if dev_mode {
+        eprintln!("\x1b[36m  • Web UI:\x1b[0m        \x1b[1mhttp://localhost:5173\x1b[0m (Vite dev server)");
+        eprintln!("\x1b[36m  • API:\x1b[0m           http://{}/api", addr);
+    } else {
+        eprintln!("\x1b[36m  • Web UI:\x1b[0m        http://{}/", addr);
+    }
+    
     eprintln!("\x1b[36m  • Health check:\x1b[0m http://{}/api/health", addr);
     eprintln!("\x1b[36m  • API status:\x1b[0m    http://{}/api/status", addr);
     eprintln!("\x1b[36m  • WebSocket:\x1b[0m     ws://{}/api/ws\n", addr);
     
     if dev_mode {
-        eprintln!("\x1b[33m🔧 Development mode:\x1b[0m Use Vite dev server for UI hot reload");
-        eprintln!("\x1b[33m   Run: cd web-ui && npm run dev\x1b[0m\n");
+        eprintln!("\x1b[33m💡 Hot reload enabled - changes to web-ui/ will update automatically\x1b[0m");
     }
     
     eprintln!("\x1b[33m💡 Press Ctrl+C to stop the server\x1b[0m\n");
