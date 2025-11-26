@@ -121,6 +121,7 @@ async fn rip_disc(
     }
     
     // Helper to add rename logs (appears in separate pane like rsync)
+    #[allow(dead_code)]
     async fn add_rename_log(state: &Arc<Mutex<crate::tui::AppState>>, device: &str, msg: String) {
         let mut s = state.lock().await;
         s.add_rename_log(device, msg);

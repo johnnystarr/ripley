@@ -391,6 +391,7 @@ async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_nu
 }
 
 /// Rename MKV files based on metadata (batch mode, kept for compatibility)
+#[allow(dead_code)]
 async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<()> {
     use tokio::fs;
     

@@ -36,7 +36,7 @@ pub enum Command {
 
         /// Manually specify TV show title for metadata lookup
         #[arg(short, long, value_name = "TITLE")]
-        #[arg(help = "Override disc title (e.g., 'Breaking Bad')")]
+        #[arg(help = "Override disc title (e.g., 'Star Trek TNG')")]
         title: Option<String>,
 
         /// Skip metadata fetching from TMDB (offline mode)
