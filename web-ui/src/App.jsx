@@ -101,8 +101,8 @@ function Sidebar({ isOpen, wsConnected }) {
       isOpen ? 'w-64' : 'w-0'
     } overflow-hidden`}>
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-yellow-400 mb-8">
-          <FontAwesomeIcon icon={faCompactDisc} className="mr-2" />
+        <h1 className="text-2xl font-bold text-yellow-400 mb-8 flex items-center">
+          <img src="/ripley-head.png" alt="Ripley" className="w-[35px] h-auto mr-2" />
           RIPLEY
         </h1>
 
