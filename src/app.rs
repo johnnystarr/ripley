@@ -117,19 +117,6 @@ async fn rip_disc(
         s.add_drive_log(device, msg);
     }
 
-    // Create drive state immediately so logs can be added
-    {
-        let mut s = tui_state.lock().await;
-        if !s.drives.iter().any(|d| d.device == device) {
-            s.drives.push(crate::tui::DriveState {
-                device: device.to_string(),
-                progress: None,
-                album_info: None,
-                logs: Vec::new(),
-            });
-        }
-    }
-
     add_log(&tui_state, device, format!("📀 Detected audio CD in {}", device)).await;
 
     // Unmount disc before reading (cd-discid needs exclusive access)
@@ -201,6 +188,14 @@ async fn rip_disc(
 
     let album_info = format!("{} - {}", metadata.artist, metadata.album);
     
+    // Update album info in the drive state
+    {
+        let mut s = tui_state.lock().await;
+        if let Some(drive) = s.drives.iter_mut().find(|d| d.device == device) {
+            drive.album_info = Some(album_info.clone());
+        }
+    }
+    
     // Start ripping
     add_log(&tui_state, device, format!("🎵 Ripping {} from {}...", album_info, device)).await;
 
@@ -222,29 +217,13 @@ async fn rip_disc(
             let tui_state = Arc::clone(&tui_state_clone);
 
             tokio::spawn(async move {
-                async fn update_drive(
-                    state: Arc<Mutex<crate::tui::AppState>>,
-                    device: String,
-                    progress: ripper::RipProgress,
-                    album_info: Option<String>,
-                ) {
-                    let mut s = state.lock().await;
-                    if let Some(drive) = s.drives.iter_mut().find(|d| d.device == device) {
-                        drive.progress = Some(progress);
-                        if album_info.is_some() {
-                            drive.album_info = album_info;
-                        }
-                    } else {
-                        s.drives.push(crate::tui::DriveState {
-                            device,
-                            progress: Some(progress),
-                            album_info,
-                            logs: Vec::new(),
-                        });
+                let mut s = tui_state.lock().await;
+                if let Some(drive) = s.drives.iter_mut().find(|d| d.device == device) {
+                    drive.progress = Some(progress);
+                    if drive.album_info.is_none() {
+                        drive.album_info = Some(album_info);
                     }
                 }
-                
-                update_drive(tui_state, device, progress, Some(album_info)).await;
             });
         },
         move |log_line| {

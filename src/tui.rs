@@ -38,13 +38,22 @@ impl AppState {
     }
 
     pub fn add_drive_log(&mut self, device: &str, message: String) {
+        let formatted = format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), message);
+        
         if let Some(drive) = self.drives.iter_mut().find(|d| d.device == device) {
-            let formatted = format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), message);
             drive.logs.push(formatted);
             // Keep only last 50 logs per drive
             if drive.logs.len() > 50 {
                 drive.logs.remove(0);
             }
+        } else {
+            // Create drive if it doesn't exist
+            self.drives.push(DriveState {
+                device: device.to_string(),
+                progress: None,
+                album_info: None,
+                logs: vec![formatted],
+            });
         }
     }
     
@@ -156,9 +165,7 @@ fn ui(f: &mut Frame, state: &AppState) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
-    let active_rips = state.drives.iter()
-        .filter(|d| d.progress.is_some())
-        .count();
+    let active_rips = state.drives.len();
 
     let title = vec![
         Span::styled("🎵 ", Style::default().fg(Color::Cyan)),
