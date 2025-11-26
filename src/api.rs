@@ -19,6 +19,7 @@ use tracing::info;
 
 use crate::cli::RipArgs;
 use crate::config::Config;
+use crate::database::{Database, LogEntry, Issue};
 
 /// Start the REST API server
 pub async fn start_server(
@@ -30,11 +31,16 @@ pub async fn start_server(
     // Create broadcast channel for events
     let (event_tx, _) = broadcast::channel(100);
     
+    // Initialize database
+    let db = Arc::new(Database::new()?);
+    info!("Database initialized");
+    
     // Create shared state
     let state = ApiState {
         config: Arc::new(RwLock::new(config)),
         rip_status: Arc::new(RwLock::new(RipStatus::default())),
         event_tx,
+        db,
     };
     
     // Create router with API routes
@@ -75,6 +81,7 @@ pub struct ApiState {
     pub config: Arc<RwLock<Config>>,
     pub rip_status: Arc<RwLock<RipStatus>>,
     pub event_tx: broadcast::Sender<ApiEvent>,
+    pub db: Arc<Database>,
 }
 
 /// Current ripping status
@@ -103,12 +110,16 @@ impl Default for RipStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum ApiEvent {
-    RipStarted { disc: String },
-    RipProgress { progress: f32, message: String },
-    RipCompleted { disc: String },
-    RipError { error: String },
-    Log { message: String },
+    RipStarted { disc: String, drive: String },
+    RipProgress { progress: f32, message: String, drive: String },
+    RipCompleted { disc: String, drive: String },
+    RipError { error: String, drive: Option<String> },
+    Log { level: String, message: String, drive: Option<String> },
     StatusUpdate { status: RipStatus },
+    DriveDetected { drive: crate::drive::DriveInfo },
+    DriveRemoved { device: String },
+    DriveEjected { device: String },
+    IssueCreated { issue: Issue },
 }
 
 /// Request body for starting a rip operation
@@ -143,6 +154,11 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/rip/stop", post(stop_rip))
         .route("/drives", get(list_drives))
         .route("/rename", post(rename_files))
+        .route("/logs", get(get_logs))
+        .route("/logs/search", get(search_logs_handler))
+        .route("/issues", get(get_all_issues_handler))
+        .route("/issues/active", get(get_active_issues))
+        .route("/issues/:id/resolve", post(resolve_issue))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -227,7 +243,9 @@ async fn stop_rip(State(state): State<ApiState>) -> Json<serde_json::Value> {
     status.is_ripping = false;
     
     let _ = state.event_tx.send(ApiEvent::Log {
+        level: "warning".to_string(),
         message: "Rip operation stopped by user".to_string(),
+        drive: None,
     });
     
     Json(serde_json::json!({
@@ -303,7 +321,9 @@ async fn run_rip_operation(
 ) -> anyhow::Result<()> {
     
     let _ = state.event_tx.send(ApiEvent::Log {
+        level: "info".to_string(),
         message: "Starting rip operation...".to_string(),
+        drive: None,
     });
     
     let args = RipArgs {
@@ -321,11 +341,13 @@ async fn run_rip_operation(
         Ok(_) => {
             let _ = state.event_tx.send(ApiEvent::RipCompleted {
                 disc: "Unknown".to_string(),
+                drive: "Unknown".to_string(),
             });
         }
         Err(e) => {
             let _ = state.event_tx.send(ApiEvent::RipError {
                 error: e.to_string(),
+                drive: None,
             });
         }
     }
@@ -343,7 +365,9 @@ async fn run_rename_operation(
     _config: Config,
 ) -> anyhow::Result<()> {
     let _ = state.event_tx.send(ApiEvent::Log {
+        level: "info".to_string(),
         message: format!("Starting rename for directory: {}", request.directory),
+        drive: None,
     });
     
     // Call existing rename functionality
@@ -351,21 +375,98 @@ async fn run_rename_operation(
     // For now, log the parameters that would be used
     if let Some(ref title) = request.title {
         let _ = state.event_tx.send(ApiEvent::Log {
+            level: "info".to_string(),
             message: format!("Using title: {}", title),
+            drive: None,
         });
     }
     let _ = state.event_tx.send(ApiEvent::Log {
+        level: "info".to_string(),
         message: format!(
             "Options: skip_speech={}, skip_filebot={}",
             request.skip_speech, request.skip_filebot
         ),
+        drive: None,
     });
     
     let _ = state.event_tx.send(ApiEvent::Log {
+        level: "success".to_string(),
         message: "Rename operation completed".to_string(),
+        drive: None,
     });
     
     Ok(())
+}
+
+/// Get recent logs from database
+async fn get_logs(State(state): State<ApiState>) -> Result<Json<Vec<LogEntry>>, ErrorResponse> {
+    match state.db.get_recent_logs(100) {
+        Ok(logs) => Ok(Json(logs)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get logs: {}", e),
+        }),
+    }
+}
+
+/// Search logs with filters
+#[derive(Debug, Deserialize)]
+struct SearchLogsQuery {
+    query: Option<String>,
+    level: Option<String>,
+    drive: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn search_logs_handler(
+    State(state): State<ApiState>,
+    axum::extract::Query(params): axum::extract::Query<SearchLogsQuery>,
+) -> Result<Json<Vec<LogEntry>>, ErrorResponse> {
+    let limit = params.limit.unwrap_or(100);
+    
+    match state.db.search_logs(
+        params.query.as_deref(),
+        params.level.as_deref(),
+        params.drive.as_deref(),
+        limit,
+    ) {
+        Ok(logs) => Ok(Json(logs)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to search logs: {}", e),
+        }),
+    }
+}
+
+/// Get all issues (including resolved)
+async fn get_all_issues_handler(State(state): State<ApiState>) -> Result<Json<Vec<Issue>>, ErrorResponse> {
+    match state.db.get_all_issues(100) {
+        Ok(issues) => Ok(Json(issues)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get issues: {}", e),
+        }),
+    }
+}
+
+/// Get active (unresolved) issues
+async fn get_active_issues(State(state): State<ApiState>) -> Result<Json<Vec<Issue>>, ErrorResponse> {
+    match state.db.get_active_issues() {
+        Ok(issues) => Ok(Json(issues)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get active issues: {}", e),
+        }),
+    }
+}
+
+/// Resolve an issue
+async fn resolve_issue(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.resolve_issue(id) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to resolve issue: {}", e),
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -390,7 +491,9 @@ mod tests {
     #[test]
     fn test_api_event_serialization() {
         let event = ApiEvent::Log {
+            level: "info".to_string(),
             message: "test".to_string(),
+            drive: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("Log"));

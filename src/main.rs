@@ -1,6 +1,7 @@
 mod api;
 mod cli;
 mod config;
+mod database;
 mod drive;
 mod web_ui;
 mod dvd_metadata;

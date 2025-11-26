@@ -56,6 +56,11 @@ class ApiClient {
     return this.request('/drives');
   }
 
+  // Detect drives (alias for getDrives for consistency)
+  async detectDrives() {
+    return this.request('/drives');
+  }
+
   // Start ripping
   async startRip(params) {
     return this.request('/rip/start', {
@@ -76,6 +81,34 @@ class ApiClient {
     return this.request('/rename', {
       method: 'POST',
       body: JSON.stringify(params),
+    });
+  }
+
+  // Get recent logs
+  async getLogs() {
+    return this.request('/logs');
+  }
+
+  // Search logs
+  async searchLogs(params) {
+    const query = new URLSearchParams(params).toString();
+    return this.request(`/logs/search?${query}`);
+  }
+
+  // Get all issues
+  async getIssues() {
+    return this.request('/issues');
+  }
+
+  // Get active (unresolved) issues
+  async getActiveIssues() {
+    return this.request('/issues/active');
+  }
+
+  // Resolve an issue
+  async resolveIssue(issueId) {
+    return this.request(`/issues/${issueId}/resolve`, {
+      method: 'POST',
     });
   }
 

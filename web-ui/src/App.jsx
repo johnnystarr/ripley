@@ -11,9 +11,8 @@ import {
 import { useState, useEffect } from 'react';
 import { wsManager } from './websocket';
 
-// Import pages (we'll create these)
+// Import pages
 import Dashboard from './pages/Dashboard';
-import Drives from './pages/Drives';
 import Configuration from './pages/Configuration';
 import Logs from './pages/Logs';
 
@@ -54,7 +53,6 @@ function App() {
           <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-900 p-6">
             <Routes>
               <Route path="/" element={<Dashboard />} />
-              <Route path="/drives" element={<Drives />} />
               <Route path="/configuration" element={<Configuration />} />
               <Route path="/logs" element={<Logs />} />
             </Routes>
@@ -70,7 +68,6 @@ function Sidebar({ isOpen, wsConnected }) {
 
   const navItems = [
     { path: '/', icon: faHome, label: 'Dashboard' },
-    { path: '/drives', icon: faCompactDisc, label: 'Drives' },
     { path: '/configuration', icon: faCog, label: 'Configuration' },
     { path: '/logs', icon: faFileAlt, label: 'Logs' },
   ];

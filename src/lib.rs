@@ -4,6 +4,7 @@ pub mod app;
 pub mod audio;
 pub mod cli;
 pub mod config;
+pub mod database;
 pub mod drive;
 pub mod web_ui;
 pub mod dvd_metadata;
