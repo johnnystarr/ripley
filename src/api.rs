@@ -107,6 +107,56 @@ pub async fn start_server(
         }
     });
     
+    // Spawn background task to poll for drive changes
+    let event_tx_poller = event_tx.clone();
+    tokio::spawn(async move {
+        use std::collections::HashMap;
+        use crate::drive::{self, DriveInfo};
+        
+        let mut known_drives: HashMap<String, DriveInfo> = HashMap::new();
+        
+        loop {
+            // Sleep first to avoid immediate polling on startup
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            
+            // Detect current drives
+            match drive::detect_drives().await {
+                Ok(current_drives) => {
+                    let current_map: HashMap<String, DriveInfo> = current_drives
+                        .into_iter()
+                        .map(|d| (d.device.clone(), d))
+                        .collect();
+                    
+                    // Find newly detected drives
+                    for (device, drive_info) in &current_map {
+                        if !known_drives.contains_key(device) {
+                            info!("Drive detected: {}", device);
+                            let _ = event_tx_poller.send(ApiEvent::DriveDetected {
+                                drive: drive_info.clone(),
+                            });
+                        }
+                    }
+                    
+                    // Find removed drives
+                    for (device, _drive_info) in &known_drives {
+                        if !current_map.contains_key(device) {
+                            info!("Drive removed: {}", device);
+                            let _ = event_tx_poller.send(ApiEvent::DriveRemoved {
+                                device: device.clone(),
+                            });
+                        }
+                    }
+                    
+                    // Update known drives
+                    known_drives = current_map;
+                }
+                Err(e) => {
+                    eprintln!("Failed to detect drives: {}", e);
+                }
+            }
+        }
+    });
+    
     // Create router with API routes
     let mut app = create_router(state);
     

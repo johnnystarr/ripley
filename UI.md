@@ -234,7 +234,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 
 ## Progress Tracking
 
-**Total Tasks**: ~85 completed / ~95 total (89%)
+**Total Tasks**: ~86 completed / ~95 total (91%)
 
 **Current Phase**: Polish & Integration
 
@@ -274,7 +274,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 **Next Steps**: 
 1. ✅ **Integrate database logging** - All API events automatically log to SQLite
 2. ✅ **Automatic issue creation** - RipError events create issues in database
-3. **Background drive polling** - Add task to periodically detect drives and emit DriveDetected/DriveRemoved events
+3. ✅ **Background drive polling** - Background task polls every 3 seconds and emits DriveDetected/DriveRemoved events
 4. **Auto-eject on complete** - Emit DriveEjected event after successful rip
 5. **Error boundaries** - Add React error boundaries for graceful error handling
 6. **Test with real disc ripping** - Full integration testing with actual discs
