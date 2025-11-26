@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -28,79 +28,103 @@ pub enum RipStatus {
 }
 
 /// Rip a CD using abcde
-pub async fn rip_cd<F>(
+pub async fn rip_cd<F, L>(
     device: &str,
     metadata: &DiscMetadata,
     output_dir: &Path,
     quality: u8,
     mut progress_callback: F,
+    mut log_callback: L,
 ) -> Result<()>
 where
     F: FnMut(RipProgress) + Send,
+    L: FnMut(String) + Send,
 {
     info!("Starting rip of {} - {} from {}", metadata.artist, metadata.album, device);
 
     // Kill any existing abcde processes for this device
     info!("Checking for existing abcde processes on {}...", device);
-    let _ = Command::new("pkill")
+    match Command::new("pkill")
         .arg("-f")
         .arg(&format!("abcde.*{}", device))
         .output()
-        .await;
+        .await {
+            Ok(_) => info!("Killed any existing abcde processes"),
+            Err(e) => tracing::error!("Failed to kill abcde processes: {}", e),
+        }
     
-    // Give processes time to die
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Unmount the disc if it's mounted (required for abcde to access it)
-    info!("Unmounting {} if mounted...", device);
-    let unmount_result = Command::new("diskutil")
-        .arg("unmountDisk")
-        .arg(device)
-        .output()
-        .await;
-    
-    match unmount_result {
-        Ok(output) if output.status.success() => {
-            info!("Successfully unmounted {}", device);
-        }
-        Ok(output) => {
-            let err = String::from_utf8_lossy(&output.stderr);
-            debug!("Unmount message: {}", err);
-        }
-        Err(e) => {
-            debug!("Could not unmount {}: {}", device, e);
+    // Unmount the disc with retries (macOS may auto-remount)
+    info!("Unmounting {}...", device);
+    for attempt in 1..=3 {
+        match Command::new("diskutil")
+            .arg("unmountDisk")
+            .arg("force")
+            .arg(device)
+            .output()
+            .await {
+            Ok(output) if output.status.success() => {
+                info!("Successfully unmounted {} (attempt {})", device, attempt);
+                break;
+            }
+            Ok(output) => {
+                let err = String::from_utf8_lossy(&output.stderr);
+                tracing::error!("Unmount attempt {} failed: {}", attempt, err);
+                if attempt < 3 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Could not execute unmount command: {}", e);
+            }
         }
     }
     
-    // Give the system a moment to release the device
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // Create output directory structure: Artist/Album/
+    info!("Creating output directory...");
     let album_dir = output_dir
         .join(sanitize_filename(&metadata.artist))
         .join(sanitize_filename(&metadata.album));
     
-    tokio::fs::create_dir_all(&album_dir).await
-        .context("Failed to create album directory")?;
+    if let Err(e) = tokio::fs::create_dir_all(&album_dir).await {
+        tracing::error!("Failed to create album directory {}: {}", album_dir.display(), e);
+        return Err(anyhow::anyhow!("Failed to create album directory: {}", e));
+    }
+    info!("Output directory: {}", album_dir.display());
 
-    // Configure abcde with metadata
-    let config = create_abcde_config(&album_dir, quality, metadata)?;
+    // Configure abcde
+    info!("Generating abcde config...");
+    let config = create_abcde_config(&album_dir, quality)?;
     let config_path = album_dir.join(".abcde.conf");
-    tokio::fs::write(&config_path, config).await?;
+    if let Err(e) = tokio::fs::write(&config_path, &config).await {
+        tracing::error!("Failed to write abcde config: {}", e);
+        return Err(anyhow::anyhow!("Failed to write config: {}", e));
+    }
+    info!("Config written to: {}", config_path.display());
 
     // Run abcde with progress tracking
-    let mut child = Command::new("abcde")
+    info!("Starting abcde process...");
+    let mut child = match Command::new("abcde")
         .arg("-c")
         .arg(&config_path)
         .arg("-d")
         .arg(device)
         .arg("-o")
         .arg("flac")
-        .arg("-N")  // Non-interactive
+        .arg("-N")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to start abcde - is it installed?")?;
+        .spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("Failed to spawn abcde: {}", e);
+                return Err(anyhow::anyhow!("Failed to start abcde: {}", e));
+            }
+        };
+    info!("abcde process started, monitoring output...");
 
     // Track progress by parsing abcde output in real-time
     let stdout = child.stdout.take().unwrap();
@@ -119,6 +143,7 @@ where
                 match result {
                     Ok(Some(line)) => {
                         info!("abcde: {}", line);
+                        log_callback(line.clone());
                         
                         // Parse progress from abcde output
                         if line.contains("Grabbing track") || line.contains("Reading track") {
@@ -163,8 +188,10 @@ where
                     Ok(Some(line)) => {
                         if line.contains("ERROR") || line.contains("error") || line.contains("failed") {
                             tracing::error!("abcde: {}", line);
+                            log_callback(format!("ERROR: {}", line));
                         } else {
                             tracing::warn!("abcde: {}", line);
+                            log_callback(line.clone());
                         }
                         stderr_lines.push(line);
                     }
@@ -212,23 +239,11 @@ where
     }
 }
 
-/// Create abcde configuration with metadata
-fn create_abcde_config(output_dir: &Path, quality: u8, metadata: &DiscMetadata) -> Result<String> {
-    // Build track names for abcde
-    let mut track_data = String::new();
-    for (i, track) in metadata.tracks.iter().enumerate() {
-        let track_num = i + 1;
-        let safe_title = track.title.replace("'", "'\\''");
-        track_data.push_str(&format!("TRACKNAME[{}]='{}'\n", track_num, safe_title));
-    }
-    
-    let safe_artist = metadata.artist.replace("'", "'\\''");
-    let safe_album = metadata.album.replace("'", "'\\''");
-    
+/// Create minimal abcde configuration
+fn create_abcde_config(output_dir: &Path, quality: u8) -> Result<String> {
     let config = format!(
         r#"
 # Ripley auto-generated abcde config
-CDROM=/dev/cdrom
 OUTPUTDIR="{}"
 OUTPUTTYPE="flac"
 FLACOPTS="-{}f"
@@ -239,17 +254,10 @@ VAOUTPUTFORMAT='${{TRACKNUM}}. ${{ARTISTFILE}}-${{TRACKFILE}}'
 ONETRACKOUTPUTFORMAT='${{ARTISTFILE}}-${{ALBUMFILE}}'
 MAXPROCS=2
 CDDBMETHOD=cddb
-
-# Metadata from MusicBrainz
-DARTIST='{}'
-DALBUM='{}'
-{}
+CDDBURL="http://gnudb.gnudb.org/~cddb/cddb.cgi"
 "#,
         output_dir.display(),
-        quality,
-        safe_artist,
-        safe_album,
-        track_data
+        quality
     );
 
     Ok(config)

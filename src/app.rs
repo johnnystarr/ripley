@@ -92,6 +92,7 @@ async fn handle_drive_changes(
         let handle = tokio::spawn(async move {
             let tui_state_for_error = Arc::clone(&tui_state_clone);
             if let Err(e) = rip_disc(&device_for_task, args_clone, tui_state_clone).await {
+                tracing::error!("Rip task failed for {}: {}", device_for_task, e);
                 let mut state = tui_state_for_error.lock().await;
                 state.add_log(format!("❌ Error ripping {}: {}", device_for_task, e));
             }
@@ -111,23 +112,63 @@ async fn rip_disc(
     tui_state: Arc<Mutex<crate::tui::AppState>>,
 ) -> Result<()> {
     // Helper to add logs without creating a full Tui
-    async fn add_log(state: &Arc<Mutex<crate::tui::AppState>>, msg: String) {
+    async fn add_log(state: &Arc<Mutex<crate::tui::AppState>>, device: &str, msg: String) {
         let mut s = state.lock().await;
-        s.add_log(msg);
+        s.add_drive_log(device, msg);
     }
 
-    add_log(&tui_state, format!("📀 Detected audio CD in {}", device)).await;
+    // Create drive state immediately so logs can be added
+    {
+        let mut s = tui_state.lock().await;
+        if !s.drives.iter().any(|d| d.device == device) {
+            s.drives.push(crate::tui::DriveState {
+                device: device.to_string(),
+                progress: None,
+                album_info: None,
+                logs: Vec::new(),
+            });
+        }
+    }
+
+    add_log(&tui_state, device, format!("📀 Detected audio CD in {}", device)).await;
+
+    // Unmount disc before reading (cd-discid needs exclusive access)
+    add_log(&tui_state, device, format!("💿 Preparing disc for reading...")).await;
+    for attempt in 1..=3 {
+        match tokio::process::Command::new("diskutil")
+            .arg("unmountDisk")
+            .arg("force")
+            .arg(device)
+            .output()
+            .await {
+            Ok(output) if output.status.success() => {
+                tracing::info!("Unmounted {} for disc ID reading (attempt {})", device, attempt);
+                break;
+            }
+            Ok(output) => {
+                let err = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("Unmount attempt {}: {}", attempt, err);
+                if attempt < 3 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Unmount command failed: {}", e);
+            }
+        }
+    }
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // Fetch metadata
-    add_log(&tui_state, format!("🔍 Fetching metadata for {}...", device)).await;
+    add_log(&tui_state, device, format!("🔍 Fetching metadata for {}...", device)).await;
     
     let disc_id = match metadata::get_disc_id(device).await {
         Ok(id) => {
-            add_log(&tui_state, format!("📀 Disc ID: {}", id)).await;
+            add_log(&tui_state, device, format!("📀 Disc ID: {}", id)).await;
             id
         }
         Err(e) => {
-            add_log(&tui_state, format!("⚠️  Could not get disc ID: {}", e)).await;
+            add_log(&tui_state, device, format!("⚠️  Could not get disc ID: {}", e)).await;
             if args.skip_metadata {
                 "unknown".to_string()
             } else {
@@ -143,13 +184,13 @@ async fn rip_disc(
     } else {
         match metadata::fetch_metadata(&disc_id, 3).await {
             Ok(meta) => {
-                add_log(&tui_state, format!("✅ Found: {} - {} ({} tracks)", 
+                add_log(&tui_state, device, format!("✅ Found: {} - {} ({} tracks)", 
                     meta.artist, meta.album, meta.tracks.len())).await;
                 meta
             }
             Err(e) => {
-                add_log(&tui_state, format!("⚠️  Metadata lookup failed: {}", e)).await;
-                add_log(&tui_state, "Using generic track names. You can rename files after ripping.".to_string()).await;
+                add_log(&tui_state, device, format!("⚠️  Metadata lookup failed: {}", e)).await;
+                add_log(&tui_state, device, "Using generic track names. You can rename files after ripping.".to_string()).await;
                 audio::play_notification("error").await?;
                 
                 // Use dummy metadata - abcde will still rip the tracks
@@ -161,11 +202,13 @@ async fn rip_disc(
     let album_info = format!("{} - {}", metadata.artist, metadata.album);
     
     // Start ripping
-    add_log(&tui_state, format!("🎵 Ripping {} from {}...", album_info, device)).await;
+    add_log(&tui_state, device, format!("🎵 Ripping {} from {}...", album_info, device)).await;
 
     let device_clone = device.to_string();
     let album_info_clone = album_info.clone();
     let tui_state_clone = Arc::clone(&tui_state);
+    let tui_state_log_clone = Arc::clone(&tui_state);
+    let device_log_clone = device.to_string();
 
     let output_folder = args.get_output_folder();
     let result = ripper::rip_cd(
@@ -196,6 +239,7 @@ async fn rip_disc(
                             device,
                             progress: Some(progress),
                             album_info,
+                            logs: Vec::new(),
                         });
                     }
                 }
@@ -203,20 +247,27 @@ async fn rip_disc(
                 update_drive(tui_state, device, progress, Some(album_info)).await;
             });
         },
+        move |log_line| {
+            let device = device_log_clone.clone();
+            let tui_state = Arc::clone(&tui_state_log_clone);
+            tokio::spawn(async move {
+                add_log(&tui_state, &device, log_line).await;
+            });
+        },
     ).await;
 
     match result {
         Ok(_) => {
-            add_log(&tui_state, format!("✅ Completed: {}", album_info)).await;
+            add_log(&tui_state, device, format!("✅ Completed: {}", album_info)).await;
             audio::play_notification("complete").await?;
 
             if args.eject_when_done {
                 drive::eject_disc(device).await?;
-                add_log(&tui_state, format!("⏏️  Ejected {}", device)).await;
+                add_log(&tui_state, device, format!("⏏️  Ejected {}", device)).await;
             }
         }
         Err(e) => {
-            add_log(&tui_state, format!("❌ Failed: {} - {}", album_info, e)).await;
+            add_log(&tui_state, device, format!("❌ Failed: {} - {}", album_info, e)).await;
             audio::play_notification("error").await?;
         }
     }

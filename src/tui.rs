@@ -23,12 +23,12 @@ pub struct DriveState {
     pub device: String,
     pub progress: Option<RipProgress>,
     pub album_info: Option<String>,
+    pub logs: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub drives: Vec<DriveState>,
-    pub logs: Vec<String>,
     pub should_quit: bool,
 }
 
@@ -36,16 +36,30 @@ impl AppState {
     pub fn new() -> Self {
         Self {
             drives: Vec::new(),
-            logs: Vec::new(),
             should_quit: false,
         }
     }
 
+    pub fn add_drive_log(&mut self, device: &str, message: String) {
+        if let Some(drive) = self.drives.iter_mut().find(|d| d.device == device) {
+            let formatted = format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), message);
+            drive.logs.push(formatted);
+            // Keep only last 50 logs per drive
+            if drive.logs.len() > 50 {
+                drive.logs.remove(0);
+            }
+        }
+    }
+    
+    // Keep for backward compatibility
     pub fn add_log(&mut self, message: String) {
-        self.logs.push(format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), message));
-        // Keep only last 100 logs
-        if self.logs.len() > 100 {
-            self.logs.remove(0);
+        // Add to first drive or do nothing if no drives
+        if let Some(drive) = self.drives.first_mut() {
+            let formatted = format!("[{}] {}", chrono::Local::now().format("%H:%M:%S"), message);
+            drive.logs.push(formatted);
+            if drive.logs.len() > 50 {
+                drive.logs.remove(0);
+            }
         }
     }
 }
@@ -133,19 +147,15 @@ fn ui(f: &mut Frame, state: &AppState) {
         .margin(0)
         .constraints([
             Constraint::Length(3),          // Header
-            Constraint::Min(5),              // Drives section (flexible)
-            Constraint::Length(12),          // Logs (fixed height)
+            Constraint::Min(5),              // Drives + logs section (flexible)
         ])
         .split(f.area());
 
     // Header
     render_header(f, chunks[0], state);
 
-    // Drives section
-    render_drives(f, chunks[1], state);
-
-    // Logs
-    render_logs(f, chunks[2], state);
+    // Drives with their individual log windows
+    render_drives_with_logs(f, chunks[1], state);
 }
 
 fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
@@ -169,7 +179,7 @@ fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
     f.render_widget(header, area);
 }
 
-fn render_drives(f: &mut Frame, area: Rect, state: &AppState) {
+fn render_drives_with_logs(f: &mut Frame, area: Rect, state: &AppState) {
     if state.drives.is_empty() {
         let message = Paragraph::new("Waiting for audio CDs...\nInsert a CD into any drive to begin.")
             .block(Block::default().borders(Borders::ALL).title("Drives"))
@@ -178,8 +188,8 @@ fn render_drives(f: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    // Calculate height per drive
-    let height_per_drive = 4;
+    // Each drive gets: 4 lines for progress + 12 lines for logs = 16 lines
+    let height_per_drive = 16;
     let constraints: Vec<Constraint> = state.drives.iter()
         .map(|_| Constraint::Length(height_per_drive))
         .chain(std::iter::once(Constraint::Min(0)))
@@ -191,11 +201,21 @@ fn render_drives(f: &mut Frame, area: Rect, state: &AppState) {
         .split(area);
 
     for (idx, drive) in state.drives.iter().enumerate() {
-        render_drive(f, drive_chunks[idx], drive);
+        render_drive_with_log(f, drive_chunks[idx], drive);
     }
 }
 
-fn render_drive(f: &mut Frame, area: Rect, drive: &DriveState) {
+fn render_drive_with_log(f: &mut Frame, area: Rect, drive: &DriveState) {
+    // Split into progress section (4 lines) and log section (rest)
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),    // Progress
+            Constraint::Min(8),       // Log
+        ])
+        .split(area);
+    
+    // Render progress
     let title = if let Some(ref info) = drive.album_info {
         format!("{} - {}", drive.device, info)
     } else {
@@ -207,8 +227,8 @@ fn render_drive(f: &mut Frame, area: Rect, drive: &DriveState) {
         .title(title)
         .style(Style::default().fg(Color::Cyan));
 
-    let inner_area = block.inner(area);
-    f.render_widget(block, area);
+    let inner_area = block.inner(sections[0]);
+    f.render_widget(block, sections[0]);
     
     let inner = Layout::default()
         .direction(Direction::Vertical)
@@ -240,28 +260,26 @@ fn render_drive(f: &mut Frame, area: Rect, drive: &DriveState) {
             .label(format!("{:.1}%", progress.percentage));
         f.render_widget(gauge, inner[1]);
     }
-}
-
-fn render_logs(f: &mut Frame, area: Rect, state: &AppState) {
-    let block = Block::default()
+    
+    // Render log for this drive
+    let log_block = Block::default()
         .borders(Borders::ALL)
-        .title("Log");
+        .title(format!("Log {}", drive.device))
+        .style(Style::default().fg(Color::White));
     
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+    let log_inner = log_block.inner(sections[1]);
+    f.render_widget(log_block, sections[1]);
     
-    // Calculate how many lines we can show
-    let available_height = inner.height as usize;
-    
-    let logs: Vec<ListItem> = state.logs.iter()
+    let available_height = log_inner.height as usize;
+    let log_items: Vec<ListItem> = drive.logs.iter()
         .rev()
-        .take(available_height.saturating_sub(1))
+        .take(available_height)
         .rev()
         .map(|log| ListItem::new(log.as_str()))
         .collect();
 
-    let logs_widget = List::new(logs)
-        .style(Style::default().fg(Color::White));
-
-    f.render_widget(logs_widget, inner);
+    let logs_widget = List::new(log_items);
+    f.render_widget(logs_widget, log_inner);
 }
+
+
