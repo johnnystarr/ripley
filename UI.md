@@ -272,10 +272,10 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 - ✅ **Toast Notifications**: react-hot-toast integrated throughout
 
 **Next Steps**: 
-1. **Integrate database logging in app.rs** - Connect ripping operations to emit events that log to SQLite
-2. **Background drive polling** - Add task to periodically detect drives and emit DriveDetected/DriveRemoved events
-3. **Auto-eject on complete** - Emit DriveEjected event after successful rip
-4. **Issue creation on failures** - Automatically create issues when operations fail
+1. ✅ **Integrate database logging** - All API events automatically log to SQLite
+2. ✅ **Automatic issue creation** - RipError events create issues in database
+3. **Background drive polling** - Add task to periodically detect drives and emit DriveDetected/DriveRemoved events
+4. **Auto-eject on complete** - Emit DriveEjected event after successful rip
 5. **Error boundaries** - Add React error boundaries for graceful error handling
 6. **Test with real disc ripping** - Full integration testing with actual discs
 7. **Performance optimization** - Virtualized lists for very large log datasets

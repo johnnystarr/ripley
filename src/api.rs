@@ -39,9 +39,73 @@ pub async fn start_server(
     let state = ApiState {
         config: Arc::new(RwLock::new(config)),
         rip_status: Arc::new(RwLock::new(RipStatus::default())),
-        event_tx,
-        db,
+        event_tx: event_tx.clone(),
+        db: Arc::clone(&db),
     };
+    
+    // Spawn background task to log events to database
+    let mut event_rx = event_tx.subscribe();
+    let db_logger = Arc::clone(&db);
+    tokio::spawn(async move {
+        use crate::database::{LogEntry, LogLevel, Issue, IssueType};
+        
+        while let Ok(event) = event_rx.recv().await {
+            match event {
+                ApiEvent::Log { level, message, drive } => {
+                    let log_level = match level.as_str() {
+                        "error" => LogLevel::Error,
+                        "warning" => LogLevel::Warning,
+                        "success" => LogLevel::Success,
+                        _ => LogLevel::Info,
+                    };
+                    
+                    let entry = LogEntry {
+                        id: None,
+                        timestamp: chrono::Utc::now(),
+                        level: log_level,
+                        message,
+                        drive,
+                        disc: None,
+                        title: None,
+                        context: None,
+                    };
+                    
+                    if let Err(e) = db_logger.add_log(&entry) {
+                        eprintln!("Failed to log to database: {}", e);
+                    }
+                }
+                ApiEvent::RipError { error, drive } => {
+                    // Log the error
+                    let entry = LogEntry {
+                        id: None,
+                        timestamp: chrono::Utc::now(),
+                        level: LogLevel::Error,
+                        message: format!("Rip error: {}", error),
+                        drive: drive.clone(),
+                        disc: None,
+                        title: None,
+                        context: Some(error.clone()),
+                    };
+                    let _ = db_logger.add_log(&entry);
+                    
+                    // Create an issue
+                    let issue = Issue {
+                        id: None,
+                        timestamp: chrono::Utc::now(),
+                        issue_type: IssueType::RipFailure,
+                        title: "Rip Operation Failed".to_string(),
+                        description: error,
+                        drive,
+                        disc: None,
+                        resolved: false,
+                        resolved_at: None,
+                    };
+                    let _ = db_logger.add_issue(&issue);
+                }
+                _ => {}
+            }
+        }
+    });
     
     // Create router with API routes
     let mut app = create_router(state);
