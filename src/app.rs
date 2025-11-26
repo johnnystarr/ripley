@@ -5,13 +5,13 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::audio;
-use crate::cli::Args;
+use crate::cli::RipArgs;
 use crate::drive::{self, DriveInfo};
 use crate::metadata;
 use crate::ripper;
 use crate::tui::Tui;
 
-pub async fn run(args: Args) -> Result<()> {
+pub async fn run(args: RipArgs) -> Result<()> {
     // Get output folder (using default if not specified)
     let output_folder = args.get_output_folder();
     
@@ -27,9 +27,8 @@ pub async fn run(args: Args) -> Result<()> {
     let mut tui = Tui::new()?;
     let tui_state = Arc::clone(&tui.state);
 
-    tui.add_log("🎵 Ripley started - monitoring for audio CDs...".to_string()).await;
+    tui.add_log("🎬 Ripley started - monitoring optical drives...".to_string()).await;
     tui.add_log(format!("Output directory: {}", output_folder.display())).await;
-    tui.add_log(format!("FLAC quality: {}", args.quality)).await;
 
     // Track active rip tasks
     let active_rips: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> = 
@@ -64,7 +63,7 @@ pub async fn run(args: Args) -> Result<()> {
 
 async fn handle_drive_changes(
     drives: Vec<DriveInfo>,
-    args: Args,
+    args: RipArgs,
     tui_state: Arc<Mutex<crate::tui::AppState>>,
     active_rips: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 ) {
@@ -112,7 +111,7 @@ async fn handle_drive_changes(
 async fn rip_disc(
     device: &str,
     media_type: drive::MediaType,
-    args: Args,
+    args: RipArgs,
     tui_state: Arc<Mutex<crate::tui::AppState>>,
 ) -> Result<()> {
     // Helper to add logs without creating a full Tui
@@ -298,7 +297,7 @@ async fn rip_disc(
 async fn rip_dvd_disc(
     device: &str,
     media_type: drive::MediaType,
-    args: Args,
+    args: RipArgs,
     tui_state: Arc<Mutex<crate::tui::AppState>>,
 ) -> Result<()> {
     // Helper to add logs
