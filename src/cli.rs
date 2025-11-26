@@ -86,6 +86,11 @@ pub enum Command {
         #[arg(long, value_name = "HOST", default_value = "127.0.0.1")]
         #[arg(help = "Network interface to bind (use 0.0.0.0 for all)")]
         host: String,
+
+        /// Development mode (don't serve embedded UI, use Vite dev server)
+        #[arg(long)]
+        #[arg(help = "Enable dev mode for UI hot reload")]
+        dev: bool,
     },
 }
 

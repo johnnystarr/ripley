@@ -25,6 +25,7 @@ pub async fn start_server(
     config: Config,
     host: String,
     port: u16,
+    dev_mode: bool,
 ) -> anyhow::Result<()> {
     // Create broadcast channel for events
     let (event_tx, _) = broadcast::channel(100);
@@ -36,17 +37,29 @@ pub async fn start_server(
         event_tx,
     };
     
-    // Create router
-    let app = create_router(state);
+    // Create router with API routes
+    let mut app = create_router(state);
+    
+    // In production mode, add static file serving
+    if !dev_mode {
+        app = app.fallback(crate::web_ui::fallback);
+    }
     
     // Create socket address
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
     
     info!("🌐 REST API server starting on http://{}", addr);
     eprintln!("\x1b[32m✓\x1b[0m Server listening on \x1b[1mhttp://{}\x1b[0m", addr);
-    eprintln!("\x1b[36m  • Health check:\x1b[0m http://{}/health", addr);
-    eprintln!("\x1b[36m  • API status:\x1b[0m    http://{}/status", addr);
-    eprintln!("\x1b[36m  • WebSocket:\x1b[0m     ws://{}/ws\n", addr);
+    eprintln!("\x1b[36m  • Web UI:\x1b[0m        http://{}/", addr);
+    eprintln!("\x1b[36m  • Health check:\x1b[0m http://{}/api/health", addr);
+    eprintln!("\x1b[36m  • API status:\x1b[0m    http://{}/api/status", addr);
+    eprintln!("\x1b[36m  • WebSocket:\x1b[0m     ws://{}/api/ws\n", addr);
+    
+    if dev_mode {
+        eprintln!("\x1b[33m🔧 Development mode:\x1b[0m Use Vite dev server for UI hot reload");
+        eprintln!("\x1b[33m   Run: cd web-ui && npm run dev\x1b[0m\n");
+    }
+    
     eprintln!("\x1b[33m💡 Press Ctrl+C to stop the server\x1b[0m\n");
     
     // Start server

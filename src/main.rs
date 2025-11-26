@@ -2,6 +2,7 @@ mod api;
 mod cli;
 mod config;
 mod drive;
+mod web_ui;
 mod dvd_metadata;
 mod dvd_ripper;
 mod metadata;
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Some(Command::Serve { port, host }) => {
+        Some(Command::Serve { port, host, dev }) => {
             eprintln!("\x1b[35m🌐 Ripley REST API Server\x1b[0m");
             eprintln!("\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
             
@@ -89,7 +90,7 @@ async fn main() -> Result<()> {
             let config = config::Config::load()?;
             
             // Start API server
-            api::start_server(config, host.clone(), *port).await?;
+            api::start_server(config, host.clone(), *port, *dev).await?;
         }
         None => {
             // No subcommand provided - print help with a friendly message
