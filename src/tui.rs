@@ -170,7 +170,7 @@ fn render_header(f: &mut Frame, area: Rect, state: &AppState) {
     let title = vec![
         Span::styled("🎵 ", Style::default().fg(Color::Cyan)),
         Span::styled("Ripley", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(" - Automated CD Ripper | "),
+        Span::raw(" - Automated Optical Disc Ripper | "),
         Span::styled(format!("{} active", active_rips), Style::default().fg(Color::Green)),
         Span::raw(" | Press "),
         Span::styled("q", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),

@@ -516,6 +516,7 @@ mod tests {
                     episode: 1,
                     title: "Pilot".to_string(),
                     title_index: 0,
+                    runtime_minutes: Some(22),
                 },
             ],
         };

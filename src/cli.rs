@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(name = "ripley")]
 #[command(author = "Johnny")]
 #[command(version = "0.1.0")]
-#[command(about = "Automated CD ripper with real-time TUI", long_about = None)]
+#[command(about = "Automated Optical Disc Ripper with real-time TUI", long_about = None)]
 pub struct Args {
     /// Output folder for ripped files
     #[arg(short, long, value_name = "DIR")]
@@ -48,6 +48,7 @@ mod tests {
             quality: 5,
             eject_when_done: true,
             skip_metadata: false,
+            title: None,
         };
         
         assert_eq!(args.quality, 5);
@@ -61,6 +62,7 @@ mod tests {
             quality: 8,
             eject_when_done: false,
             skip_metadata: true,
+            title: None,
         };
         
         assert_eq!(args.get_output_folder(), custom_path);
@@ -76,6 +78,7 @@ mod tests {
             quality: 5,
             eject_when_done: true,
             skip_metadata: false,
+            title: None,
         };
         
         let folder = args.get_output_folder();
@@ -93,6 +96,7 @@ mod tests {
                 quality: q,
                 eject_when_done: true,
                 skip_metadata: false,
+                title: None,
             };
             assert!(args.quality <= 8);
         }

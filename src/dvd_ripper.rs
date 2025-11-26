@@ -311,15 +311,17 @@ async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<(
     
     match metadata.media_type {
         MediaType::TVShow => {
-            // Rename as episodes
+            // Rename as episodes with PascalCase.With.Periods format
             for (idx, file_path) in mkv_files.iter().enumerate() {
                 if let Some(episode) = metadata.episodes.get(idx) {
+                    let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
+                    let episode_title = crate::ripper::to_pascal_case_with_periods(&episode.title);
                     let new_name = format!(
-                        "{} - S{:02}E{:02} - {}.mkv",
-                        sanitize_filename(&metadata.title),
+                        "{}.S{:02}E{:02}.{}.mkv",
+                        show_name,
                         episode.season,
                         episode.episode,
-                        sanitize_filename(&episode.title)
+                        episode_title
                     );
                     
                     let new_path = output_dir.join(&new_name);
@@ -330,12 +332,13 @@ async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<(
             }
         }
         MediaType::Movie => {
-            // Rename single movie file
+            // Rename single movie file with PascalCase.With.Periods format
             if let Some(file_path) = mkv_files.first() {
+                let movie_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
                 let new_name = if let Some(year) = &metadata.year {
-                    format!("{} ({}).mkv", sanitize_filename(&metadata.title), year)
+                    format!("{}.{}.mkv", movie_name, year)
                 } else {
-                    format!("{}.mkv", sanitize_filename(&metadata.title))
+                    format!("{}.mkv", movie_name)
                 };
                 
                 let new_path = output_dir.join(&new_name);
@@ -351,16 +354,6 @@ async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<(
     }
     
     Ok(())
-}
-
-/// Sanitize filename by removing invalid characters
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => c,
-        })
-        .collect()
 }
 
 /// Configure MakeMKV to skip subtitles

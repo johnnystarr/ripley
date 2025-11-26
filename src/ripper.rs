@@ -265,6 +265,27 @@ CDDBURL="http://gnudb.gnudb.org/~cddb/cddb.cgi"
     Ok(config)
 }
 
+/// Convert string to PascalCase with periods (e.g., "Foster's Home for Imaginary Friends" -> "Fosters.Home.For.Imaginary.Friends")
+pub fn to_pascal_case_with_periods(name: &str) -> String {
+    // First, remove apostrophes to handle "Foster's" -> "Fosters"
+    let cleaned = name.replace('\'', "");
+    
+    cleaned
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase())
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 /// Sanitize filename by removing invalid characters
 pub fn sanitize_filename(name: &str) -> String {
     name.chars()
@@ -278,6 +299,15 @@ pub fn sanitize_filename(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_to_pascal_case_with_periods() {
+        assert_eq!(to_pascal_case_with_periods("Foster's Home for Imaginary Friends"), "Fosters.Home.For.Imaginary.Friends");
+        assert_eq!(to_pascal_case_with_periods("The Matrix"), "The.Matrix");
+        assert_eq!(to_pascal_case_with_periods("AC/DC - Back in Black"), "Ac.Dc.Back.In.Black");
+        assert_eq!(to_pascal_case_with_periods("Star Wars: Episode IV"), "Star.Wars.Episode.Iv");
+        assert_eq!(to_pascal_case_with_periods("21 Jump Street"), "21.Jump.Street");
+    }
 
     #[test]
     fn test_sanitize_filename() {

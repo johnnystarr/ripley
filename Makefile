@@ -73,9 +73,11 @@ setup:
 	@echo "🔧 Running setup..."
 	@./setup.sh
 
+reinstall: uninstall install
+	@echo "✅ Ripley reinstalled"
 # Show help
 help:
-	@echo "Ripley - Automated CD Ripper"
+	@echo "Ripley - Automated Optical Disc Ripper"
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make build      - Build release binary"
@@ -84,6 +86,7 @@ help:
 	@echo "  make clean      - Remove build artifacts"
 	@echo "  make install    - Install to ~/.cargo/bin"
 	@echo "  make uninstall  - Remove installed binary"
+	@echo "  make reinstall  - Reinstall the binary"
 	@echo "  make run        - Run the application"
 	@echo "  make check      - Check code without building"
 	@echo "  make fmt        - Format code"
