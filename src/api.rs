@@ -121,7 +121,7 @@ impl IntoResponse for ErrorResponse {
 
 /// Create the API router with all routes
 pub fn create_router(state: ApiState) -> Router {
-    Router::new()
+    let api_routes = Router::new()
         .route("/health", get(health_check))
         .route("/status", get(get_status))
         .route("/config", get(get_config))
@@ -131,9 +131,12 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/drives", get(list_drives))
         .route("/rename", post(rename_files))
         .route("/ws", get(websocket_handler))
+        .with_state(state);
+
+    Router::new()
+        .nest("/api", api_routes)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
 }
 
 /// Health check endpoint
