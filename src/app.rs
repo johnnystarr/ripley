@@ -246,6 +246,35 @@ async fn rip_disc(
     match result {
         Ok(_) => {
             add_log(&tui_state, device, format!("✅ Completed: {}", album_info)).await;
+            
+            // Load config to check if Filebot music mode is enabled
+            if let Ok(config) = crate::config::Config::load() {
+                if config.filebot.use_for_music {
+                    add_log(&tui_state, device, "🎵 Running Filebot to standardize filenames...".to_string()).await;
+                    
+                    let output_folder = args.get_output_folder();
+                    let album_dir = output_folder
+                        .join(crate::ripper::sanitize_filename(&metadata.artist))
+                        .join(crate::ripper::sanitize_filename(&metadata.album));
+                    
+                    let tui_state_clone = Arc::clone(&tui_state);
+                    let device_clone = device.to_string();
+                    
+                    if let Err(e) = crate::filebot::rename_music_with_filebot(
+                        &album_dir,
+                        move |log_msg| {
+                            let tui_state = Arc::clone(&tui_state_clone);
+                            let device = device_clone.clone();
+                            tokio::spawn(async move {
+                                add_log(&tui_state, &device, log_msg).await;
+                            });
+                        }
+                    ).await {
+                        tracing::warn!("Filebot music processing failed: {}", e);
+                    }
+                }
+            }
+            
             audio::play_notification("complete").await?;
             
             // Send notification

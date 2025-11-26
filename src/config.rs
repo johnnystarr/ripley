@@ -38,6 +38,7 @@ pub struct FilebotConfig {
     pub skip_by_default: bool,
     pub database: String,
     pub order: String,
+    pub use_for_music: bool,  // Whether to use Filebot to standardize music filenames
 }
 
 impl Default for Config {
@@ -63,6 +64,7 @@ impl Default for Config {
                 skip_by_default: false,
                 database: "TheTVDB".to_string(),
                 order: "Airdate".to_string(),
+                use_for_music: true,  // Enable Filebot for music standardization by default
             },
         }
     }
@@ -178,11 +180,13 @@ mod tests {
             skip_by_default: false,
             database: "TVDB".to_string(),
             order: "Airdate".to_string(),
+            use_for_music: true,
         };
 
         assert_eq!(filebot_config.database, "TVDB");
         assert_eq!(filebot_config.order, "Airdate");
         assert_eq!(filebot_config.skip_by_default, false);
+        assert_eq!(filebot_config.use_for_music, true);
     }
 
     #[test]
@@ -220,6 +224,7 @@ mod tests {
                 skip_by_default: false,
                 database: "Custom".to_string(),
                 order: "Airdate".to_string(),
+                use_for_music: true,
             },
             ..Default::default()
         };
@@ -251,6 +256,7 @@ filebot:
   skip_by_default: false
   database: TheTVDB
   order: Airdate
+  use_for_music: true
 "#;
 
         let config: Config = serde_yaml::from_str(yaml).unwrap();
