@@ -4,13 +4,13 @@
 - [x] Initialize Vite + React project in `web-ui/` directory
 - [x] Install dependencies: tailwindcss, @fortawesome/react-fontawesome, @fortawesome/free-solid-svg-icons
 - [x] Configure Tailwind CSS with dark mode
-- [ ] Set up Vite build to output to `web-ui/dist/`
-- [ ] Add `include_dir` dependency to Rust project
-- [ ] Create `src/web_ui.rs` module for embedded static file serving
-- [ ] Update `src/api.rs` to prefix all API routes with `/api`
-- [ ] Add static file fallback route for SPA routing
-- [ ] Create `build.rs` for automatic UI build during cargo compilation
-- [ ] Add `--dev` flag to proxy to Vite dev server (hot reload)
+- [x] Set up Vite build to output to `web-ui/dist/`
+- [x] Add `include_dir` dependency to Rust project
+- [x] Create `src/web_ui.rs` module for embedded static file serving
+- [x] Update `src/api.rs` to prefix all API routes with `/api`
+- [x] Add static file fallback route for SPA routing
+- [x] Create `build.rs` for automatic UI build during cargo compilation
+- [x] Add `--dev` flag to proxy to Vite dev server (hot reload)
 
 ## UI Design & Styling
 - [x] **Dark Mode**: Use Tailwind's dark mode as default
@@ -213,9 +213,9 @@
 
 ## Progress Tracking
 
-**Total Tasks**: ~35 completed / 150+ total (23%)
+**Total Tasks**: ~45 completed / 150+ total (30%)
 
-**Current Phase**: Core UI Components & Pages
+**Current Phase**: Completing UI Pages & Features
 
 **Completed**:
 - ✅ Vite + React project initialized
@@ -226,13 +226,20 @@
 - ✅ WebSocket manager with auto-reconnect
 - ✅ Dashboard page with real-time status
 - ✅ Basic layout responsive and functional
+- ✅ **Rust backend integrated:**
+  - ✅ API routes prefixed with `/api`
+  - ✅ Static files embedded via `include_dir!`
+  - ✅ SPA fallback routing working
+  - ✅ Build automation via `build.rs`
+  - ✅ `--dev` flag for hot reload development
+  - ✅ Single binary with embedded UI
 
 **Next Steps**: 
 1. Build Drives page with drive cards and rip controls
 2. Implement Configuration page with all settings
 3. Create Logs page with filtering and export
 4. Add modals for Start Rip and Rename operations
-5. Integrate with Rust backend (prefix API routes, embed static files)
+5. Test full integration with real disc ripping
 
 ## Notes
 

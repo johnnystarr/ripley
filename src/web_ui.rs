@@ -11,20 +11,25 @@ static WEB_UI_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/web-ui/dist");
 
 /// Serve embedded static files for the web UI
 pub async fn serve_static(uri: Uri) -> Response {
-    let path = uri.path().trim_start_matches('/');
+    let mut path = uri.path().trim_start_matches('/').to_string();
+    
+    // If requesting root, serve index.html
+    if path.is_empty() {
+        path = "index.html".to_string();
+    }
     
     // Try to serve the requested file
-    if let Some(file) = WEB_UI_DIR.get_file(path) {
-        let mime = from_path(path).first_or_octet_stream();
+    if let Some(file) = WEB_UI_DIR.get_file(&path) {
+        let mime = from_path(&path).first_or_octet_stream();
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime.as_ref())
+            .header(header::CACHE_CONTROL, "public, max-age=3600")
             .body(Body::from(file.contents()))
             .unwrap();
     }
     
-    // For SPA routing: if file not found, serve index.html
-    // (unless it's an API route which should have been handled already)
+    // For SPA routing: if file not found and not an API route, serve index.html
     if !path.starts_with("api/") {
         if let Some(index) = WEB_UI_DIR.get_file("index.html") {
             return Response::builder()
