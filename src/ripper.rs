@@ -46,7 +46,7 @@ where
     info!("Checking for existing abcde processes on {}...", device);
     match Command::new("pkill")
         .arg("-f")
-        .arg(&format!("abcde.*{}", device))
+        .arg(format!("abcde.*{}", device))
         .output()
         .await {
             Ok(_) => info!("Killed any existing abcde processes"),
@@ -127,8 +127,10 @@ where
     info!("abcde process started, monitoring output...");
 
     // Track progress by parsing abcde output in real-time
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+    let stderr = child.stderr.take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
     let mut stdout_reader = BufReader::new(stdout).lines();
     let mut stderr_reader = BufReader::new(stderr).lines();
 
@@ -148,7 +150,7 @@ where
                         // Parse progress from abcde output
                         if line.contains("Grabbing track") || line.contains("Reading track") {
                             if let Some(track_num) = line.split("track").nth(1)
-                                .and_then(|s| s.trim().split_whitespace().next())
+                                .and_then(|s| s.split_whitespace().next())
                                 .and_then(|s| s.parse::<u32>().ok()) 
                             {
                                 current_track = track_num;
@@ -240,7 +242,7 @@ where
 }
 
 /// Create minimal abcde configuration
-fn create_abcde_config(output_dir: &Path, quality: u8) -> Result<String> {
+pub fn create_abcde_config(output_dir: &Path, quality: u8) -> Result<String> {
     let config = format!(
         r#"
 # Ripley auto-generated abcde config
@@ -264,11 +266,52 @@ CDDBURL="http://gnudb.gnudb.org/~cddb/cddb.cgi"
 }
 
 /// Sanitize filename by removing invalid characters
-fn sanitize_filename(name: &str) -> String {
+pub fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
             _ => c,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_filename() {
+        assert_eq!(sanitize_filename("Normal Name"), "Normal Name");
+        assert_eq!(sanitize_filename("Name/With/Slashes"), "Name_With_Slashes");
+        assert_eq!(sanitize_filename("Name:With:Colons"), "Name_With_Colons");
+        assert_eq!(sanitize_filename("Name*?<>|"), "Name_____");
+        assert_eq!(sanitize_filename("AC/DC"), "AC_DC");
+    }
+
+    #[test]
+    fn test_create_abcde_config() {
+        let output = Path::new("/tmp/test");
+        
+        let config = create_abcde_config(output, 8).unwrap();
+        assert!(config.contains("OUTPUTTYPE=\"flac\""));
+        assert!(config.contains("FLACOPTS=\"-8f\""));
+        assert!(config.contains("INTERACTIVE=n"));
+        
+        let config = create_abcde_config(output, 0).unwrap();
+        assert!(config.contains("FLACOPTS=\"-0f\""));
+    }
+
+    #[test]
+    fn test_rip_progress() {
+        let progress = RipProgress {
+            current_track: 1,
+            total_tracks: 10,
+            track_name: "Test".to_string(),
+            percentage: 10.0,
+            status: RipStatus::Ripping,
+        };
+        
+        assert_eq!(progress.current_track, 1);
+        assert_eq!(progress.status, RipStatus::Ripping);
+    }
 }

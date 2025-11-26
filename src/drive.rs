@@ -138,8 +138,55 @@ pub async fn eject_disc(device: &str) -> Result<()> {
         .context("Failed to eject disc")?;
 
     if !output.status.success() {
-        warn!("Failed to eject disc: {}", String::from_utf8_lossy(&output.stderr));
+        let err = String::from_utf8_lossy(&output.stderr);
+        warn!("Failed to eject disc: {}", err);
+        return Err(anyhow::anyhow!("Eject failed: {}", err));
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drive_info_creation() {
+        let drive = DriveInfo {
+            device: "/dev/disk2".to_string(),
+            name: "Drive /dev/disk2".to_string(),
+            has_audio_cd: true,
+        };
+        
+        assert_eq!(drive.device, "/dev/disk2");
+        assert!(drive.has_audio_cd);
+    }
+
+    #[test]
+    fn test_drive_info_equality() {
+        let drive1 = DriveInfo {
+            device: "/dev/disk2".to_string(),
+            name: "Drive 1".to_string(),
+            has_audio_cd: true,
+        };
+        
+        let drive2 = DriveInfo {
+            device: "/dev/disk2".to_string(),
+            name: "Drive 1".to_string(),
+            has_audio_cd: true,
+        };
+        
+        assert_eq!(drive1, drive2);
+    }
+
+    #[test]
+    fn test_drive_info_no_audio() {
+        let drive = DriveInfo {
+            device: "/dev/disk2".to_string(),
+            name: "Empty Drive".to_string(),
+            has_audio_cd: false,
+        };
+        
+        assert!(!drive.has_audio_cd);
+    }
 }

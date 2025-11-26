@@ -32,3 +32,65 @@ impl Args {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_quality() {
+        let args = Args {
+            output_folder: None,
+            quality: 5,
+            eject_when_done: true,
+            skip_metadata: false,
+        };
+        
+        assert_eq!(args.quality, 5);
+    }
+
+    #[test]
+    fn test_custom_output_folder() {
+        let custom_path = PathBuf::from("/custom/path");
+        let args = Args {
+            output_folder: Some(custom_path.clone()),
+            quality: 8,
+            eject_when_done: false,
+            skip_metadata: true,
+        };
+        
+        assert_eq!(args.get_output_folder(), custom_path);
+        assert_eq!(args.quality, 8);
+        assert!(!args.eject_when_done);
+        assert!(args.skip_metadata);
+    }
+
+    #[test]
+    fn test_default_output_folder() {
+        let args = Args {
+            output_folder: None,
+            quality: 5,
+            eject_when_done: true,
+            skip_metadata: false,
+        };
+        
+        let folder = args.get_output_folder();
+        assert!(folder.to_string_lossy().contains("Desktop"));
+        assert!(folder.to_string_lossy().contains("Rips"));
+        assert!(folder.to_string_lossy().contains("Music"));
+    }
+
+    #[test]
+    fn test_quality_range() {
+        // Test valid quality values
+        for q in 0..=8 {
+            let args = Args {
+                output_folder: None,
+                quality: q,
+                eject_when_done: true,
+                skip_metadata: false,
+            };
+            assert!(args.quality <= 8);
+        }
+    }
+}

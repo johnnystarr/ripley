@@ -133,7 +133,7 @@ async fn rip_disc(
     add_log(&tui_state, device, format!("📀 Detected audio CD in {}", device)).await;
 
     // Unmount disc before reading (cd-discid needs exclusive access)
-    add_log(&tui_state, device, format!("💿 Preparing disc for reading...")).await;
+    add_log(&tui_state, device, "💿 Preparing disc for reading...".to_string()).await;
     for attempt in 1..=3 {
         match tokio::process::Command::new("diskutil")
             .arg("unmountDisk")

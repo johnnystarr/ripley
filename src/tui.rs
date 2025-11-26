@@ -26,7 +26,7 @@ pub struct DriveState {
     pub logs: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AppState {
     pub drives: Vec<DriveState>,
     pub should_quit: bool,
@@ -34,10 +34,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        Self {
-            drives: Vec::new(),
-            should_quit: false,
-        }
+        Self::default()
     }
 
     pub fn add_drive_log(&mut self, device: &str, message: String) {

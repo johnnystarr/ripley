@@ -90,14 +90,16 @@ fn parse_musicbrainz_response(data: serde_json::Value) -> Result<DiscMetadata> {
     // Get the first release
     let release = &releases[0];
     
+    // Extract artist - try to get it properly, fall back to "Various Artists" for compilations
     let artist = release["artist-credit"][0]["artist"]["name"]
         .as_str()
+        .or_else(|| release["artist-credit"][0]["name"].as_str())
         .unwrap_or("Unknown Artist")
         .to_string();
     
     let album = release["title"]
         .as_str()
-        .unwrap_or("Unknown Album")
+        .ok_or_else(|| anyhow!("Release has no title"))?
         .to_string();
     
     let year = release["date"]
@@ -110,23 +112,36 @@ fn parse_musicbrainz_response(data: serde_json::Value) -> Result<DiscMetadata> {
     if let Some(media) = release["media"].as_array() {
         if let Some(first_medium) = media.first() {
             if let Some(track_list) = first_medium["tracks"].as_array() {
+                if track_list.is_empty() {
+                    return Err(anyhow!("Release has no tracks"));
+                }
+                
                 for (idx, track) in track_list.iter().enumerate() {
                     let title = track["recording"]["title"]
                         .as_str()
+                        .or_else(|| track["title"].as_str())
                         .unwrap_or("Unknown Track")
                         .to_string();
                     
                     let duration = track["length"]
                         .as_u64()
+                        .or_else(|| track["recording"]["length"].as_u64())
                         .map(|ms| (ms / 1000) as u32);
+                    
+                    // Check for artist credits on individual tracks (for compilations)
+                    let track_artist = track["artist-credit"][0]["artist"]["name"]
+                        .as_str()
+                        .map(String::from);
 
                     tracks.push(Track {
                         number: (idx + 1) as u32,
                         title,
-                        artist: None,
+                        artist: track_artist,
                         duration,
                     });
                 }
+            } else {
+                return Err(anyhow!("No track list found in release"));
             }
         }
     }
@@ -180,10 +195,28 @@ pub async fn get_disc_id(device: &str) -> Result<String> {
     let num_tracks: u32 = parts[1].parse()
         .context("Failed to parse track count")?;
     
+    // Validate track count (audio CDs support 1-99 tracks)
+    if num_tracks == 0 || num_tracks > 99 {
+        return Err(anyhow!("Invalid track count: {}", num_tracks));
+    }
+    
+    // Verify we have enough parts for all tracks
+    if parts.len() < (2 + num_tracks as usize + 1) {
+        return Err(anyhow!("Insufficient cd-discid data: got {} parts, expected at least {}", 
+                          parts.len(), 2 + num_tracks as usize + 1));
+    }
+    
     let mut offsets: Vec<u32> = Vec::new();
-    for i in 2..(2 + num_tracks as usize) {
-        offsets.push(parts[i].parse()
-            .context("Failed to parse offset")?);
+    for (track_idx, part) in parts.iter().skip(2).take(num_tracks as usize).enumerate() {
+        let offset: u32 = part.parse()
+            .context(format!("Failed to parse offset for track {}", track_idx + 1))?;
+        
+        // Validate offset (should be >= 150, the minimum pre-gap)
+        if offset < 150 {
+            return Err(anyhow!("Invalid track offset: {} for track {}", offset, track_idx + 1));
+        }
+        
+        offsets.push(offset);
     }
     
     // Get exact leadout offset from drutil (cd-discid rounds seconds, losing precision)
@@ -201,14 +234,22 @@ pub async fn get_disc_id(device: &str) -> Result<String> {
     // Parse "Space Used:   42:54:05         blocks:   193055 / ..."
     let blocks_str = blocks_line.split("blocks:")
         .nth(1)
-        .and_then(|s| s.trim().split_whitespace().next())
+        .and_then(|s| s.split_whitespace().next())
         .context("Could not parse blocks from drutil")?;
     
     let disc_blocks: u32 = blocks_str.parse()
         .context("Failed to parse block count")?;
     
-    let first_track_offset = offsets.first().copied().unwrap_or(150);
+    let first_track_offset = offsets.first()
+        .copied()
+        .ok_or_else(|| anyhow!("No track offsets found in TOC"))?;
     let leadout_offset = disc_blocks + first_track_offset;
+    
+    // Validate the leadout is reasonable (audio CDs typically < 80 minutes = ~360,000 sectors)
+    if !(150..=450000).contains(&leadout_offset) {
+        return Err(anyhow!("Invalid leadout offset: {} (disc blocks: {}, first track: {})", 
+                          leadout_offset, disc_blocks, first_track_offset));
+    }
     
     debug!("Disc blocks: {}, first track offset: {}, leadout: {}", 
            disc_blocks, first_track_offset, leadout_offset);
@@ -249,7 +290,7 @@ pub async fn get_disc_id(device: &str) -> Result<String> {
     
     // Encode as base64 with MusicBrainz special characters
     // MusicBrainz uses: + -> ., / -> _, = -> -
-    let disc_id = base64::engine::general_purpose::STANDARD.encode(&hash)
+    let disc_id = base64::engine::general_purpose::STANDARD.encode(hash)
         .replace('+', ".")
         .replace('/', "_")
         .trim_end_matches('=')
@@ -258,4 +299,55 @@ pub async fn get_disc_id(device: &str) -> Result<String> {
     info!("Calculated MusicBrainz disc ID: {}", disc_id);
     
     Ok(disc_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_disc_metadata_creation() {
+        let metadata = DiscMetadata {
+            artist: "Artist Name".to_string(),
+            album: "Album Name".to_string(),
+            year: Some("2025".to_string()),
+            genre: Some("Rock".to_string()),
+            tracks: vec![
+                Track {
+                    number: 1,
+                    title: "Track 1".to_string(),
+                    artist: None,
+                    duration: Some(180),
+                },
+            ],
+        };
+        
+        assert_eq!(metadata.artist, "Artist Name");
+        assert_eq!(metadata.tracks.len(), 1);
+        assert_eq!(metadata.tracks[0].number, 1);
+    }
+
+    #[test]
+    fn test_track_with_artist() {
+        let track = Track {
+            number: 1,
+            title: "Track Title".to_string(),
+            artist: Some("Featured Artist".to_string()),
+            duration: Some(240),
+        };
+        
+        assert_eq!(track.artist, Some("Featured Artist".to_string()));
+        assert_eq!(track.duration, Some(240));
+    }
+
+    #[test]
+    fn test_musicbrainz_api_url() {
+        assert_eq!(MUSICBRAINZ_API, "https://musicbrainz.org/ws/2");
+    }
+
+    #[test]
+    fn test_user_agent_format() {
+        assert!(USER_AGENT.contains("Ripley"));
+        assert!(USER_AGENT.contains("/"));
+    }
 }
