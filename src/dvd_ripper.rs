@@ -31,6 +31,9 @@ where
         return Err(anyhow!("makemkvcon not found. Install MakeMKV from https://www.makemkv.com/"));
     }
 
+    // Setup MakeMKV settings to skip subtitles
+    setup_makemkv_settings().await?;
+
     // Create output directory
     if let Err(e) = tokio::fs::create_dir_all(output_dir).await {
         tracing::error!("Failed to create output directory {}: {}", output_dir.display(), e);
@@ -129,12 +132,17 @@ where
         status: crate::ripper::RipStatus::Ripping,
     });
 
+    // Configure makemkv preferences
+    // Skip subtitles and only rip titles >= 5 minutes (300 seconds)
     let mut rip_child = Command::new("makemkvcon")
         .arg("-r")
+        .arg("--minlength=300")  // Minimum title length in seconds (5 minutes)
+        .arg("--noscan")         // Don't scan disc again, we already did
         .arg("mkv")
         .arg(format!("dev:{}", device))
         .arg("all")
         .arg(output_dir)
+        .env("MAKEMKV_PROFILE", "default")  // Use default profile
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -237,6 +245,38 @@ where
     } else {
         Err(anyhow!("DVD rip failed with status: {}", rip_status))
     }
+}
+
+/// Configure MakeMKV to skip subtitles
+async fn setup_makemkv_settings() -> Result<()> {
+    use std::env;
+    use std::path::PathBuf;
+
+    // Get MakeMKV data directory
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let makemkv_dir = PathBuf::from(home).join(".MakeMKV");
+    
+    // Create directory if it doesn't exist
+    tokio::fs::create_dir_all(&makemkv_dir).await?;
+    
+    let settings_file = makemkv_dir.join("settings.conf");
+    
+    // Settings to disable subtitle selection by default
+    // app_DefaultSelectionString controls what tracks are selected
+    // Format: +AUDIOTRACK,+VIDEOTRACK,-SUBTITLETRACK
+    let settings = r#"# Ripley auto-generated MakeMKV settings
+# Skip subtitles by default
+app_DefaultSelectionString = "+sel:all,-sel:subtitle"
+
+# Minimum title length (5 minutes = 300 seconds)
+app_MinLength = "300"
+"#;
+
+    tokio::fs::write(&settings_file, settings).await?;
+    
+    info!("MakeMKV settings configured: skip subtitles, minimum 5 minutes");
+    
+    Ok(())
 }
 
 #[cfg(test)]
