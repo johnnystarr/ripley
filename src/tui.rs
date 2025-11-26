@@ -30,8 +30,6 @@ pub struct DriveState {
 pub enum InputMode {
     Normal,
     AwaitingTitleInput { device: String, default_title: Option<String> },
-    #[allow(dead_code)]
-    AwaitingEpisodeInput { device: String, title: String },
 }
 
 #[derive(Debug, Clone)]
@@ -151,7 +149,7 @@ impl Tui {
                                     _ => {}
                                 }
                             }
-                            InputMode::AwaitingTitleInput { .. } | InputMode::AwaitingEpisodeInput { .. } => {
+                            InputMode::AwaitingTitleInput { .. } => {
                                 match key.code {
                                     KeyCode::Char(c) => {
                                         state.current_input.push(c);
@@ -212,46 +210,6 @@ impl Tui {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
                         let result = state.current_input.clone();
-                        drop(state);
-                        
-                        let mut state = self.state.lock().await;
-                        state.input_mode = InputMode::Normal;
-                        state.current_input.clear();
-                        
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-    }
-    
-    /// Prompt for starting episode number
-    #[allow(dead_code)]
-    pub async fn prompt_episode(&self, device: &str, title: &str) -> Result<u32> {
-        {
-            let mut state = self.state.lock().await;
-            state.input_mode = InputMode::AwaitingEpisodeInput { 
-                device: device.to_string(), 
-                title: title.to_string() 
-            };
-            state.current_input = "1".to_string(); // Default to episode 1
-        }
-        
-        // Wait for Enter key
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            let state = self.state.lock().await;
-            
-            if matches!(state.input_mode, InputMode::Normal) {
-                // User cancelled
-                return Err(anyhow::anyhow!("Input cancelled"));
-            }
-            
-            // Check if Enter was pressed
-            if event::poll(std::time::Duration::from_millis(10))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press && key.code == KeyCode::Enter {
-                        let result = state.current_input.parse::<u32>().unwrap_or(1);
                         drop(state);
                         
                         let mut state = self.state.lock().await;
@@ -375,9 +333,6 @@ fn ui(f: &mut Frame, state: &AppState) {
     match &state.input_mode {
         InputMode::AwaitingTitleInput { device, default_title } => {
             render_input_dialog(f, "TV Show Title", &format!("Enter title for {} (or press Enter to use default)", device), &state.current_input, default_title.as_deref());
-        }
-        InputMode::AwaitingEpisodeInput { device: _, title } => {
-            render_input_dialog(f, "Starting Episode", &format!("Disc starts with episode # for '{}'", title), &state.current_input, None);
         }
         InputMode::Normal => {}
     }

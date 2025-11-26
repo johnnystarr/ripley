@@ -119,13 +119,6 @@ async fn rip_disc(
         let mut s = state.lock().await;
         s.add_drive_log(device, msg);
     }
-    
-    // Helper to add rename logs (appears in separate pane like rsync)
-    #[allow(dead_code)]
-    async fn add_rename_log(state: &Arc<Mutex<crate::tui::AppState>>, device: &str, msg: String) {
-        let mut s = state.lock().await;
-        s.add_rename_log(device, msg);
-    }
 
     // Handle DVD/Blu-ray ripping (MakeMKV handles both)
     if matches!(media_type, drive::MediaType::DVD | drive::MediaType::BluRay) {

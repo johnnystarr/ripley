@@ -81,14 +81,3 @@ pub async fn rename_with_filebot(
         Err(anyhow::anyhow!("No files were renamed"))
     }
 }
-
-/// Check if Filebot is available on the system
-#[allow(dead_code)]
-pub async fn is_filebot_available() -> bool {
-    tokio::process::Command::new("which")
-        .arg("filebot")
-        .output()
-        .await
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}

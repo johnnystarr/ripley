@@ -269,12 +269,6 @@ pub async fn fetch_dvd_metadata_with_episode(_disc_id: &str, volume_name: Option
     create_dummy_dvd_metadata(volume_name)
 }
 
-/// Search TMDB for a TV show (fetches first season only - backward compatible)
-#[allow(dead_code)]
-async fn search_tv_show(client: &reqwest::Client, query: &str) -> Result<DvdMetadata> {
-    search_tv_show_with_episode(client, query, None).await
-}
-
 /// Search TMDB for a TV show with optional starting episode hint
 async fn search_tv_show_with_episode(client: &reqwest::Client, query: &str, start_episode: Option<u32>) -> Result<DvdMetadata> {
     let url = format!(
