@@ -64,6 +64,44 @@ make install
 
 ## Setup
 
+### Configuration File
+
+Create `~/.config/ripley/config.yaml` (or `config.yaml` in the project root):
+
+```yaml
+# OpenAI API key for speech-to-text and episode matching
+# Get your key from: https://platform.openai.com/api-keys
+openai_api_key: "sk-YOUR-API-KEY-HERE"
+
+# TMDB API key (optional override, defaults to built-in key)
+tmdb_api_key: "your-tmdb-key"
+
+# Speech matching settings
+speech_match:
+  enabled: true
+  audio_duration: 60  # Seconds of audio to extract (default: 60)
+  whisper_model: "base"  # OpenAI Whisper model (default: "base")
+  use_openai_api: true
+
+# Filebot settings
+filebot:
+  skip_by_default: false
+  database: "TheTVDB"  # or "TheMovieDB"
+  order: "Airdate"  # Use broadcast order
+
+# rsync to NAS after ripping
+rsync:
+  enabled: true
+  destination: "/Volumes/video/RawRips"
+
+# Push notifications via ntfy.sh
+notifications:
+  enabled: true
+  topic: "your-topic-name"
+```
+
+**Required**: OpenAI API key for speech matching. Set it in the config file or via the `OPENAI_API_KEY` environment variable.
+
 ### Audio Notifications (Optional)
 
 Place your notification audio files in `~/.config/ripley/sounds/`:
@@ -82,7 +120,7 @@ If these files don't exist, Ripley will continue to work but skip audio notifica
 
 ## Usage
 
-### Basic Usage
+### Basic Usage - DVD/Blu-ray Ripping
 
 ```bash
 # Uses default output folder: ~/Desktop/Rips/Music
@@ -90,7 +128,33 @@ ripley
 
 # Or specify a custom folder
 ripley --output-folder ~/Music/Ripped
+
+# Manually specify TV show title for better metadata matching
+ripley --title "Foster's Home for Imaginary Friends"
 ```
+
+### Rename Command - Fix Existing Files
+
+If you have video files that were already ripped but have incorrect episode numbering, use the `rename` subcommand to process them through speech matching + Filebot:
+
+```bash
+# Rename all .mkv files in a directory
+ripley rename /path/to/video/folder --title "Show Name"
+
+# Use current directory
+ripley rename --title "Show Name"
+
+# Skip speech matching (only use Filebot duration matching)
+ripley rename --title "Show Name" --skip-speech
+
+# Skip Filebot (only use speech matching)
+ripley rename --title "Show Name" --skip-filebot
+```
+
+**Cost Estimate**: The rename command uses OpenAI APIs and will output the estimated cost at the end:
+- Whisper API: ~$0.006 per minute of audio (1 min per episode)
+- GPT-4o-mini: ~$0.00015 per episode
+- **Total: ~$0.04-$0.07 for a typical DVD disc with 10 episodes**
 
 ### Advanced Options
 
@@ -231,12 +295,37 @@ RUST_LOG=debug cargo run -- --output-folder ~/Music/Test
 
 ## Architecture
 
-- **drive.rs** - macOS drive detection and monitoring via `diskutil`/`drutil`
-- **metadata.rs** - MusicBrainz API integration with retry logic
-- **ripper.rs** - abcde integration and progress parsing
-- **audio.rs** - Audio notification playback via rodio
-- **tui.rs** - Ratatui-based terminal interface
-- **app.rs** - Main application logic and task coordination
+### Core Modules
+
+- **app.rs** - Main application logic and DVD ripping workflow
+- **dvd_ripper.rs** - MakeMKV integration for DVD/Blu-ray ripping
+- **dvd_metadata.rs** - TMDB API integration for TV show/movie metadata
+- **speech_match.rs** - OpenAI Whisper + GPT-4 episode matching via dialogue
+- **filebot.rs** - Filebot integration for duration-based episode matching
+- **rename.rs** - Standalone file renaming command for existing videos
+- **rsync.rs** - NAS synchronization after ripping
+- **notifications.rs** - ntfy.sh push notifications
+- **tui.rs** - Ratatui terminal interface
+- **cli.rs** - Command-line argument parsing
+- **config.rs** - YAML configuration file support
+
+### Episode Matching Strategy
+
+Ripley solves the "DVD order ≠ broadcast order" problem using a two-phase approach:
+
+1. **Phase 1: Speech Matching** (Primary)
+   - Extracts 1 minute of audio from the middle of each episode
+   - Transcribes dialogue using OpenAI Whisper API
+   - Matches transcript to episode list using GPT-4o-mini
+   - Achieves 75-90% confidence matches
+   - Cost: ~$0.04 per disc (10 episodes)
+
+2. **Phase 2: Filebot** (Fallback)
+   - Uses duration-based matching against TheTVDB
+   - Handles episodes that speech matching couldn't identify
+   - Works best when runtimes are distinct
+
+This hybrid approach provides **100% automated episode identification** without manual intervention.
 
 ## Contributing
 

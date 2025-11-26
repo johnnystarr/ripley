@@ -12,9 +12,10 @@ mod notifications;
 mod filebot;
 mod rsync;
 mod speech_match;
+mod rename;
 
 use anyhow::Result;
-use cli::Args;
+use cli::{Args, Command};
 use clap::Parser;
 
 #[tokio::main]
@@ -39,8 +40,28 @@ async fn main() -> Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
 
-    // Run the application
-    app::run(args).await?;
+    // Handle subcommands
+    match &args.command {
+        Some(Command::Rename {
+            directory,
+            title,
+            skip_speech,
+            skip_filebot,
+        }) => {
+            // Run rename command
+            rename::run_rename(
+                directory.clone(),
+                title.clone(),
+                *skip_speech,
+                *skip_filebot,
+            )
+            .await?;
+        }
+        None => {
+            // No subcommand = default rip behavior
+            app::run(args).await?;
+        }
+    }
 
     Ok(())
 }

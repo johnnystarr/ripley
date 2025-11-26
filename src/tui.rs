@@ -37,6 +37,7 @@ pub enum InputMode {
 pub struct AppState {
     pub drives: Vec<DriveState>,
     pub rsync_logs: Vec<String>,
+    pub rename_logs: Vec<String>,
     pub should_quit: bool,
     pub input_mode: InputMode,
     pub current_input: String,
@@ -47,6 +48,7 @@ impl Default for AppState {
         Self {
             drives: Vec::new(),
             rsync_logs: Vec::new(),
+            rename_logs: Vec::new(),
             should_quit: false,
             input_mode: InputMode::Normal,
             current_input: String::new(),
@@ -85,6 +87,15 @@ impl AppState {
         // Keep only last 100 rsync logs
         if self.rsync_logs.len() > 100 {
             self.rsync_logs.remove(0);
+        }
+    }
+    
+    pub fn add_rename_log(&mut self, device: &str, message: String) {
+        let formatted = format!("[{}] [{}] {}", chrono::Local::now().format("%H:%M:%S"), device, message);
+        self.rename_logs.push(formatted);
+        // Keep only last 100 rename logs
+        if self.rename_logs.len() > 100 {
+            self.rename_logs.remove(0);
         }
     }
     
@@ -283,26 +294,57 @@ impl Drop for Tui {
 
 fn ui(f: &mut Frame, state: &AppState) {
     let has_rsync_logs = !state.rsync_logs.is_empty();
+    let has_rename_logs = !state.rename_logs.is_empty();
     
-    let chunks = if has_rsync_logs {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .margin(0)
-            .constraints([
-                Constraint::Length(3),          // Header
-                Constraint::Percentage(60),     // Drives + logs section
-                Constraint::Percentage(40),     // Rsync logs
-            ])
-            .split(f.area())
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .margin(0)
-            .constraints([
-                Constraint::Length(3),          // Header
-                Constraint::Min(5),              // Drives + logs section (flexible)
-            ])
-            .split(f.area())
+    let chunks = match (has_rsync_logs, has_rename_logs) {
+        (true, true) => {
+            // Both rsync and rename logs active
+            Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Length(3),          // Header
+                    Constraint::Percentage(40),     // Drives + logs section
+                    Constraint::Percentage(30),     // Rename logs
+                    Constraint::Percentage(30),     // Rsync logs
+                ])
+                .split(f.area())
+        }
+        (true, false) => {
+            // Only rsync logs active
+            Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Length(3),          // Header
+                    Constraint::Percentage(60),     // Drives + logs section
+                    Constraint::Percentage(40),     // Rsync logs
+                ])
+                .split(f.area())
+        }
+        (false, true) => {
+            // Only rename logs active
+            Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Length(3),          // Header
+                    Constraint::Percentage(60),     // Drives + logs section
+                    Constraint::Percentage(40),     // Rename logs
+                ])
+                .split(f.area())
+        }
+        (false, false) => {
+            // No extra logs active
+            Layout::default()
+                .direction(Direction::Vertical)
+                .margin(0)
+                .constraints([
+                    Constraint::Length(3),          // Header
+                    Constraint::Min(5),              // Drives + logs section (flexible)
+                ])
+                .split(f.area())
+        }
     };
 
     // Header
@@ -311,9 +353,19 @@ fn ui(f: &mut Frame, state: &AppState) {
     // Drives with their individual log windows
     render_drives_with_logs(f, chunks[1], state);
     
-    // Rsync log window (if active)
-    if has_rsync_logs {
-        render_rsync_logs(f, chunks[2], state);
+    // Rename and rsync log windows (if active)
+    match (has_rsync_logs, has_rename_logs) {
+        (true, true) => {
+            render_rename_logs(f, chunks[2], state);
+            render_rsync_logs(f, chunks[3], state);
+        }
+        (true, false) => {
+            render_rsync_logs(f, chunks[2], state);
+        }
+        (false, true) => {
+            render_rename_logs(f, chunks[2], state);
+        }
+        (false, false) => {}
     }
     
     // Render input dialog overlay if in input mode
@@ -461,6 +513,27 @@ fn render_rsync_logs(f: &mut Frame, area: Rect, state: &AppState) {
     
     let available_height = inner.height as usize;
     let log_items: Vec<ListItem> = state.rsync_logs.iter()
+        .rev()
+        .take(available_height)
+        .rev()
+        .map(|log| ListItem::new(log.as_str()))
+        .collect();
+
+    let logs_widget = List::new(log_items);
+    f.render_widget(logs_widget, inner);
+}
+
+fn render_rename_logs(f: &mut Frame, area: Rect, state: &AppState) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("🎬 Episode Matching & Renaming")
+        .style(Style::default().fg(Color::Cyan));
+    
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    
+    let available_height = inner.height as usize;
+    let log_items: Vec<ListItem> = state.rename_logs.iter()
         .rev()
         .take(available_height)
         .rev()

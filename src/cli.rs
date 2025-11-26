@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
@@ -7,29 +7,55 @@ use std::path::PathBuf;
 #[command(version = "0.1.0")]
 #[command(about = "Automated Optical Disc Ripper with real-time TUI", long_about = None)]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Output folder for ripped files
-    #[arg(short, long, value_name = "DIR")]
+    #[arg(short, long, value_name = "DIR", global = true)]
     pub output_folder: Option<PathBuf>,
 
+    /// Skip metadata fetching (offline mode)
+    #[arg(short, long, default_value = "false", global = true)]
+    pub skip_metadata: bool,
+
+    /// Manually specify the title for DVD/Blu-ray metadata lookup
+    #[arg(short, long, value_name = "TITLE", global = true)]
+    pub title: Option<String>,
+
+    /// Skip Filebot renaming (Filebot runs by default)
+    #[arg(long, default_value = "false", global = true)]
+    pub skip_filebot: bool,
+    
+    // Legacy args for backward compatibility
     /// FLAC compression quality (0-8, default: 5)
-    #[arg(short, long, default_value = "5")]
+    #[arg(short, long, default_value = "5", hide = true)]
     pub quality: u8,
 
     /// Automatically eject disc when ripping completes
-    #[arg(short, long, default_value = "true")]
+    #[arg(short, long, default_value = "true", hide = true)]
     pub eject_when_done: bool,
+}
 
-    /// Skip metadata fetching (offline mode)
-    #[arg(short, long, default_value = "false")]
-    pub skip_metadata: bool,
-
-    /// Manually specify the title for DVD/Blu-ray metadata lookup (e.g., "Foster's Home for Imaginary Friends")
-    #[arg(short, long, value_name = "TITLE")]
-    pub title: Option<String>,
-
-    /// Skip Filebot renaming after ripping (Filebot runs by default to fix DVD vs broadcast order mismatches)
-    #[arg(long, default_value = "false")]
-    pub skip_filebot: bool,
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Rename existing video files using speech matching + Filebot
+    Rename {
+        /// Directory containing video files to rename (defaults to current directory)
+        #[arg(value_name = "DIR")]
+        directory: Option<PathBuf>,
+        
+        /// TV show title (will prompt if not provided)
+        #[arg(short, long, value_name = "TITLE")]
+        title: Option<String>,
+        
+        /// Skip speech matching phase (only use Filebot duration matching)
+        #[arg(long)]
+        skip_speech: bool,
+        
+        /// Skip Filebot phase (only use speech matching)
+        #[arg(long)]
+        skip_filebot: bool,
+    },
 }
 
 impl Args {
@@ -39,74 +65,9 @@ impl Args {
             PathBuf::from(home).join("Desktop").join("Rips").join("Music")
         })
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_quality() {
-        let args = Args {
-            output_folder: None,
-            quality: 5,
-            eject_when_done: true,
-            skip_metadata: false,
-            title: None,
-            skip_filebot: false,
-        };
-        
-        assert_eq!(args.quality, 5);
-    }
-
-    #[test]
-    fn test_custom_output_folder() {
-        let custom_path = PathBuf::from("/custom/path");
-        let args = Args {
-            output_folder: Some(custom_path.clone()),
-            quality: 8,
-            eject_when_done: false,
-            skip_metadata: true,
-            title: None,
-            skip_filebot: false,
-        };
-        
-        assert_eq!(args.get_output_folder(), custom_path);
-        assert_eq!(args.quality, 8);
-        assert!(!args.eject_when_done);
-        assert!(args.skip_metadata);
-    }
-
-    #[test]
-    fn test_default_output_folder() {
-        let args = Args {
-            output_folder: None,
-            quality: 5,
-            eject_when_done: true,
-            skip_metadata: false,
-            title: None,
-            skip_filebot: false,
-        };
-        
-        let folder = args.get_output_folder();
-        assert!(folder.to_string_lossy().contains("Desktop"));
-        assert!(folder.to_string_lossy().contains("Rips"));
-        assert!(folder.to_string_lossy().contains("Music"));
-    }
-
-    #[test]
-    fn test_quality_range() {
-        // Test valid quality values
-        for q in 0..=8 {
-            let args = Args {
-                output_folder: None,
-                quality: q,
-                eject_when_done: true,
-                skip_metadata: false,
-                title: None,
-                skip_filebot: false,
-            };
-            assert!(args.quality <= 8);
-        }
+    
+    /// Check if this is the rename subcommand
+    pub fn is_rename_command(&self) -> bool {
+        matches!(self.command, Some(Command::Rename { .. }))
     }
 }

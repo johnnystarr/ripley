@@ -55,7 +55,7 @@ impl Default for Config {
             },
             speech_match: SpeechMatchConfig {
                 enabled: true,
-                audio_duration: 60,
+                audio_duration: 180,  // 3 minutes for better accuracy
                 whisper_model: "base".to_string(),
                 use_openai_api: true,
             },

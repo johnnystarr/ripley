@@ -28,6 +28,7 @@ pub struct Episode {
     pub title: String,
     pub title_index: u32, // Which MakeMKV title this corresponds to
     pub runtime_minutes: Option<u32>, // Episode runtime in minutes from TMDB
+    pub overview: Option<String>, // Episode summary/description from TMDB
 }
 
 /// Get DVD disc ID using libdvdread or similar
@@ -450,12 +451,17 @@ async fn fetch_tv_episodes(client: &reqwest::Client, show_id: i64, season: u32) 
         
         let runtime_minutes = ep["runtime"].as_u64().map(|r| r as u32);
         
+        let overview = ep["overview"].as_str()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        
         episodes.push(Episode {
             season,
             episode: ep_num,
             title,
             title_index: idx as u32, // Will be updated by duration matching
             runtime_minutes,
+            overview,
         });
     }
     

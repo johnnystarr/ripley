@@ -33,7 +33,7 @@ pub async fn rename_with_filebot(
         .arg("--db").arg("TheTVDB")  // Use TheTVDB (best for TV series)
         .arg("--q").arg(show_title)
         .arg("--order").arg("Airdate")  // Use broadcast order
-        .arg("--format").arg("{n}.S{s.pad(2)}E{e.pad(2)}")  // Format: ShowName.S01E01
+        .arg("--format").arg("{n.space('.')}.S{s.pad(2)}E{e.pad(2)}.{t.space('.')}")  // Format: Show.Name.S01E01.Episode.Title
         .arg("-non-strict");  // Allow fuzzy matching
     
     debug!("Filebot command: {:?}", cmd);
