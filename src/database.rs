@@ -169,6 +169,16 @@ impl Database {
             [],
         )?;
 
+        // Create settings table for persistent user preferences
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         // Create indexes
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC)",
@@ -381,6 +391,42 @@ impl Database {
         )?;
 
         Ok(())
+    }
+
+    /// Get a setting value
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        
+        let result = stmt.query_row([key], |row| row.get::<_, String>(0));
+        
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Set a setting value
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            params![key, value, Utc::now().to_rfc3339()],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get the last used title for ripping
+    pub fn get_last_title(&self) -> Result<Option<String>> {
+        self.get_setting("last_rip_title")
+    }
+
+    /// Set the last used title for ripping
+    pub fn set_last_title(&self, title: &str) -> Result<()> {
+        self.set_setting("last_rip_title", title)
     }
 }
 

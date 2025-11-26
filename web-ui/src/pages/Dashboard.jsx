@@ -8,6 +8,9 @@ import {
   faCircleXmark,
   faEject,
   faExclamationTriangle,
+  faEdit,
+  faSave,
+  faTimes,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -18,12 +21,15 @@ export default function Dashboard() {
   const [logs, setLogs] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [lastTitle, setLastTitle] = useState('');
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
 
   // Fetch drives and logs on mount
   useEffect(() => {
     fetchDrives();
     fetchLogs();
     fetchActiveIssues();
+    fetchLastTitle();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -116,6 +122,27 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchLastTitle = useCallback(async () => {
+    try {
+      const data = await api.getLastTitle();
+      if (data.title) {
+        setLastTitle(data.title);
+      }
+    } catch (err) {
+      console.error('Failed to fetch last title:', err);
+    }
+  }, []);
+
+  const handleSaveTitle = useCallback(async () => {
+    try {
+      await api.setLastTitle(lastTitle);
+      setIsEditingTitle(false);
+      toast.success('Title saved - will be used for all new rips');
+    } catch (err) {
+      toast.error('Failed to save title: ' + err.message);
+    }
+  }, [lastTitle]);
+
   const handleResolveIssue = useCallback(async (issueId) => {
     try {
       await api.resolveIssue(issueId);
@@ -171,6 +198,60 @@ export default function Dashboard() {
       </div>
 
       <h1 className="text-3xl font-bold text-slate-100">Dashboard</h1>
+
+      {/* Default Title Setting */}
+      <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-100">Default Rip Title</h2>
+            <p className="text-slate-400 text-sm mt-1">
+              Set a title that will be used for all new rips until you change it
+            </p>
+          </div>
+          {!isEditingTitle && (
+            <button
+              onClick={() => setIsEditingTitle(true)}
+              className="text-cyan-400 hover:text-cyan-300 transition-colors"
+            >
+              <FontAwesomeIcon icon={faEdit} className="mr-2" />
+              Edit
+            </button>
+          )}
+        </div>
+        
+        {isEditingTitle ? (
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={lastTitle}
+              onChange={(e) => setLastTitle(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSaveTitle()}
+              placeholder="e.g., Foster's Home for Imaginary Friends"
+              className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+              autoFocus
+            />
+            <button
+              onClick={handleSaveTitle}
+              className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
+            >
+              <FontAwesomeIcon icon={faSave} />
+            </button>
+            <button
+              onClick={() => {
+                setIsEditingTitle(false);
+                fetchLastTitle();
+              }}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+            >
+              <FontAwesomeIcon icon={faTimes} />
+            </button>
+          </div>
+        ) : (
+          <div className="text-slate-100 font-mono text-lg">
+            {lastTitle || <span className="text-slate-500 italic">No title set</span>}
+          </div>
+        )}
+      </div>
 
       {/* Active Issues */}
       {issues.length > 0 && (

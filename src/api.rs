@@ -280,6 +280,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/issues", get(get_all_issues_handler))
         .route("/issues/active", get(get_active_issues))
         .route("/issues/:id/resolve", post(resolve_issue))
+        .route("/settings/last-title", get(get_last_title))
+        .route("/settings/last-title", post(set_last_title))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -484,9 +486,16 @@ async fn run_rip_operation(
         drive: None,
     });
     
+    // Use provided title or fall back to last saved title
+    let title = if request.title.is_some() {
+        request.title
+    } else {
+        state.db.get_last_title().ok().flatten()
+    };
+    
     let args = RipArgs {
         output_folder: request.output_path.map(PathBuf::from),
-        title: request.title,
+        title,
         skip_metadata: request.skip_metadata,
         skip_filebot: request.skip_filebot,
         quality: 5,
@@ -623,6 +632,34 @@ async fn resolve_issue(
         Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to resolve issue: {}", e),
+        }),
+    }
+}
+
+/// Get the last used title
+async fn get_last_title(State(state): State<ApiState>) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_last_title() {
+        Ok(title) => Ok(Json(serde_json::json!({ "title": title }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get last title: {}", e),
+        }),
+    }
+}
+
+/// Set the last used title
+#[derive(Debug, Deserialize)]
+struct SetTitleRequest {
+    title: String,
+}
+
+async fn set_last_title(
+    State(state): State<ApiState>,
+    Json(request): Json<SetTitleRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.set_last_title(&request.title) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to set last title: {}", e),
         }),
     }
 }

@@ -121,6 +121,19 @@ class ApiClient {
     });
   }
 
+  // Get last used title
+  async getLastTitle() {
+    return this.request('/settings/last-title');
+  }
+
+  // Set last used title
+  async setLastTitle(title) {
+    return this.request('/settings/last-title', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    });
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {
