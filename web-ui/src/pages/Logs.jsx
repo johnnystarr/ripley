@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faSearch,
@@ -11,6 +11,23 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '../api';
 
+// Custom debounce hook
+function useDebounce(value, delay) {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
 export default function Logs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,11 +35,14 @@ export default function Logs() {
   const [selectedLevel, setSelectedLevel] = useState('all');
   const [selectedDrive, setSelectedDrive] = useState('all');
 
+  // Debounce search query
+  const debouncedSearchQuery = useDebounce(searchQuery, 500);
+
   useEffect(() => {
     fetchLogs();
   }, []);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
       const data = await api.getLogs();
@@ -32,13 +52,13 @@ export default function Logs() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleSearch = async () => {
+  const handleSearch = useCallback(async () => {
     try {
       setLoading(true);
       const params = {};
-      if (searchQuery) params.query = searchQuery;
+      if (debouncedSearchQuery) params.query = debouncedSearchQuery;
       if (selectedLevel !== 'all') params.level = selectedLevel;
       if (selectedDrive !== 'all') params.drive = selectedDrive;
 
@@ -51,7 +71,14 @@ export default function Logs() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [debouncedSearchQuery, selectedLevel, selectedDrive]);
+
+  // Auto-search when debounced query or filters change
+  useEffect(() => {
+    if (debouncedSearchQuery || selectedLevel !== 'all' || selectedDrive !== 'all') {
+      handleSearch();
+    }
+  }, [debouncedSearchQuery, selectedLevel, selectedDrive, handleSearch]);
 
   const handleClearFilters = () => {
     setSearchQuery('');
@@ -60,23 +87,30 @@ export default function Logs() {
     fetchLogs();
   };
 
-  const getLogIcon = (level) => {
+  // Memoized helper functions
+  const getLogIcon = useCallback((level) => {
     switch (level) {
       case 'error': return faCircleXmark;
       case 'warning': return faTriangleExclamation;
       case 'success': return faCircleCheck;
       default: return faCircleInfo;
     }
-  };
+  }, []);
 
-  const getLogColor = (level) => {
+  const getLogColor = useCallback((level) => {
     switch (level) {
       case 'error': return 'text-red-400';
       case 'warning': return 'text-yellow-400';
       case 'success': return 'text-green-400';
       default: return 'text-blue-400';
     }
-  };
+  }, []);
+
+  // Memoize unique drives for filter dropdown
+  const uniqueDrives = useMemo(() => {
+    const drives = new Set(logs.filter(log => log.drive).map(log => log.drive));
+    return Array.from(drives).sort();
+  }, [logs]);
 
   const getLogBgColor = (level) => {
     switch (level) {
@@ -86,9 +120,6 @@ export default function Logs() {
       default: return 'bg-blue-500/10 border-blue-500/30';
     }
   };
-
-  // Get unique drives from logs
-  const uniqueDrives = [...new Set(logs.map(log => log.drive).filter(Boolean))];
 
   return (
     <div className="space-y-6">

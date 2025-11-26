@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faCompactDisc,
@@ -95,7 +95,7 @@ export default function Dashboard() {
     }
   };
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const data = await api.getLogs();
       setLogs(data.map(log => ({
@@ -105,18 +105,18 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to fetch logs:', err);
     }
-  };
+  }, []);
 
-  const fetchActiveIssues = async () => {
+  const fetchActiveIssues = useCallback(async () => {
     try {
       const data = await api.getActiveIssues();
       setIssues(data);
     } catch (err) {
       console.error('Failed to fetch issues:', err);
     }
-  };
+  }, []);
 
-  const handleResolveIssue = async (issueId) => {
+  const handleResolveIssue = useCallback(async (issueId) => {
     try {
       await api.resolveIssue(issueId);
       setIssues(prev => prev.filter(i => i.id !== issueId));
@@ -124,9 +124,9 @@ export default function Dashboard() {
     } catch (err) {
       toast.error('Failed to resolve issue: ' + err.message);
     }
-  };
+  }, []);
 
-  const handleEjectDrive = async (device) => {
+  const handleEjectDrive = useCallback(async (device) => {
     try {
       await api.ejectDrive(device);
       toast.success(`Drive ${device} ejected`);
@@ -135,7 +135,21 @@ export default function Dashboard() {
     } catch (err) {
       toast.error('Failed to eject drive: ' + err.message);
     }
-  };
+  }, []);
+
+  // Memoized helper functions
+  const getLogColor = useCallback((level) => {
+    switch (level) {
+      case 'error': return 'text-red-400';
+      case 'warning': return 'text-yellow-400';
+      case 'success': return 'text-green-400';
+      default: return 'text-slate-300';
+    }
+  }, []);
+
+  const getIssueIcon = useCallback(() => {
+    return faExclamationTriangle;
+  }, []);
 
   if (loading) {
     return (
@@ -144,19 +158,6 @@ export default function Dashboard() {
       </div>
     );
   }
-
-  const getLogColor = (level) => {
-    switch (level) {
-      case 'error': return 'text-red-400';
-      case 'warning': return 'text-yellow-400';
-      case 'success': return 'text-green-400';
-      default: return 'text-slate-300';
-    }
-  };
-
-  const getIssueIcon = (type) => {
-    return faExclamationTriangle;
-  };
 
   return (
     <div className="space-y-6">

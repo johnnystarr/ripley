@@ -188,7 +188,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
   - [x] Issue creation toasts
   - [x] Issue resolution toasts
   - [x] Rip completion/error toasts
-- [ ] Error boundaries for component errors
+- [x] Error boundaries for component errors
 
 ### 9. Responsive Design
 - [x] Mobile-friendly layout with collapsible sidebar
@@ -200,9 +200,9 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 ### 10. Performance
 - [x] Route-based code splitting via Vite
 - [x] Scrollable containers for large log output
+- [x] Debounced search inputs (500ms delay in Logs page)
+- [x] Memoized expensive computations (useCallback for handlers, useMemo for derived data)
 - [ ] Virtualized lists for very large log datasets (future optimization)
-- [ ] Debounced search inputs
-- [ ] Memoized expensive computations
 
 ## Development & Build
 
@@ -234,7 +234,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 
 ## Progress Tracking
 
-**Total Tasks**: ~87 completed / ~95 total (92%)
+**Total Tasks**: ~90 completed / ~95 total (95%)
 
 **Current Phase**: Polish & Integration
 
@@ -276,7 +276,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 2. ✅ **Automatic issue creation** - RipError events create issues in database
 3. ✅ **Background drive polling** - Background task polls every 3 seconds and emits DriveDetected/DriveRemoved events
 4. ✅ **Auto-eject on complete** - Added eject endpoint (/drives/:device/eject) that emits DriveEjected event, plus eject button in Dashboard drive cards
-5. **Error boundaries** - Add React error boundaries for graceful error handling
+5. ✅ **Error boundaries** - React ErrorBoundary component wraps all routes with graceful error UI (try again, return to dashboard)
 6. **Test with real disc ripping** - Full integration testing with actual discs
 7. **Performance optimization** - Virtualized lists for very large log datasets
 

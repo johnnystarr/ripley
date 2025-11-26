@@ -11,6 +11,7 @@ import {
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { wsManager } from './websocket';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Import pages
 import Dashboard from './pages/Dashboard';
@@ -75,11 +76,13 @@ function App() {
 
           {/* Page content */}
           <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-900 p-6">
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/configuration" element={<Configuration />} />
-              <Route path="/logs" element={<Logs />} />
-            </Routes>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+                <Route path="/configuration" element={<ErrorBoundary><Configuration /></ErrorBoundary>} />
+                <Route path="/logs" element={<ErrorBoundary><Logs /></ErrorBoundary>} />
+              </Routes>
+            </ErrorBoundary>
           </main>
         </div>
       </div>
