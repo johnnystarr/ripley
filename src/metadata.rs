@@ -151,39 +151,75 @@ async fn fetch_from_cddb(disc_id: &str) -> Result<DiscMetadata> {
     Err(anyhow!("CDDB lookup not yet implemented"))
 }
 
-/// Calculate disc ID from CD (using cd-discid or similar tool)
+/// Calculate MusicBrainz disc ID from CD TOC (pure Rust implementation)
 pub async fn get_disc_id(device: &str) -> Result<String> {
-    // Use cd-discid command if available
+    use sha1::{Sha1, Digest};
+    use base64::Engine;
+    
+    debug!("Calculating disc ID for device: {}", device);
+    
+    // Get TOC from cd-discid
     let output = std::process::Command::new("cd-discid")
         .arg(device)
-        .output();
-
-    if let Ok(output) = output {
-        if output.status.success() {
-            let disc_id = String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
-            
-            if !disc_id.is_empty() {
-                return Ok(disc_id);
-            }
+        .output()
+        .context("Failed to run cd-discid")?;
+    
+    if !output.status.success() {
+        return Err(anyhow!("cd-discid failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    let toc = String::from_utf8_lossy(&output.stdout);
+    debug!("cd-discid output: {}", toc);
+    
+    // Parse: discid numtracks offset1 offset2 ... offsetN length
+    let parts: Vec<&str> = toc.split_whitespace().collect();
+    if parts.len() < 4 {
+        return Err(anyhow!("Invalid cd-discid output"));
+    }
+    
+    let num_tracks: u32 = parts[1].parse()
+        .context("Failed to parse track count")?;
+    
+    let mut offsets: Vec<u32> = Vec::new();
+    for i in 2..(2 + num_tracks as usize) {
+        offsets.push(parts[i].parse()
+            .context("Failed to parse offset")?);
+    }
+    
+    let leadout_offset: u32 = parts[2 + num_tracks as usize].parse()
+        .context("Failed to parse leadout offset")?;
+    
+    // Calculate MusicBrainz disc ID using SHA-1
+    let mut hasher = Sha1::new();
+    
+    // First track (always 1 for audio CDs)
+    hasher.update(format!("{:02X}", 1).as_bytes());
+    
+    // Last track
+    hasher.update(format!("{:02X}", num_tracks).as_bytes());
+    
+    // Leadout in frames
+    hasher.update(format!("{:08X}", leadout_offset).as_bytes());
+    
+    // Track offsets (pad to 99 tracks)
+    for i in 0..99 {
+        if i < offsets.len() {
+            hasher.update(format!("{:08X}", offsets[i]).as_bytes());
+        } else {
+            hasher.update(b"00000000");
         }
     }
-
-    // Fallback: use drutil to get TOC and calculate disc ID
-    // This is a simplified approach - proper disc ID calculation is complex
-    let output = std::process::Command::new("drutil")
-        .arg("list")
-        .output()
-        .context("Failed to get disc TOC")?;
-
-    let toc = String::from_utf8_lossy(&output.stdout);
     
-    // For demonstration, return a placeholder
-    // In production, you'd calculate the actual MusicBrainz disc ID from the TOC
-    debug!("TOC: {}", toc);
+    // Compute SHA-1 hash
+    let hash = hasher.finalize();
     
-    Ok("placeholder_disc_id".to_string())
+    // Encode as base64 URL-safe (replace + with ., / with _, remove = padding)
+    let disc_id = base64::engine::general_purpose::STANDARD.encode(&hash)
+        .replace('+', ".")
+        .replace('/', "_")
+        .replace('=', "-");
+    
+    debug!("Calculated MusicBrainz disc ID: {}", disc_id);
+    
+    Ok(disc_id)
 }

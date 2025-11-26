@@ -28,7 +28,8 @@ A Rust-powered automated CD ripper with a real-time TUI interface. Ripley monito
    ```bash
    brew install abcde
    brew install flac        # FLAC encoder
-   brew install cd-discid   # Disc ID calculation
+   brew install libdiscid   # MusicBrainz disc ID
+   brew install cd-discid   # Fallback disc ID
    ```
 
 3. **Install Rust** (if not already installed):

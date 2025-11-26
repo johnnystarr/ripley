@@ -26,6 +26,7 @@ echo ""
 
 brew install abcde
 brew install flac
+brew install libdiscid
 brew install cd-discid
 
 echo ""

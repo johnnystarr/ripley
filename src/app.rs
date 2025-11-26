@@ -121,22 +121,38 @@ async fn rip_disc(
     // Fetch metadata
     add_log(&tui_state, format!("🔍 Fetching metadata for {}...", device)).await;
     
-    let disc_id = metadata::get_disc_id(device).await?;
+    let disc_id = match metadata::get_disc_id(device).await {
+        Ok(id) => {
+            add_log(&tui_state, format!("📀 Disc ID: {}", id)).await;
+            id
+        }
+        Err(e) => {
+            add_log(&tui_state, format!("⚠️  Could not get disc ID: {}", e)).await;
+            if args.skip_metadata {
+                "unknown".to_string()
+            } else {
+                audio::play_notification("error").await?;
+                return Err(e);
+            }
+        }
+    };
+    
     let metadata = if args.skip_metadata {
         // Create dummy metadata
         create_dummy_metadata()
     } else {
         match metadata::fetch_metadata(&disc_id, 3).await {
             Ok(meta) => {
-                add_log(&tui_state, format!("✅ Found: {} - {}", meta.artist, meta.album)).await;
+                add_log(&tui_state, format!("✅ Found: {} - {} ({} tracks)", 
+                    meta.artist, meta.album, meta.tracks.len())).await;
                 meta
             }
             Err(e) => {
                 add_log(&tui_state, format!("⚠️  Metadata lookup failed: {}", e)).await;
+                add_log(&tui_state, "Using generic track names. You can rename files after ripping.".to_string()).await;
                 audio::play_notification("error").await?;
                 
-                // TODO: Prompt user for manual input
-                // For now, use dummy metadata
+                // Use dummy metadata - abcde will still rip the tracks
                 create_dummy_metadata()
             }
         }
@@ -215,18 +231,24 @@ async fn rip_disc(
 }
 
 fn create_dummy_metadata() -> metadata::DiscMetadata {
+    // Try to get track count from the CD
+    // For now, create a reasonable default - abcde will detect actual tracks
+    let track_count = 10; // Default assumption
+    
+    let tracks: Vec<metadata::Track> = (1..=track_count)
+        .map(|n| metadata::Track {
+            number: n,
+            title: format!("Track {:02}", n),
+            artist: None,
+            duration: None,
+        })
+        .collect();
+
     metadata::DiscMetadata {
         artist: "Unknown Artist".to_string(),
-        album: "Unknown Album".to_string(),
-        year: None,
+        album: format!("Unknown Album {}", chrono::Local::now().format("%Y-%m-%d")),
+        year: Some(chrono::Local::now().format("%Y").to_string()),
         genre: None,
-        tracks: vec![
-            metadata::Track {
-                number: 1,
-                title: "Track 1".to_string(),
-                artist: None,
-                duration: None,
-            },
-        ],
+        tracks,
     }
 }

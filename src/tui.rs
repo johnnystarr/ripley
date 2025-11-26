@@ -130,10 +130,11 @@ impl Drop for Tui {
 fn ui(f: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
+        .margin(0)
         .constraints([
             Constraint::Length(3),          // Header
-            Constraint::Min(10),             // Drives section
-            Constraint::Length(10),          // Logs
+            Constraint::Min(5),              // Drives section (flexible)
+            Constraint::Length(12),          // Logs (fixed height)
         ])
         .split(f.area());
 
@@ -195,11 +196,6 @@ fn render_drives(f: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_drive(f: &mut Frame, area: Rect, drive: &DriveState) {
-    let inner = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
-        .split(area);
-
     let title = if let Some(ref info) = drive.album_info {
         format!("{} - {}", drive.device, info)
     } else {
@@ -211,7 +207,13 @@ fn render_drive(f: &mut Frame, area: Rect, drive: &DriveState) {
         .title(title)
         .style(Style::default().fg(Color::Cyan));
 
+    let inner_area = block.inner(area);
     f.render_widget(block, area);
+    
+    let inner = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner_area);
 
     if let Some(ref progress) = drive.progress {
         let status_color = match progress.status {
@@ -241,16 +243,25 @@ fn render_drive(f: &mut Frame, area: Rect, drive: &DriveState) {
 }
 
 fn render_logs(f: &mut Frame, area: Rect, state: &AppState) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Log");
+    
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    
+    // Calculate how many lines we can show
+    let available_height = inner.height as usize;
+    
     let logs: Vec<ListItem> = state.logs.iter()
         .rev()
-        .take(8)
+        .take(available_height.saturating_sub(1))
         .rev()
         .map(|log| ListItem::new(log.as_str()))
         .collect();
 
     let logs_widget = List::new(logs)
-        .block(Block::default().borders(Borders::ALL).title("Log"))
         .style(Style::default().fg(Color::White));
 
-    f.render_widget(logs_widget, area);
+    f.render_widget(logs_widget, inner);
 }
