@@ -69,7 +69,8 @@ async fn handle_drive_changes(
     active_rips: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
 ) {
     for drive in drives {
-        if !drive.has_audio_cd {
+        // Skip if no media
+        if matches!(drive.media_type, drive::MediaType::None) {
             continue;
         }
 
@@ -89,9 +90,11 @@ async fn handle_drive_changes(
         let tui_state_clone = Arc::clone(&tui_state);
         let active_rips_clone = Arc::clone(&active_rips);
 
+        let media_type = drive.media_type.clone();
+        
         let handle = tokio::spawn(async move {
             let tui_state_for_error = Arc::clone(&tui_state_clone);
-            if let Err(e) = rip_disc(&device_for_task, args_clone, tui_state_clone).await {
+            if let Err(e) = rip_disc(&device_for_task, media_type, args_clone, tui_state_clone).await {
                 tracing::error!("Rip task failed for {}: {}", device_for_task, e);
                 let mut state = tui_state_for_error.lock().await;
                 state.add_log(format!("❌ Error ripping {}: {}", device_for_task, e));
@@ -108,6 +111,7 @@ async fn handle_drive_changes(
 
 async fn rip_disc(
     device: &str,
+    media_type: drive::MediaType,
     args: Args,
     tui_state: Arc<Mutex<crate::tui::AppState>>,
 ) -> Result<()> {
@@ -115,6 +119,11 @@ async fn rip_disc(
     async fn add_log(state: &Arc<Mutex<crate::tui::AppState>>, device: &str, msg: String) {
         let mut s = state.lock().await;
         s.add_drive_log(device, msg);
+    }
+
+    // Handle DVD ripping
+    if matches!(media_type, drive::MediaType::DVD) {
+        return rip_dvd_disc(device, args, tui_state).await;
     }
 
     add_log(&tui_state, device, format!("📀 Detected audio CD in {}", device)).await;
@@ -247,6 +256,92 @@ async fn rip_disc(
         }
         Err(e) => {
             add_log(&tui_state, device, format!("❌ Failed: {} - {}", album_info, e)).await;
+            audio::play_notification("error").await?;
+        }
+    }
+
+    // Remove drive from display
+    {
+        let mut state = tui_state.lock().await;
+        state.drives.retain(|d| d.device != device);
+    }
+
+    Ok(())
+}
+
+async fn rip_dvd_disc(
+    device: &str,
+    args: Args,
+    tui_state: Arc<Mutex<crate::tui::AppState>>,
+) -> Result<()> {
+    // Helper to add logs
+    async fn add_log(state: &Arc<Mutex<crate::tui::AppState>>, device: &str, msg: String) {
+        let mut s = state.lock().await;
+        s.add_drive_log(device, msg);
+    }
+
+    add_log(&tui_state, device, format!("📀 Detected DVD in {}", device)).await;
+
+    // Update album info to show it's a DVD
+    {
+        let mut s = tui_state.lock().await;
+        if let Some(drive) = s.drives.iter_mut().find(|d| d.device == device) {
+            drive.album_info = Some("DVD Video".to_string());
+        }
+    }
+
+    let output_folder = args.get_output_folder();
+    let dvd_output = output_folder.join("DVDs");
+    
+    // Create DVD-specific output folder with timestamp
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let dvd_dir = dvd_output.join(format!("DVD_{}", timestamp));
+    
+    add_log(&tui_state, device, format!("Output: {}", dvd_dir.display())).await;
+
+    let device_clone = device.to_string();
+    let tui_state_clone = Arc::clone(&tui_state);
+    let tui_state_log_clone = Arc::clone(&tui_state);
+    let device_log_clone = device.to_string();
+
+    let result = crate::dvd_ripper::rip_dvd(
+        device,
+        &dvd_dir,
+        move |progress| {
+            let device = device_clone.clone();
+            let tui_state = Arc::clone(&tui_state_clone);
+
+            tokio::spawn(async move {
+                let mut s = tui_state.lock().await;
+                if let Some(drive) = s.drives.iter_mut().find(|d| d.device == device) {
+                    drive.progress = Some(progress);
+                    if drive.album_info.is_none() {
+                        drive.album_info = Some("DVD Video".to_string());
+                    }
+                }
+            });
+        },
+        move |log_line| {
+            let device = device_log_clone.clone();
+            let tui_state = Arc::clone(&tui_state_log_clone);
+            tokio::spawn(async move {
+                add_log(&tui_state, &device, log_line).await;
+            });
+        },
+    ).await;
+
+    match result {
+        Ok(_) => {
+            add_log(&tui_state, device, "✅ DVD rip complete".to_string()).await;
+            audio::play_notification("complete").await?;
+
+            if args.eject_when_done {
+                drive::eject_disc(device).await?;
+                add_log(&tui_state, device, format!("⏏️  Ejected {}", device)).await;
+            }
+        }
+        Err(e) => {
+            add_log(&tui_state, device, format!("❌ DVD rip failed: {}", e)).await;
             audio::play_notification("error").await?;
         }
     }

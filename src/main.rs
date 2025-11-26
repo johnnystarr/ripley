@@ -1,5 +1,6 @@
 mod cli;
 mod drive;
+mod dvd_ripper;
 mod metadata;
 mod ripper;
 mod audio;

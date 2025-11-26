@@ -1,8 +1,16 @@
 # Ripley Quick Start
 
 ## Install Dependencies
+
+### For Audio CDs
 ```bash
 brew install abcde cd-discid
+```
+
+### For DVDs
+```bash
+# Download and install MakeMKV from https://www.makemkv.com/
+# Then ensure makemkvcon is in your PATH
 ```
 
 ## Build
@@ -98,7 +106,16 @@ Check `~/ripley.log` for detailed error messages.
 - `8` - Slowest, smallest files (recommended for archival)
 
 ## Multi-Drive Support
-✅ Insert CDs into multiple drives  
+✅ Insert CDs/DVDs into multiple drives  
 ✅ Each gets its own progress bar and log  
 ✅ All rip simultaneously  
 ✅ Auto-eject when finished  
+✅ Auto-detects CD vs DVD and uses appropriate ripper  
+
+## DVD Support
+- **Detection:** Automatically detects DVDs vs Audio CDs
+- **Output:** DVDs ripped to `~/Desktop/Rips/Music/DVDs/DVD_YYYYMMDD_HHMMSS/`
+- **Format:** MKV files (lossless)
+- **Requirements:** MakeMKV installed with `makemkvcon` in PATH
+- **Progress:** Real-time progress tracking in TUI
+- **Logging:** Full makemkvcon output in per-drive logs

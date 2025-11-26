@@ -5,10 +5,18 @@ use tokio::time::sleep;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MediaType {
+    AudioCD,
+    DVD,
+    None,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DriveInfo {
     pub device: String,
     pub name: String,
-    pub has_audio_cd: bool,
+    pub has_audio_cd: bool, // Kept for backward compatibility
+    pub media_type: MediaType,
 }
 
 /// Detect all CD/DVD drives on macOS
@@ -28,11 +36,13 @@ pub async fn detect_drives() -> Result<Vec<DriveInfo>> {
             if let Some(device) = parts.first() {
                 let device = device.trim();
                 if is_optical_drive(device).await? {
-                    let has_audio = check_audio_cd(device).await?;
+                    let media_type = detect_media_type(device).await?;
+                    let has_audio = matches!(media_type, MediaType::AudioCD);
                     drives.push(DriveInfo {
                         device: device.to_string(),
                         name: format!("Drive {}", device),
                         has_audio_cd: has_audio,
+                        media_type,
                     });
                 }
             }
@@ -68,9 +78,9 @@ async fn is_optical_drive(device: &str) -> Result<bool> {
        stdout.contains("Optical"))
 }
 
-/// Check if an optical drive contains an audio CD
-async fn check_audio_cd(device: &str) -> Result<bool> {
-    // Use drutil to check for audio CD
+/// Detect what type of media is in the optical drive
+async fn detect_media_type(device: &str) -> Result<MediaType> {
+    // Use drutil to check media type
     let output = Command::new("drutil")
         .arg("status")
         .arg("-drive")
@@ -79,25 +89,41 @@ async fn check_audio_cd(device: &str) -> Result<bool> {
 
     if let Ok(output) = output {
         let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // No media present
         if stdout.contains("No Media") || stdout.contains("not present") {
-            return Ok(false);
+            return Ok(MediaType::None);
         }
         
-        // Check if it's an audio CD
+        // Check for audio CD
         if stdout.contains("Audio") || stdout.contains("CDDA") {
-            return Ok(true);
+            return Ok(MediaType::AudioCD);
+        }
+        
+        // Check for DVD (video or data)
+        if stdout.contains("DVD") {
+            return Ok(MediaType::DVD);
         }
     }
 
-    // Alternative: use diskutil to check for audio tracks
+    // Fallback: use diskutil to check
     let output = Command::new("diskutil")
         .arg("info")
         .arg(device)
         .output()
-        .context("Failed to check for audio CD")?;
+        .context("Failed to check media type")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.contains("Audio") || stdout.contains("CDDA"))
+    
+    if stdout.contains("Audio") || stdout.contains("CDDA") {
+        return Ok(MediaType::AudioCD);
+    }
+    
+    if stdout.contains("DVD") {
+        return Ok(MediaType::DVD);
+    }
+    
+    Ok(MediaType::None)
 }
 
 /// Continuously monitor for new drives and disc insertions
@@ -156,10 +182,20 @@ mod tests {
             device: "/dev/disk2".to_string(),
             name: "Drive /dev/disk2".to_string(),
             has_audio_cd: true,
+            media_type: MediaType::AudioCD,
         };
         
         assert_eq!(drive.device, "/dev/disk2");
         assert!(drive.has_audio_cd);
+        assert_eq!(drive.media_type, MediaType::AudioCD);
+    }
+
+    #[test]
+    fn test_media_type_variants() {
+        assert_eq!(MediaType::AudioCD, MediaType::AudioCD);
+        assert_eq!(MediaType::DVD, MediaType::DVD);
+        assert_eq!(MediaType::None, MediaType::None);
+        assert_ne!(MediaType::AudioCD, MediaType::DVD);
     }
 
     #[test]
@@ -168,12 +204,14 @@ mod tests {
             device: "/dev/disk2".to_string(),
             name: "Drive 1".to_string(),
             has_audio_cd: true,
+            media_type: MediaType::AudioCD,
         };
         
         let drive2 = DriveInfo {
             device: "/dev/disk2".to_string(),
             name: "Drive 1".to_string(),
             has_audio_cd: true,
+            media_type: MediaType::AudioCD,
         };
         
         assert_eq!(drive1, drive2);
@@ -185,8 +223,23 @@ mod tests {
             device: "/dev/disk2".to_string(),
             name: "Empty Drive".to_string(),
             has_audio_cd: false,
+            media_type: MediaType::None,
         };
         
         assert!(!drive.has_audio_cd);
+        assert_eq!(drive.media_type, MediaType::None);
+    }
+    
+    #[test]
+    fn test_drive_info_dvd() {
+        let drive = DriveInfo {
+            device: "/dev/disk3".to_string(),
+            name: "DVD Drive".to_string(),
+            has_audio_cd: false,
+            media_type: MediaType::DVD,
+        };
+        
+        assert!(!drive.has_audio_cd);
+        assert_eq!(drive.media_type, MediaType::DVD);
     }
 }
