@@ -71,7 +71,7 @@ ci: fmt lint test
 # Setup dependencies
 setup:
 	@echo "🔧 Running setup..."
-	@./setup.sh
+	@./scripts/setup.sh
 
 reinstall: uninstall install
 	@echo "✅ Ripley reinstalled"
