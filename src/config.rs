@@ -130,3 +130,133 @@ impl Config {
         self.tmdb_api_key.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_defaults() {
+        let config = Config::default();
+        assert!(config.openai_api_key.is_none());
+        assert!(config.tmdb_api_key.is_some());
+        assert_eq!(config.speech_match.audio_duration, 180);
+        assert_eq!(config.filebot.database, "TheTVDB");
+        assert_eq!(config.notifications.enabled, true);
+        assert_eq!(config.rsync.enabled, true);
+    }
+
+    #[test]
+    fn test_config_with_api_keys() {
+        let config = Config {
+            openai_api_key: Some("test_openai_key".to_string()),
+            tmdb_api_key: Some("test_tmdb_key".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(config.openai_api_key, Some("test_openai_key".to_string()));
+        assert_eq!(config.tmdb_api_key, Some("test_tmdb_key".to_string()));
+    }
+
+    #[test]
+    fn test_speech_match_config() {
+        let speech_config = SpeechMatchConfig {
+            enabled: true,
+            audio_duration: 240,
+            whisper_model: "base".to_string(),
+            use_openai_api: true,
+        };
+
+        assert_eq!(speech_config.audio_duration, 240);
+        assert_eq!(speech_config.enabled, true);
+        assert_eq!(speech_config.whisper_model, "base");
+    }
+
+    #[test]
+    fn test_filebot_config() {
+        let filebot_config = FilebotConfig {
+            skip_by_default: false,
+            database: "TVDB".to_string(),
+            order: "Airdate".to_string(),
+        };
+
+        assert_eq!(filebot_config.database, "TVDB");
+        assert_eq!(filebot_config.order, "Airdate");
+        assert_eq!(filebot_config.skip_by_default, false);
+    }
+
+    #[test]
+    fn test_config_get_openai_key() {
+        let config = Config {
+            openai_api_key: Some("my_key".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(config.get_openai_api_key(), Some("my_key".to_string()));
+    }
+
+    #[test]
+    fn test_config_get_tmdb_key() {
+        let config = Config {
+            tmdb_api_key: Some("tmdb_key".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(config.get_tmdb_api_key(), Some("tmdb_key".to_string()));
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = Config {
+            openai_api_key: Some("test_key".to_string()),
+            tmdb_api_key: Some("tmdb_test".to_string()),
+            speech_match: SpeechMatchConfig {
+                enabled: true,
+                audio_duration: 200,
+                whisper_model: "base".to_string(),
+                use_openai_api: true,
+            },
+            filebot: FilebotConfig {
+                skip_by_default: false,
+                database: "Custom".to_string(),
+                order: "Airdate".to_string(),
+            },
+            ..Default::default()
+        };
+
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(yaml.contains("openai_api_key"));
+        assert!(yaml.contains("test_key"));
+        assert!(yaml.contains("audio_duration: 200"));
+        assert!(yaml.contains("database: Custom"));
+    }
+
+    #[test]
+    fn test_config_deserialization() {
+        let yaml = r#"
+openai_api_key: my_openai_key
+tmdb_api_key: my_tmdb_key
+notifications:
+  enabled: true
+  topic: test_topic
+rsync:
+  enabled: true
+  destination: /test/path
+speech_match:
+  enabled: true
+  audio_duration: 150
+  whisper_model: base
+  use_openai_api: true
+filebot:
+  skip_by_default: false
+  database: TheTVDB
+  order: Airdate
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.openai_api_key, Some("my_openai_key".to_string()));
+        assert_eq!(config.tmdb_api_key, Some("my_tmdb_key".to_string()));
+        assert_eq!(config.speech_match.audio_duration, 150);
+        assert_eq!(config.filebot.database, "TheTVDB");
+    }
+}

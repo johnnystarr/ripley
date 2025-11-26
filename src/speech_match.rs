@@ -307,3 +307,127 @@ Example: S01E13 95"#,
         confidence,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dvd_metadata::Episode;
+
+    #[test]
+    fn test_parse_srt_dialogue() {
+        let srt_content = r#"1
+00:00:01,000 --> 00:00:04,000
+Hello there!
+
+2
+00:00:05,000 --> 00:00:08,000
+This is a test subtitle.
+"#;
+        
+        let dialogue = parse_srt_dialogue(srt_content);
+        assert!(dialogue.contains("Hello there!"));
+        assert!(dialogue.contains("This is a test subtitle."));
+        assert!(!dialogue.contains("00:00:01"));
+    }
+
+    #[test]
+    fn test_parse_srt_with_formatting() {
+        let srt_content = r#"1
+00:00:01,000 --> 00:00:04,000
+<i>Italicized text</i>
+
+2
+00:00:05,000 --> 00:00:08,000
+<b>Bold text</b> and normal
+"#;
+        
+        let dialogue = parse_srt_dialogue(srt_content);
+        assert!(dialogue.contains("Italicized text"));
+        assert!(dialogue.contains("Bold text"));
+        assert!(!dialogue.contains("<i>"));
+        assert!(!dialogue.contains("</b>"));
+    }
+
+    #[test]
+    fn test_episode_match_parsing() {
+        let _episodes = vec![
+            Episode {
+                season: 1,
+                episode: 1,
+                title: "Pilot".to_string(),
+                title_index: 0,
+                runtime_minutes: Some(22),
+                overview: Some("First episode".to_string()),
+            },
+            Episode {
+                season: 1,
+                episode: 2,
+                title: "Second Episode".to_string(),
+                title_index: 1,
+                runtime_minutes: Some(22),
+                overview: Some("Second episode".to_string()),
+            },
+        ];
+
+        // Test parsing various response formats
+        let test_cases = vec![
+            ("S01E01\n90", 1, 1, 90.0),
+            ("S01E02 confidence: 88", 1, 2, 88.0),
+            ("S01E01\n95", 1, 1, 95.0),
+        ];
+
+        for (response, expected_season, expected_episode, expected_confidence) in test_cases {
+            let re = regex::Regex::new(r"S(\d+)E(\d+)").unwrap();
+            let caps = re.captures(response).unwrap();
+            assert_eq!(caps[1].parse::<u32>().unwrap(), expected_season);
+            assert_eq!(caps[2].parse::<u32>().unwrap(), expected_episode);
+            
+            // Extract confidence - find number after episode code
+            let after_episode = &response[caps.get(0).unwrap().end()..];
+            let confidence_re = regex::Regex::new(r"(\d+)").unwrap();
+            let confidence = if let Some(conf_caps) = confidence_re.captures(after_episode) {
+                conf_caps[1].parse::<f32>().unwrap_or(85.0)
+            } else {
+                85.0
+            };
+            assert_eq!(confidence, expected_confidence);
+        }
+    }
+
+    #[test]
+    fn test_episode_match_structure() {
+        let ep_match = EpisodeMatch {
+            season: 2,
+            episode: 5,
+            title: "Test Episode".to_string(),
+            confidence: 92.5,
+        };
+
+        assert_eq!(ep_match.season, 2);
+        assert_eq!(ep_match.episode, 5);
+        assert_eq!(ep_match.title, "Test Episode");
+        assert_eq!(ep_match.confidence, 92.5);
+    }
+
+    #[test]
+    fn test_srt_empty_dialogue() {
+        let empty_srt = "";
+        let dialogue = parse_srt_dialogue(empty_srt);
+        assert_eq!(dialogue.trim(), "");
+    }
+
+    #[test]
+    fn test_srt_multiline_dialogue() {
+        let srt_content = r#"1
+00:00:01,000 --> 00:00:04,000
+This is the first line
+And this is the second line
+Even a third line!
+"#;
+        
+        let dialogue = parse_srt_dialogue(srt_content);
+        assert!(dialogue.contains("This is the first line"));
+        assert!(dialogue.contains("And this is the second line"));
+        assert!(dialogue.contains("Even a third line!"));
+    }
+}

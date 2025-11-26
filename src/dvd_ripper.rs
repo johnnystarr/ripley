@@ -233,6 +233,8 @@ where
         
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
+        #[allow(unused_assignments)]
+        let mut title_percentage = 0.0;
 
         // Parse rip output for this title
         loop {

@@ -30,6 +30,7 @@ pub struct DriveState {
 pub enum InputMode {
     Normal,
     AwaitingTitleInput { device: String, default_title: Option<String> },
+    #[allow(dead_code)]
     AwaitingEpisodeInput { device: String, title: String },
 }
 
@@ -185,6 +186,7 @@ impl Tui {
     }
     
     /// Prompt for TV show title
+    #[allow(dead_code)]
     pub async fn prompt_title(&self, device: &str, default_title: Option<String>) -> Result<String> {
         {
             let mut state = self.state.lock().await;
@@ -224,6 +226,7 @@ impl Tui {
     }
     
     /// Prompt for starting episode number
+    #[allow(dead_code)]
     pub async fn prompt_episode(&self, device: &str, title: &str) -> Result<u32> {
         {
             let mut state = self.state.lock().await;
@@ -610,4 +613,133 @@ fn render_input_dialog(f: &mut Frame, title: &str, prompt: &str, current_input: 
     f.render_widget(help_widget, chunks[5]);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_state_creation() {
+        let state = AppState::default();
+        assert_eq!(state.drives.len(), 0);
+        assert_eq!(state.rsync_logs.len(), 0);
+        assert_eq!(state.rename_logs.len(), 0);
+        assert_eq!(state.current_input, "");
+        assert!(matches!(state.input_mode, InputMode::Normal));
+    }
+
+    #[test]
+    fn test_drive_state_creation() {
+        let drive = DriveState {
+            device: "/dev/sr0".to_string(),
+            progress: None,
+            album_info: None,
+            logs: vec!["Test log".to_string()],
+        };
+        assert_eq!(drive.device, "/dev/sr0");
+        assert_eq!(drive.logs.len(), 1);
+        assert!(drive.progress.is_none());
+        assert!(drive.album_info.is_none());
+    }
+
+    #[test]
+    fn test_add_drive_log() {
+        let mut state = AppState::default();
+        state.add_drive_log("/dev/sr0", "First log".to_string());
+        
+        assert_eq!(state.drives.len(), 1);
+        assert_eq!(state.drives[0].device, "/dev/sr0");
+        assert_eq!(state.drives[0].logs.len(), 1);
+        
+        state.add_drive_log("/dev/sr0", "Second log".to_string());
+        assert_eq!(state.drives[0].logs.len(), 2);
+    }
+
+    #[test]
+    fn test_add_multiple_drives() {
+        let mut state = AppState::default();
+        state.add_drive_log("/dev/sr0", "Drive 1 log".to_string());
+        state.add_drive_log("/dev/sr1", "Drive 2 log".to_string());
+        
+        assert_eq!(state.drives.len(), 2);
+        assert_eq!(state.drives[0].device, "/dev/sr0");
+        assert_eq!(state.drives[1].device, "/dev/sr1");
+    }
+
+    #[test]
+    fn test_add_rsync_log() {
+        let mut state = AppState::default();
+        state.add_rsync_log("Rsync started".to_string());
+        
+        assert_eq!(state.rsync_logs.len(), 1);
+        assert!(state.rsync_logs[0].contains("Rsync started"));
+    }
+
+    #[test]
+    fn test_add_rename_log() {
+        let mut state = AppState::default();
+        state.add_rename_log("/dev/sr0", "Matched episode".to_string());
+        
+        assert_eq!(state.rename_logs.len(), 1);
+        assert!(state.rename_logs[0].contains("/dev/sr0"));
+        assert!(state.rename_logs[0].contains("Matched episode"));
+    }
+
+    #[test]
+    fn test_rsync_log_limit() {
+        let mut state = AppState::default();
+        
+        // Add 101 logs
+        for i in 0..101 {
+            state.add_rsync_log(format!("Log {}", i));
+        }
+        
+        // Should only keep last 100
+        assert_eq!(state.rsync_logs.len(), 100);
+        assert!(state.rsync_logs[0].contains("Log 1")); // First one removed
+    }
+
+    #[test]
+    fn test_rename_log_limit() {
+        let mut state = AppState::default();
+        
+        // Add 101 logs
+        for i in 0..101 {
+            state.add_rename_log("/dev/sr0", format!("Rename {}", i));
+        }
+        
+        // Should only keep last 100
+        assert_eq!(state.rename_logs.len(), 100);
+        assert!(state.rename_logs[0].contains("Rename 1")); // First one removed
+    }
+
+    #[test]
+    fn test_input_mode_variants() {
+        let normal = InputMode::Normal;
+        let title = InputMode::AwaitingTitleInput {
+            device: "/dev/sr0".to_string(),
+            default_title: Some("Test Show".to_string()),
+        };
+        
+        assert!(matches!(normal, InputMode::Normal));
+        match title {
+            InputMode::AwaitingTitleInput { device, default_title } => {
+                assert_eq!(device, "/dev/sr0");
+                assert_eq!(default_title, Some("Test Show".to_string()));
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_log_timestamping() {
+        let mut state = AppState::default();
+        state.add_rsync_log("Test message".to_string());
+        
+        // Check that log contains timestamp format [HH:MM:SS]
+        let log = &state.rsync_logs[0];
+        assert!(log.contains("["));
+        assert!(log.contains("]"));
+        assert!(log.contains("Test message"));
+    }
+}
 

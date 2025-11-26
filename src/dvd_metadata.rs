@@ -99,6 +99,7 @@ pub async fn get_dvd_id(device: &str) -> Result<String> {
 /// - "SEASON 3" -> Some(3)
 /// - "S02" -> Some(2)
 /// - "VOL 1" -> Some(1)
+#[allow(dead_code)]
 pub fn extract_season_from_volume(name: &str) -> Option<u32> {
     let patterns = [
         r"(?i)VOLUME\s*(\d+)",
@@ -472,6 +473,7 @@ async fn fetch_tv_episodes(client: &reqwest::Client, show_id: i64, season: u32) 
 
 /// Match disc title durations to episodes by runtime
 /// Returns updated episodes with correct title_index values
+#[allow(unused_mut)]
 pub fn match_episodes_by_duration(
     mut episodes: Vec<Episode>,
     title_durations: &[(usize, String)], // (title_index, "HH:MM:SS")
