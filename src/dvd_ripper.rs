@@ -5,12 +5,14 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::{debug, info};
 
+use crate::dvd_metadata::{DvdMetadata, MediaType};
 use crate::ripper::RipProgress;
 
 /// Rip a DVD using makemkvcon
 pub async fn rip_dvd<F, L>(
     device: &str,
     output_dir: &Path,
+    metadata: Option<&DvdMetadata>,
     mut progress_callback: F,
     mut log_callback: L,
 ) -> Result<()>
@@ -233,6 +235,17 @@ where
         info!("Successfully ripped DVD");
         log_callback("✅ DVD rip complete".to_string());
         
+        // Rename files based on metadata if available
+        if let Some(meta) = metadata {
+            log_callback("Renaming files with metadata...".to_string());
+            if let Err(e) = rename_dvd_files(output_dir, meta).await {
+                warn!("Failed to rename files: {}", e);
+                log_callback(format!("⚠️  Could not rename files: {}", e));
+            } else {
+                log_callback("✅ Files renamed".to_string());
+            }
+        }
+        
         progress_callback(RipProgress {
             current_track: title_count,
             total_tracks: title_count,
@@ -245,6 +258,78 @@ where
     } else {
         Err(anyhow!("DVD rip failed with status: {}", rip_status))
     }
+}
+
+/// Rename MKV files based on metadata
+async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<()> {
+    use tokio::fs;
+    
+    let mut entries = fs::read_dir(output_dir).await?;
+    let mut mkv_files = Vec::new();
+    
+    // Collect all MKV files
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+            mkv_files.push(path);
+        }
+    }
+    
+    // Sort files by name to ensure consistent ordering
+    mkv_files.sort();
+    
+    match metadata.media_type {
+        MediaType::TVShow => {
+            // Rename as episodes
+            for (idx, file_path) in mkv_files.iter().enumerate() {
+                if let Some(episode) = metadata.episodes.get(idx) {
+                    let new_name = format!(
+                        "{} - S{:02}E{:02} - {}.mkv",
+                        sanitize_filename(&metadata.title),
+                        episode.season,
+                        episode.episode,
+                        sanitize_filename(&episode.title)
+                    );
+                    
+                    let new_path = output_dir.join(&new_name);
+                    
+                    info!("Renaming {} -> {}", file_path.display(), new_name);
+                    fs::rename(file_path, &new_path).await?;
+                }
+            }
+        }
+        MediaType::Movie => {
+            // Rename single movie file
+            if let Some(file_path) = mkv_files.first() {
+                let new_name = if let Some(year) = &metadata.year {
+                    format!("{} ({}).mkv", sanitize_filename(&metadata.title), year)
+                } else {
+                    format!("{}.mkv", sanitize_filename(&metadata.title))
+                };
+                
+                let new_path = output_dir.join(&new_name);
+                
+                info!("Renaming {} -> {}", file_path.display(), new_name);
+                fs::rename(file_path, &new_path).await?;
+            }
+        }
+        MediaType::Unknown => {
+            // Don't rename if we don't know the type
+            debug!("Skipping rename for unknown media type");
+        }
+    }
+    
+    Ok(())
+}
+
+/// Sanitize filename by removing invalid characters
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => c,
+        })
+        .collect()
 }
 
 /// Configure MakeMKV to skip subtitles

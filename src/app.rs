@@ -282,20 +282,57 @@ async fn rip_dvd_disc(
 
     add_log(&tui_state, device, format!("📀 Detected DVD in {}", device)).await;
 
-    // Update album info to show it's a DVD
+    // Try to get DVD volume name and metadata
+    add_log(&tui_state, device, "🔍 Fetching DVD metadata...".to_string()).await;
+    
+    let volume_name = get_dvd_volume_name(device).await.ok();
+    let dvd_metadata = if !args.skip_metadata {
+        match crate::dvd_metadata::fetch_dvd_metadata("", volume_name.as_deref()).await {
+            Ok(meta) => {
+                add_log(&tui_state, device, format!("📺 Found: {}", meta.title)).await;
+                if meta.media_type == crate::dvd_metadata::MediaType::TVShow && !meta.episodes.is_empty() {
+                    add_log(&tui_state, device, format!("📝 {} episodes detected", meta.episodes.len())).await;
+                }
+                Some(meta)
+            }
+            Err(e) => {
+                add_log(&tui_state, device, format!("⚠️  Could not fetch metadata: {}", e)).await;
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let album_info = if let Some(ref meta) = dvd_metadata {
+        if let Some(year) = &meta.year {
+            format!("{} ({})", meta.title, year)
+        } else {
+            meta.title.clone()
+        }
+    } else {
+        volume_name.unwrap_or_else(|| "DVD Video".to_string())
+    };
+
+    // Update album info
     {
         let mut s = tui_state.lock().await;
         if let Some(drive) = s.drives.iter_mut().find(|d| d.device == device) {
-            drive.album_info = Some("DVD Video".to_string());
+            drive.album_info = Some(album_info.clone());
         }
     }
 
     let output_folder = args.get_output_folder();
     let dvd_output = output_folder.join("DVDs");
     
-    // Create DVD-specific output folder with timestamp
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let dvd_dir = dvd_output.join(format!("DVD_{}", timestamp));
+    // Create DVD-specific output folder with title or timestamp
+    let folder_name = if let Some(ref meta) = dvd_metadata {
+        crate::ripper::sanitize_filename(&meta.title)
+    } else {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        format!("DVD_{}", timestamp)
+    };
+    let dvd_dir = dvd_output.join(folder_name);
     
     add_log(&tui_state, device, format!("Output: {}", dvd_dir.display())).await;
 
@@ -307,6 +344,7 @@ async fn rip_dvd_disc(
     let result = crate::dvd_ripper::rip_dvd(
         device,
         &dvd_dir,
+        dvd_metadata.as_ref(),
         move |progress| {
             let device = device_clone.clone();
             let tui_state = Arc::clone(&tui_state_clone);
@@ -353,6 +391,26 @@ async fn rip_dvd_disc(
     }
 
     Ok(())
+}
+
+async fn get_dvd_volume_name(device: &str) -> Result<String> {
+    let output = tokio::process::Command::new("drutil")
+        .arg("status")
+        .arg("-drive")
+        .arg(device)
+        .output()
+        .await?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    // Extract volume label
+    let volume_name = stdout.lines()
+        .find(|line| line.contains("Name:"))
+        .and_then(|line| line.split(':').nth(1))
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| anyhow::anyhow!("No volume name found"))?;
+    
+    Ok(volume_name)
 }
 
 fn create_dummy_metadata() -> metadata::DiscMetadata {

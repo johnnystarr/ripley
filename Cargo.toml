@@ -37,3 +37,4 @@ base64 = "0.22"
 # Utilities
 chrono = "0.4"
 regex = "1.10"
+urlencoding = "2.1"
