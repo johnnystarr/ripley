@@ -67,6 +67,7 @@ impl Args {
     }
     
     /// Check if this is the rename subcommand
+    #[allow(dead_code)]
     pub fn is_rename_command(&self) -> bool {
         matches!(self.command, Some(Command::Rename { .. }))
     }

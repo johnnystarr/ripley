@@ -83,6 +83,7 @@ pub async fn rename_with_filebot(
 }
 
 /// Check if Filebot is available on the system
+#[allow(dead_code)]
 pub async fn is_filebot_available() -> bool {
     tokio::process::Command::new("which")
         .arg("filebot")

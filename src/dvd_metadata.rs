@@ -620,6 +620,7 @@ mod tests {
                     title: "Pilot".to_string(),
                     title_index: 0,
                     runtime_minutes: Some(22),
+                    overview: Some("First episode".to_string()),
                 },
             ],
         };

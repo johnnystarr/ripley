@@ -373,7 +373,7 @@ fn ui(f: &mut Frame, state: &AppState) {
         InputMode::AwaitingTitleInput { device, default_title } => {
             render_input_dialog(f, "TV Show Title", &format!("Enter title for {} (or press Enter to use default)", device), &state.current_input, default_title.as_deref());
         }
-        InputMode::AwaitingEpisodeInput { device, title } => {
+        InputMode::AwaitingEpisodeInput { device: _, title } => {
             render_input_dialog(f, "Starting Episode", &format!("Disc starts with episode # for '{}'", title), &state.current_input, None);
         }
         InputMode::Normal => {}

@@ -125,6 +125,7 @@ impl Config {
     }
     
     /// Get TMDB API key from config
+    #[allow(dead_code)]
     pub fn get_tmdb_api_key(&self) -> Option<String> {
         self.tmdb_api_key.clone()
     }
