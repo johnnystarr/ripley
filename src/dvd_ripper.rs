@@ -8,6 +8,20 @@ use tracing::{debug, info, warn};
 use crate::dvd_metadata::{DvdMetadata, MediaType};
 use crate::ripper::RipProgress;
 
+/// Parse duration string "H:MM:SS" or "HH:MM:SS" to minutes
+fn parse_duration_to_minutes(duration: &str) -> Option<u32> {
+    let parts: Vec<&str> = duration.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    
+    let hours: u32 = parts[0].parse().ok()?;
+    let minutes: u32 = parts[1].parse().ok()?;
+    let seconds: u32 = parts[2].parse().ok()?;
+    
+    Some(hours * 60 + minutes + if seconds >= 30 { 1 } else { 0 })
+}
+
 /// Rip a DVD using makemkvcon
 pub async fn rip_dvd<F, L>(
     device: &str,
@@ -152,143 +166,168 @@ where
         None
     };
 
-    log_callback(format!("Found {} titles, starting rip...", title_count));
+    // Filter titles to rip based on duration (skip "Play All" compilations)
+    let titles_to_rip: Vec<u32> = title_durations.iter()
+        .filter_map(|(idx, duration)| {
+            if let Some(minutes) = parse_duration_to_minutes(duration) {
+                // Only rip titles that look like individual episodes (18-50 min)
+                // or reasonable movies (60+ min), skip "Play All" compilations (90-180 min)
+                if (minutes >= 18 && minutes <= 50) || minutes >= 120 {
+                    Some(*idx as u32)
+                } else {
+                    log_callback(format!("Skipping title {} ({} min) - likely a compilation", idx, minutes));
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    // Rip the disc (all titles)
-    info!("Starting DVD rip");
+    log_callback(format!("Ripping {} titles (filtered from {})", titles_to_rip.len(), title_count));
+    info!("Starting DVD rip of titles: {:?}", titles_to_rip);
     
     progress_callback(RipProgress {
         current_track: 0,
-        total_tracks: title_count,
+        total_tracks: titles_to_rip.len() as u32,
         track_name: "Starting rip...".to_string(),
         percentage: 0.0,
         status: crate::ripper::RipStatus::Ripping,
     });
 
-    // Configure makemkv preferences
-    // Skip subtitles and only rip titles >= 5 minutes (300 seconds)
-    let mut rip_child = Command::new("makemkvcon")
-        .arg("-r")
-        .arg("--minlength=300")  // Minimum title length in seconds (5 minutes)
-        .arg("--noscan")         // Don't scan disc again, we already did
-        .arg("mkv")
-        .arg(format!("dev:{}", device))
-        .arg("all")
-        .arg(output_dir)
-        .env("MAKEMKV_PROFILE", "default")  // Use default profile
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| anyhow!("Failed to start makemkvcon rip: {}", e))?;
-
-    let stdout = rip_child.stdout.take()
-        .ok_or_else(|| anyhow!("Failed to capture stdout"))?;
-    let stderr = rip_child.stderr.take()
-        .ok_or_else(|| anyhow!("Failed to capture stderr"))?;
-    
-    let mut stdout_reader = BufReader::new(stdout).lines();
-    let mut stderr_reader = BufReader::new(stderr).lines();
-    let mut current_title = 0;
-
-    // Parse rip output
-    loop {
-        tokio::select! {
-            result = stdout_reader.next_line() => {
-                match result {
-                    Ok(Some(line)) => {
-                        info!("makemkvcon: {}", line);
-                        log_callback(line.clone());
-                        
-                        // Parse progress: "PRGV:current,total,max"
-                        if line.starts_with("PRGV:") {
-                            if let Some(progress_str) = line.strip_prefix("PRGV:") {
-                                let parts: Vec<&str> = progress_str.split(',').collect();
-                                if parts.len() >= 3 {
-                                    if let (Ok(current), Ok(max)) = (parts[0].parse::<u32>(), parts[2].parse::<u32>()) {
-                                        let percentage = if max > 0 {
-                                            (current as f32 / max as f32) * 100.0
-                                        } else {
-                                            0.0
-                                        };
-                                        
-                                        progress_callback(RipProgress {
-                                            current_track: current_title,
-                                            total_tracks: title_count,
-                                            track_name: format!("Title {}", current_title),
-                                            percentage,
-                                            status: crate::ripper::RipStatus::Ripping,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // Track title changes: "PRGC:current,total,message"
-                        if line.starts_with("PRGC:") {
-                            if let Some(progress_str) = line.strip_prefix("PRGC:") {
-                                let parts: Vec<&str> = progress_str.split(',').collect();
-                                if !parts.is_empty() {
-                                    if let Ok(title) = parts[0].parse::<u32>() {
-                                        current_title = title;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(e) => {
-                        debug!("Error reading rip stdout: {}", e);
-                        break;
-                    }
-                }
-            }
-            result = stderr_reader.next_line() => {
-                match result {
-                    Ok(Some(line)) => {
-                        if line.contains("ERROR") || line.contains("error") || line.contains("failed") {
-                            tracing::error!("makemkvcon: {}", line);
-                            log_callback(format!("ERROR: {}", line));
-                        } else {
-                            tracing::warn!("makemkvcon: {}", line);
-                            log_callback(line.clone());
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => debug!("Error reading rip stderr: {}", e),
-                }
-            }
-        }
-    }
-
-    let rip_status = rip_child.wait().await?;
-    
-    if rip_status.success() {
-        info!("Successfully ripped DVD");
-        log_callback("✅ DVD rip complete".to_string());
-        
-        // Rename files based on metadata if available
-        if let Some(meta) = &metadata {
-            log_callback("Renaming files with metadata...".to_string());
-            if let Err(e) = rename_dvd_files(output_dir, meta).await {
-                warn!("Failed to rename files: {}", e);
-                log_callback(format!("⚠️  Could not rename files: {}", e));
-            } else {
-                log_callback("✅ Files renamed".to_string());
-            }
-        }
+    // Rip each title individually
+    for (idx, title_num) in titles_to_rip.iter().enumerate() {
+        let title_progress = (idx as f32 / titles_to_rip.len() as f32) * 100.0;
+        log_callback(format!("📀 Starting title {} ({}/{})", title_num, idx + 1, titles_to_rip.len()));
         
         progress_callback(RipProgress {
-            current_track: title_count,
-            total_tracks: title_count,
-            track_name: "Complete".to_string(),
-            percentage: 100.0,
-            status: crate::ripper::RipStatus::Complete,
+            current_track: idx as u32,
+            total_tracks: titles_to_rip.len() as u32,
+            track_name: format!("Title {} - 0%", title_num),
+            percentage: title_progress,
+            status: crate::ripper::RipStatus::Ripping,
         });
         
-        Ok(())
-    } else {
-        Err(anyhow!("DVD rip failed with status: {}", rip_status))
+        let mut rip_child = Command::new("makemkvcon")
+            .arg("-r")
+            .arg("--progress=-same")  // Output progress to stdout
+            .arg("--minlength=300")   // Minimum title length in seconds (5 minutes)
+            .arg("--noscan")          // Don't scan disc again, we already did
+            .arg("mkv")
+            .arg(format!("dev:{}", device))
+            .arg(title_num.to_string())  // Rip specific title by number
+            .arg(output_dir)
+            .env("MAKEMKV_PROFILE", "default")  // Use default profile
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| anyhow!("Failed to start makemkvcon rip: {}", e))?;
+
+        let stdout = rip_child.stdout.take()
+            .ok_or_else(|| anyhow!("Failed to capture stdout"))?;
+        let stderr = rip_child.stderr.take()
+            .ok_or_else(|| anyhow!("Failed to capture stderr"))?;
+        
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+        let mut title_percentage = 0.0;
+
+        // Parse rip output for this title
+        loop {
+            tokio::select! {
+                result = stdout_reader.next_line() => {
+                    match result {
+                        Ok(Some(line)) => {
+                            debug!("makemkvcon: {}", line);
+                            
+                            // Parse progress: "PRGV:current,total,max"
+                            if line.starts_with("PRGV:") {
+                                if let Some(progress_str) = line.strip_prefix("PRGV:") {
+                                    let parts: Vec<&str> = progress_str.split(',').collect();
+                                    if parts.len() >= 3 {
+                                        if let (Ok(current), Ok(max)) = (parts[0].parse::<u32>(), parts[2].parse::<u32>()) {
+                                            title_percentage = if max > 0 {
+                                                (current as f32 / max as f32) * 100.0
+                                            } else {
+                                                0.0
+                                            };
+                                            
+                                            // Calculate overall progress
+                                            let overall = ((idx as f32 + title_percentage / 100.0) / titles_to_rip.len() as f32) * 100.0;
+                                            
+                                            progress_callback(RipProgress {
+                                                current_track: idx as u32,
+                                                total_tracks: titles_to_rip.len() as u32,
+                                                track_name: format!("Title {} - {:.0}%", title_num, title_percentage),
+                                                percentage: overall,
+                                                status: crate::ripper::RipStatus::Ripping,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Log important messages
+                            if line.starts_with("MSG:") || line.starts_with("TINFO:") {
+                                log_callback(line.clone());
+                            }
+                        }
+                            Ok(None) => break,
+                        Err(e) => {
+                            debug!("Error reading rip stdout: {}", e);
+                            break;
+                        }
+                    }
+                }
+                result = stderr_reader.next_line() => {
+                    match result {
+                        Ok(Some(line)) => {
+                            if line.contains("ERROR") || line.contains("error") || line.contains("failed") {
+                                tracing::error!("makemkvcon: {}", line);
+                                log_callback(format!("❌ ERROR: {}", line));
+                            } else {
+                                debug!("makemkvcon stderr: {}", line);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => debug!("Error reading rip stderr: {}", e),
+                    }
+                }
+            }
+        }
+
+        let rip_status = rip_child.wait().await?;
+        
+        if !rip_status.success() {
+            return Err(anyhow!("Failed to rip title {}: status {}", title_num, rip_status));
+        }
+        
+        log_callback(format!("✅ Title {} complete ({:.0}%)", title_num, title_percentage));
     }
+    
+    info!("Successfully ripped all titles");
+    log_callback("✅ DVD rip complete".to_string());
+    
+    // Rename files based on metadata if available
+    if let Some(meta) = &metadata {
+        log_callback("Renaming files with metadata...".to_string());
+        if let Err(e) = rename_dvd_files(output_dir, meta).await {
+            warn!("Failed to rename files: {}", e);
+            log_callback(format!("⚠️  Could not rename files: {}", e));
+        } else {
+            log_callback("✅ Files renamed".to_string());
+        }
+    }
+    
+    progress_callback(RipProgress {
+        current_track: titles_to_rip.len() as u32,
+        total_tracks: titles_to_rip.len() as u32,
+        track_name: "Complete".to_string(),
+        percentage: 100.0,
+        status: crate::ripper::RipStatus::Complete,
+    });
+    
+    Ok(())
 }
 
 /// Rename MKV files based on metadata
@@ -312,8 +351,12 @@ async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<(
     match metadata.media_type {
         MediaType::TVShow => {
             // Rename as episodes with PascalCase.With.Periods format
-            for (idx, file_path) in mkv_files.iter().enumerate() {
-                if let Some(episode) = metadata.episodes.get(idx) {
+            // Match files to episodes by title_index from duration matching
+            for (file_idx, file_path) in mkv_files.iter().enumerate() {
+                // Find episode that corresponds to this MakeMKV title
+                // MakeMKV outputs files as title_t00.mkv, title_t01.mkv, etc.
+                // where the number corresponds to the title index
+                if let Some(episode) = metadata.episodes.iter().find(|e| e.title_index == file_idx as u32) {
                     let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
                     let episode_title = crate::ripper::to_pascal_case_with_periods(&episode.title);
                     let new_name = format!(
@@ -326,8 +369,11 @@ async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<(
                     
                     let new_path = output_dir.join(&new_name);
                     
-                    info!("Renaming {} -> {}", file_path.display(), new_name);
+                    info!("Renaming {} -> {} (Title {} = S{:02}E{:02})", 
+                          file_path.display(), new_name, file_idx, episode.season, episode.episode);
                     fs::rename(file_path, &new_path).await?;
+                } else {
+                    info!("Skipping file {} (no episode match for title {})", file_path.display(), file_idx);
                 }
             }
         }
