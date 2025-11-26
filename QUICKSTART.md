@@ -116,8 +116,9 @@ Check `~/ripley.log` for detailed error messages.
 ## DVD & Blu-ray Support
 - **Detection:** Automatically detects DVDs and Blu-rays vs Audio CDs
 - **Output:** 
-  - DVDs: `~/Desktop/Rips/Music/DVDs/Title/`
-  - Blu-rays: `~/Desktop/Rips/Music/BluRays/Title/`
+  - DVDs: `~/Desktop/Rips/DVDs/Title/`
+  - Blu-rays: `~/Desktop/Rips/BluRays/Title/`
+  - Music CDs: `~/Desktop/Rips/Music/Artist/Album/` (or custom path)
 - **Format:** MKV files (lossless)
 - **Requirements:** MakeMKV installed with `makemkvcon` in PATH
 - **Progress:** Real-time progress tracking in TUI

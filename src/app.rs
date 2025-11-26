@@ -335,11 +335,14 @@ async fn rip_dvd_disc(
         }
     }
 
-    let output_folder = args.get_output_folder();
+    // Music CDs use the configured output folder, videos use ~/Desktop/Rips
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let base_rips = std::path::PathBuf::from(home).join("Desktop").join("Rips");
+    
     let media_output = match media_type {
-        drive::MediaType::BluRay => output_folder.join("BluRays"),
-        drive::MediaType::DVD => output_folder.join("DVDs"),
-        _ => output_folder.join("Videos"),
+        drive::MediaType::BluRay => base_rips.join("BluRays"),
+        drive::MediaType::DVD => base_rips.join("DVDs"),
+        _ => base_rips.join("Videos"),
     };
     
     // Create output folder with title or timestamp
