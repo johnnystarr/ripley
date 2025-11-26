@@ -135,6 +135,15 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Ripley Logo */}
+      <div className="flex justify-center mb-8">
+        <img 
+          src="/ripley-logo.png" 
+          alt="Ripley Logo" 
+          className="w-[30%] h-auto"
+        />
+      </div>
+
       <h1 className="text-3xl font-bold text-slate-100">Dashboard</h1>
 
       {/* Active Issues */}
