@@ -40,6 +40,41 @@ where
 {
     info!("Starting rip of {} - {} from {}", metadata.artist, metadata.album, device);
 
+    // Kill any existing abcde processes for this device
+    info!("Checking for existing abcde processes on {}...", device);
+    let _ = Command::new("pkill")
+        .arg("-f")
+        .arg(&format!("abcde.*{}", device))
+        .output()
+        .await;
+    
+    // Give processes time to die
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Unmount the disc if it's mounted (required for abcde to access it)
+    info!("Unmounting {} if mounted...", device);
+    let unmount_result = Command::new("diskutil")
+        .arg("unmountDisk")
+        .arg(device)
+        .output()
+        .await;
+    
+    match unmount_result {
+        Ok(output) if output.status.success() => {
+            info!("Successfully unmounted {}", device);
+        }
+        Ok(output) => {
+            let err = String::from_utf8_lossy(&output.stderr);
+            debug!("Unmount message: {}", err);
+        }
+        Err(e) => {
+            debug!("Could not unmount {}: {}", device, e);
+        }
+    }
+    
+    // Give the system a moment to release the device
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
     // Create output directory structure: Artist/Album/
     let album_dir = output_dir
         .join(sanitize_filename(&metadata.artist))
@@ -48,8 +83,8 @@ where
     tokio::fs::create_dir_all(&album_dir).await
         .context("Failed to create album directory")?;
 
-    // Configure abcde
-    let config = create_abcde_config(&album_dir, quality)?;
+    // Configure abcde with metadata
+    let config = create_abcde_config(&album_dir, quality, metadata)?;
     let config_path = album_dir.join(".abcde.conf");
     tokio::fs::write(&config_path, config).await?;
 
@@ -67,41 +102,87 @@ where
         .spawn()
         .context("Failed to start abcde - is it installed?")?;
 
-    // Track progress by parsing abcde output
+    // Track progress by parsing abcde output in real-time
     let stdout = child.stdout.take().unwrap();
-    let mut reader = BufReader::new(stdout).lines();
+    let stderr = child.stderr.take().unwrap();
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
 
     let total_tracks = metadata.tracks.len() as u32;
     let mut current_track = 0;
+    let mut stderr_lines = Vec::new();
 
-    while let Ok(Some(line)) = reader.next_line().await {
-        debug!("abcde: {}", line);
+    // Process output in real-time
+    loop {
+        tokio::select! {
+            result = stdout_reader.next_line() => {
+                match result {
+                    Ok(Some(line)) => {
+                        info!("abcde: {}", line);
+                        
+                        // Parse progress from abcde output
+                        if line.contains("Grabbing track") || line.contains("Reading track") {
+                            if let Some(track_num) = line.split("track").nth(1)
+                                .and_then(|s| s.trim().split_whitespace().next())
+                                .and_then(|s| s.parse::<u32>().ok()) 
+                            {
+                                current_track = track_num;
+                                let track_name = metadata.tracks.get((current_track - 1) as usize)
+                                    .map(|t| t.title.clone())
+                                    .unwrap_or_else(|| format!("Track {}", current_track));
 
-        // Parse progress from abcde output
-        if line.contains("Grabbing track") {
-            current_track += 1;
-            let track_name = metadata.tracks.get((current_track - 1) as usize)
-                .map(|t| t.title.clone())
-                .unwrap_or_else(|| format!("Track {}", current_track));
-
-            progress_callback(RipProgress {
-                current_track,
-                total_tracks,
-                track_name: track_name.clone(),
-                percentage: (current_track as f32 / total_tracks as f32) * 100.0,
-                status: RipStatus::Ripping,
-            });
-        } else if line.contains("Encoding") {
-            progress_callback(RipProgress {
-                current_track,
-                total_tracks,
-                track_name: metadata.tracks.get((current_track - 1) as usize)
-                    .map(|t| t.title.clone())
-                    .unwrap_or_else(|| format!("Track {}", current_track)),
-                percentage: (current_track as f32 / total_tracks as f32) * 100.0,
-                status: RipStatus::Encoding,
-            });
+                                progress_callback(RipProgress {
+                                    current_track,
+                                    total_tracks,
+                                    track_name: track_name.clone(),
+                                    percentage: (current_track as f32 / total_tracks as f32) * 100.0,
+                                    status: RipStatus::Ripping,
+                                });
+                            }
+                        } else if line.contains("Encoding") || line.contains("encoding") {
+                            progress_callback(RipProgress {
+                                current_track,
+                                total_tracks,
+                                track_name: metadata.tracks.get((current_track - 1) as usize)
+                                    .map(|t| t.title.clone())
+                                    .unwrap_or_else(|| format!("Track {}", current_track)),
+                                percentage: (current_track as f32 / total_tracks as f32) * 100.0,
+                                status: RipStatus::Encoding,
+                            });
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        debug!("Error reading stdout: {}", e);
+                        break;
+                    }
+                }
+            }
+            result = stderr_reader.next_line() => {
+                match result {
+                    Ok(Some(line)) => {
+                        if line.contains("ERROR") || line.contains("error") || line.contains("failed") {
+                            tracing::error!("abcde: {}", line);
+                        } else {
+                            tracing::warn!("abcde: {}", line);
+                        }
+                        stderr_lines.push(line);
+                    }
+                    Ok(None) => {}
+                    Err(e) => debug!("Error reading stderr: {}", e),
+                }
+            }
         }
+    }
+
+    // Drain any remaining stderr
+    while let Ok(Some(line)) = stderr_reader.next_line().await {
+        if line.contains("ERROR") || line.contains("error") || line.contains("failed") {
+            tracing::error!("abcde: {}", line);
+        } else {
+            tracing::warn!("abcde: {}", line);
+        }
+        stderr_lines.push(line);
     }
 
     // Wait for completion
@@ -118,12 +199,32 @@ where
         });
         Ok(())
     } else {
-        Err(anyhow::anyhow!("abcde failed with status: {}", status))
+        // Include stderr in error message
+        let error_msg = if !stderr_lines.is_empty() {
+            format!("abcde failed with status: {}\nErrors:\n{}", 
+                status, 
+                stderr_lines.join("\n"))
+        } else {
+            format!("abcde failed with status: {}", status)
+        };
+        tracing::error!("{}", error_msg);
+        Err(anyhow::anyhow!(error_msg))
     }
 }
 
-/// Create abcde configuration
-fn create_abcde_config(output_dir: &Path, quality: u8) -> Result<String> {
+/// Create abcde configuration with metadata
+fn create_abcde_config(output_dir: &Path, quality: u8, metadata: &DiscMetadata) -> Result<String> {
+    // Build track names for abcde
+    let mut track_data = String::new();
+    for (i, track) in metadata.tracks.iter().enumerate() {
+        let track_num = i + 1;
+        let safe_title = track.title.replace("'", "'\\''");
+        track_data.push_str(&format!("TRACKNAME[{}]='{}'\n", track_num, safe_title));
+    }
+    
+    let safe_artist = metadata.artist.replace("'", "'\\''");
+    let safe_album = metadata.album.replace("'", "'\\''");
+    
     let config = format!(
         r#"
 # Ripley auto-generated abcde config
@@ -137,10 +238,18 @@ OUTPUTFORMAT='${{TRACKNUM}}. ${{TRACKFILE}}'
 VAOUTPUTFORMAT='${{TRACKNUM}}. ${{ARTISTFILE}}-${{TRACKFILE}}'
 ONETRACKOUTPUTFORMAT='${{ARTISTFILE}}-${{ALBUMFILE}}'
 MAXPROCS=2
-CDDBMETHOD=musicbrainz
+CDDBMETHOD=cddb
+
+# Metadata from MusicBrainz
+DARTIST='{}'
+DALBUM='{}'
+{}
 "#,
         output_dir.display(),
-        quality
+        quality,
+        safe_artist,
+        safe_album,
+        track_data
     );
 
     Ok(config)

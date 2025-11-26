@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 const MUSICBRAINZ_API: &str = "https://musicbrainz.org/ws/2";
 const USER_AGENT: &str = "Ripley/0.1.0 (https://github.com/johnny/ripley)";
@@ -186,40 +186,76 @@ pub async fn get_disc_id(device: &str) -> Result<String> {
             .context("Failed to parse offset")?);
     }
     
-    let leadout_offset: u32 = parts[2 + num_tracks as usize].parse()
-        .context("Failed to parse leadout offset")?;
+    // Get exact leadout offset from drutil (cd-discid rounds seconds, losing precision)
+    // Leadout = disc blocks + first track offset
+    let drutil_output = std::process::Command::new("drutil")
+        .arg("status")
+        .output()
+        .context("Failed to run drutil")?;
+    
+    let drutil_text = String::from_utf8_lossy(&drutil_output.stdout);
+    let blocks_line = drutil_text.lines()
+        .find(|line| line.contains("Space Used:") && line.contains("blocks:"))
+        .context("Could not find blocks in drutil output")?;
+    
+    // Parse "Space Used:   42:54:05         blocks:   193055 / ..."
+    let blocks_str = blocks_line.split("blocks:")
+        .nth(1)
+        .and_then(|s| s.trim().split_whitespace().next())
+        .context("Could not parse blocks from drutil")?;
+    
+    let disc_blocks: u32 = blocks_str.parse()
+        .context("Failed to parse block count")?;
+    
+    let first_track_offset = offsets.first().copied().unwrap_or(150);
+    let leadout_offset = disc_blocks + first_track_offset;
+    
+    debug!("Disc blocks: {}, first track offset: {}, leadout: {}", 
+           disc_blocks, first_track_offset, leadout_offset);
     
     // Calculate MusicBrainz disc ID using SHA-1
+    // Algorithm from: https://musicbrainz.org/doc/Disc_ID_Calculation
     let mut hasher = Sha1::new();
     
-    // First track (always 1 for audio CDs)
-    hasher.update(format!("{:02X}", 1).as_bytes());
+    let first_track = 1u8;  // Audio CDs always start at track 1
+    let last_track = num_tracks as u8;
     
-    // Last track
-    hasher.update(format!("{:02X}", num_tracks).as_bytes());
+    // First track number (1 byte as 2 hex chars)
+    hasher.update(format!("{:02X}", first_track).as_bytes());
     
-    // Leadout in frames
+    // Last track number (1 byte as 2 hex chars)
+    hasher.update(format!("{:02X}", last_track).as_bytes());
+    
+    // Lead-out track offset (4 bytes as 8 hex chars) - this is FrameOffset[0]
     hasher.update(format!("{:08X}", leadout_offset).as_bytes());
     
-    // Track offsets (pad to 99 tracks)
-    for i in 0..99 {
-        if i < offsets.len() {
-            hasher.update(format!("{:08X}", offsets[i]).as_bytes());
+    // 99 frame offsets (4 bytes as 8 hex chars each) - FrameOffset[1..99]
+    // Position i in the array corresponds to track i
+    // So track 1 goes in position 1, track 2 in position 2, etc.
+    for i in 1..=99 {
+        let offset = if i >= first_track as usize && i <= last_track as usize {
+            // This position has a valid track
+            let track_index = i - first_track as usize;
+            offsets.get(track_index).copied().unwrap_or(0)
         } else {
-            hasher.update(b"00000000");
-        }
+            // No track at this position
+            0
+        };
+        hasher.update(format!("{:08X}", offset).as_bytes());
     }
     
     // Compute SHA-1 hash
     let hash = hasher.finalize();
     
-    // Encode as base64 URL-safe (replace + with ., / with _, remove = padding)
+    // Encode as base64 with MusicBrainz special characters
+    // MusicBrainz uses: + -> ., / -> _, = -> -
     let disc_id = base64::engine::general_purpose::STANDARD.encode(&hash)
         .replace('+', ".")
         .replace('/', "_")
-        .replace('=', "-");
+        .trim_end_matches('=')
+        .to_string() + "-";
     
-    debug!("Calculated MusicBrainz disc ID: {}", disc_id);
+    info!("Calculated MusicBrainz disc ID: {}", disc_id);
     
     Ok(disc_id)
 }
