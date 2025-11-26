@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::dvd_metadata::{DvdMetadata, MediaType};
 use crate::ripper::RipProgress;

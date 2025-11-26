@@ -91,7 +91,7 @@ pub async fn get_dvd_id(device: &str) -> Result<String> {
 }
 
 /// Fetch DVD metadata from TMDB by searching with title
-pub async fn fetch_dvd_metadata(disc_id: &str, volume_name: Option<&str>) -> Result<DvdMetadata> {
+pub async fn fetch_dvd_metadata(_disc_id: &str, volume_name: Option<&str>) -> Result<DvdMetadata> {
     // Check if TMDB API key is configured
     if TMDB_API_KEY == "YOUR_TMDB_API_KEY" {
         warn!("TMDB API key not configured, skipping metadata lookup");
