@@ -27,6 +27,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 - [x] **Typography**: Modern sans-serif font (Inter or similar via Tailwind)
 - [x] **Icons**: Font Awesome for all icons (disc, play, stop, folder, cog, etc.)
 - [x] **Layout**: Single-page responsive dashboard with sidebar navigation
+- [x] **Logo**: Ripley logo displayed on Dashboard (ripley-logo.png at 30% size)
 
 ## Core Components
 
@@ -42,6 +43,7 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 
 ### 2. Dashboard Page (TUI-Inspired Real-Time Monitoring)
 - [x] `Dashboard.jsx` - Real-time monitoring of automatic ripping operations
+- [x] **Ripley Logo** - Centered at top of dashboard (30% width)
 - [x] **Active Issues Alert Section**
   - [x] Tailwind alert cards for unresolved issues
   - [x] Issue type badges (RipFailure, MetadataFailure, FilebotError, etc.)
@@ -65,28 +67,28 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
   - [x] Last 100 logs displayed
 
 ### 3. Configuration Page
-- [ ] `Configuration.jsx` - Editable configuration
-- [ ] **API Keys Section**
-  - [ ] OpenAI API Key input (password field with show/hide toggle)
-  - [ ] TMDB API Key input
-- [ ] **Notifications Section**
-  - [ ] Enable/disable toggle
-  - [ ] Topic input field
-- [ ] **Rsync Section**
-  - [ ] Enable/disable toggle
-  - [ ] Destination path input
-- [ ] **Speech Match Section**
-  - [ ] Enable/disable toggle
-  - [ ] Audio duration slider (30-600 seconds)
-  - [ ] Whisper model dropdown
-  - [ ] Use OpenAI API toggle
-- [ ] **Filebot Section**
-  - [ ] Skip by default toggle
-  - [ ] Database dropdown (TheTVDB, TheMovieDB)
-  - [ ] Order dropdown (Airdate, DVD)
-  - [ ] Use for music toggle
-- [ ] "Save Configuration" button
-- [ ] Success/error toast notifications
+- [x] `Configuration.jsx` - Fully editable configuration with all settings
+- [x] **API Keys Section**
+  - [x] OpenAI API Key input (password field with show/hide toggle)
+  - [x] TMDB API Key input (password field with show/hide toggle)
+- [x] **Notifications Section**
+  - [x] Enable/disable toggle switch
+  - [x] Topic input field
+- [x] **Rsync Section**
+  - [x] Enable/disable toggle switch
+  - [x] Destination path input
+- [x] **Speech Match Section**
+  - [x] Enable/disable toggle switch
+  - [x] Audio duration slider (30-600 seconds) with live value display
+  - [x] Whisper model dropdown (tiny/base/small/medium/large)
+  - [x] Use OpenAI API toggle switch
+- [x] **Filebot Section**
+  - [x] Skip by default toggle switch
+  - [x] Database dropdown (TheTVDB, TheMovieDB)
+  - [x] Order dropdown (Airdate, DVD)
+  - [x] Use for music toggle switch
+- [x] "Save Configuration" button (top and bottom)
+- [x] Toast notifications for save success/error
 
 ### 4. Logs Page (SQLite History)
 - [x] `Logs.jsx` - Full log history viewer with database integration
@@ -178,7 +180,14 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 - [x] Loading spinners (FontAwesome spinner with animate-spin)
 - [x] Issue alerts displayed inline in Dashboard
 - [x] Error state displays with Tailwind alert styling
-- [ ] Toast notification system (react-hot-toast) - planned for non-critical notifications
+- [x] **Toast notification system (react-hot-toast)**
+  - [x] Integrated in App.jsx with dark theme styling
+  - [x] Configuration save success/error toasts
+  - [x] Drive detection toasts
+  - [x] Drive removal/ejection toasts
+  - [x] Issue creation toasts
+  - [x] Issue resolution toasts
+  - [x] Rip completion/error toasts
 - [ ] Error boundaries for component errors
 
 ### 9. Responsive Design
@@ -225,9 +234,9 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 
 ## Progress Tracking
 
-**Total Tasks**: ~75 completed / ~95 total (79%)
+**Total Tasks**: ~85 completed / ~95 total (89%)
 
-**Current Phase**: Core Monitoring UI Complete
+**Current Phase**: Polish & Integration
 
 **Completed**:
 - ✅ **Project Setup**: Vite + React + Tailwind + Font Awesome + build automation
@@ -239,10 +248,19 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
   - ✅ SPA fallback routing
   - ✅ --dev flag for hot reload
 - ✅ **Dashboard Page** (TUI-inspired):
+  - ✅ Ripley logo display (30% size)
   - ✅ Active issues display with resolution
   - ✅ Real-time drive detection cards
   - ✅ Live log stream with color coding
   - ✅ WebSocket integration for real-time updates
+  - ✅ Toast notifications for all events
+- ✅ **Configuration Page**:
+  - ✅ Complete settings UI with all config sections
+  - ✅ API keys (OpenAI, TMDB) with show/hide
+  - ✅ Toggle switches for all enable/disable options
+  - ✅ Slider for audio duration
+  - ✅ Dropdowns for model/database selection
+  - ✅ Save functionality with toast feedback
 - ✅ **Logs Page**:
   - ✅ SQLite database integration
   - ✅ Search and filter functionality
@@ -251,15 +269,16 @@ The Ripley web UI is a fully automated disc ripping monitoring system with:
 - ✅ **Navigation**: Simplified to Dashboard/Configuration/Logs (drives removed)
 - ✅ **API Client**: Complete with all 13 endpoints
 - ✅ **WebSocket**: Auto-reconnect with 9 event types
+- ✅ **Toast Notifications**: react-hot-toast integrated throughout
 
 **Next Steps**: 
 1. **Integrate database logging in app.rs** - Connect ripping operations to emit events that log to SQLite
 2. **Background drive polling** - Add task to periodically detect drives and emit DriveDetected/DriveRemoved events
-3. **Configuration page** - Build UI for managing ripley settings
-4. **Auto-eject on complete** - Emit DriveEjected event after successful rip
-5. **Issue creation on failures** - Automatically create issues when operations fail
-6. **Toast notifications** - Add react-hot-toast for success/error messages
-7. **Test with real disc ripping** - Full integration testing
+3. **Auto-eject on complete** - Emit DriveEjected event after successful rip
+4. **Issue creation on failures** - Automatically create issues when operations fail
+5. **Error boundaries** - Add React error boundaries for graceful error handling
+6. **Test with real disc ripping** - Full integration testing with actual discs
+7. **Performance optimization** - Virtualized lists for very large log datasets
 
 ## Notes & Architecture Decisions
 

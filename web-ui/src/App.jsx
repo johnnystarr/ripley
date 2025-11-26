@@ -9,6 +9,7 @@ import {
   faCircle,
 } from '@fortawesome/free-solid-svg-icons';
 import { useState, useEffect } from 'react';
+import { Toaster } from 'react-hot-toast';
 import { wsManager } from './websocket';
 
 // Import pages
@@ -37,6 +38,29 @@ function App() {
 
   return (
     <Router>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: '#1e293b',
+            color: '#f1f5f9',
+            border: '1px solid #334155',
+          },
+          success: {
+            iconTheme: {
+              primary: '#22d3ee',
+              secondary: '#1e293b',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#ef4444',
+              secondary: '#1e293b',
+            },
+          },
+        }}
+      />
       <div className="flex h-screen bg-slate-900">
         {/* Sidebar */}
         <Sidebar isOpen={sidebarOpen} wsConnected={wsConnected} />
@@ -77,9 +101,9 @@ function Sidebar({ isOpen, wsConnected }) {
       isOpen ? 'w-64' : 'w-0'
     } overflow-hidden`}>
       <div className="p-6">
-        <h1 className="text-2xl font-bold text-cyan-400 mb-8">
+        <h1 className="text-2xl font-bold text-yellow-400 mb-8">
           <FontAwesomeIcon icon={faCompactDisc} className="mr-2" />
-          Ripley
+          RIPLEY
         </h1>
 
         <nav className="space-y-2">

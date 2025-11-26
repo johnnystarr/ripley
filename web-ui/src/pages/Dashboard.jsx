@@ -9,6 +9,7 @@ import {
   faEject,
   faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
+import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
 
@@ -41,11 +42,15 @@ export default function Dashboard() {
       wsManager.on('DriveDetected', ({ drive }) => {
         setDrives(prev => {
           const exists = prev.some(d => d.device === drive.device);
+          if (!exists) {
+            toast.success(`Drive detected: ${drive.device}`);
+          }
           return exists ? prev : [...prev, drive];
         });
       }),
       wsManager.on('DriveRemoved', ({ device }) => {
         setDrives(prev => prev.filter(d => d.device !== device));
+        toast(`Drive removed: ${device}`, { icon: '💿' });
       }),
       wsManager.on('DriveEjected', ({ device }) => {
         const timestamp = new Date().toLocaleTimeString();
@@ -55,14 +60,22 @@ export default function Dashboard() {
           drive: device,
           timestamp
         }, ...prev].slice(0, 100));
+        toast.success(`Drive ejected: ${device}`);
       }),
       wsManager.on('IssueCreated', ({ issue }) => {
         setIssues(prev => [issue, ...prev]);
+        toast.error(`Issue: ${issue.title}`);
       }),
       wsManager.on('RipProgress', ({ progress, message, drive }) => {
         setDrives(prev => prev.map(d => 
           d.device === drive ? { ...d, progress, status: message } : d
         ));
+      }),
+      wsManager.on('RipCompleted', ({ disc, drive }) => {
+        toast.success(`Rip completed: ${disc}`);
+      }),
+      wsManager.on('RipError', ({ error }) => {
+        toast.error(`Rip error: ${error}`);
       }),
     ];
 
@@ -107,8 +120,9 @@ export default function Dashboard() {
     try {
       await api.resolveIssue(issueId);
       setIssues(prev => prev.filter(i => i.id !== issueId));
+      toast.success('Issue resolved');
     } catch (err) {
-      console.error('Failed to resolve issue:', err);
+      toast.error('Failed to resolve issue: ' + err.message);
     }
   };
 
