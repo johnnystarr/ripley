@@ -10,6 +10,7 @@ import {
   faTv,
   faExclamationTriangle,
   faSearch,
+  faUser,
 } from '@fortawesome/free-solid-svg-icons';
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
@@ -23,6 +24,7 @@ import Configuration from './pages/Configuration';
 import Logs from './pages/Logs';
 import Shows from './pages/Shows';
 import Issues from './pages/Issues';
+import Preferences from './pages/Preferences';
 import GlobalSearch from './components/GlobalSearch';
 
 function App() {
@@ -169,6 +171,7 @@ function App() {
                 <Route path="/shows" element={<ErrorBoundary><Shows /></ErrorBoundary>} />
                 <Route path="/issues" element={<ErrorBoundary><Issues /></ErrorBoundary>} />
                 <Route path="/configuration" element={<ErrorBoundary><Configuration /></ErrorBoundary>} />
+                <Route path="/preferences" element={<ErrorBoundary><Preferences /></ErrorBoundary>} />
                 <Route path="/logs" element={<ErrorBoundary><Logs /></ErrorBoundary>} />
               </Routes>
             </ErrorBoundary>
@@ -187,6 +190,7 @@ function Sidebar({ isOpen, wsConnected }) {
     { path: '/shows', icon: faTv, label: 'Shows' },
     { path: '/issues', icon: faExclamationTriangle, label: 'Issues' },
     { path: '/configuration', icon: faCog, label: 'Configuration' },
+    { path: '/preferences', icon: faUser, label: 'Preferences' },
     { path: '/logs', icon: faFileAlt, label: 'Logs' },
   ];
 

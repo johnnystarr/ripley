@@ -35,7 +35,7 @@
 - [ ] Add breadcrumbs navigation
 - [x] Improve mobile responsiveness (sidebar toggle, responsive layouts)
 - [x] Add global search (search across logs, shows, issues) with Cmd/Ctrl+K shortcut
-- [ ] Add user preferences (logs per page, polling interval, etc.)
+- [x] Add user preferences (logs per page, polling interval, etc.)
 
 ### Real-time Features
 - [x] Add browser/desktop notifications for completed rips
@@ -58,7 +58,7 @@
 ### Error Handling & UX
 - [x] Better error messages with suggested fixes
 - [x] Add retry button for failed operations
-- [ ] Export error logs for debugging
+- [x] Export error logs for debugging
 - [ ] Add issue resolution workflow (assign, track, notes)
 - [ ] Show error frequency/patterns
 - [ ] Add error categorization (drive errors, network errors, etc.)
@@ -69,7 +69,7 @@
 - [x] Add issue categories and tags
 - [ ] Add notes/comments to issues
 - [x] Show related logs for each issue
-- [ ] Add issue export (for bug reports)
+- [x] Add issue export (for bug reports)
 - [ ] Track issue resolution time
 
 ## Backend Enhancements
@@ -77,7 +77,7 @@
 ### Database Enhancements
 - [x] Add rip history table (completed rips with metadata)
 - [x] Add drive statistics table (usage, errors, performance)
-- [ ] Add user preferences table
+- [x] Add user preferences table
 - [ ] Add database migrations system
 - [ ] Add database backup/restore functionality
 - [ ] Add full-text search for logs

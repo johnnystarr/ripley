@@ -10,6 +10,7 @@ import {
   faBug,
   faCompactDisc,
   faNetworkWired,
+  faFileExport,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -48,6 +49,30 @@ export default function Issues() {
       toast.error('Failed to resolve issue: ' + err.message);
     }
   }, [fetchIssues]);
+
+  const handleExportIssues = useCallback(() => {
+    const exportData = filteredIssues.map(issue => ({
+      id: issue.id,
+      timestamp: issue.timestamp,
+      category: issue.category,
+      message: issue.message,
+      drive: issue.drive,
+      disc: issue.disc,
+      resolved: issue.resolved,
+      resolved_at: issue.resolved_at,
+    }));
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ripley-issues-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('Issues exported');
+  }, [filteredIssues]);
 
   const toggleIssueLogs = useCallback(async (issue) => {
     if (expandedIssue === issue.id) {
@@ -151,12 +176,23 @@ export default function Issues() {
             View and manage system issues and errors
           </p>
         </div>
-        <button
-          onClick={fetchIssues}
-          className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors whitespace-nowrap"
-        >
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExportIssues}
+            disabled={filteredIssues.length === 0}
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-lg transition-colors flex items-center"
+            title="Export issues to JSON"
+          >
+            <FontAwesomeIcon icon={faFileExport} className="mr-2" />
+            Export
+          </button>
+          <button
+            onClick={fetchIssues}
+            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors whitespace-nowrap"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filter Tabs and Type Badges */}

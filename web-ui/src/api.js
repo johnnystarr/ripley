@@ -201,6 +201,19 @@ class ApiClient {
     return this.request(`/rip-history?limit=${limit}`);
   }
 
+  // Get user preferences
+  async getPreferences() {
+    return this.request('/preferences');
+  }
+
+  // Update user preferences
+  async updatePreferences(prefs) {
+    return this.request('/preferences', {
+      method: 'POST',
+      body: JSON.stringify(prefs),
+    });
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {

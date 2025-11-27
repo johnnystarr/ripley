@@ -296,6 +296,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/statistics", get(get_statistics))
         .route("/statistics/drives", get(get_drive_stats))
         .route("/rip-history", get(get_rip_history_handler))
+        .route("/preferences", get(get_preferences))
+        .route("/preferences", post(update_preferences))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -961,6 +963,29 @@ async fn get_rip_history_handler(
         Ok(history) => Ok(Json(history)),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to get rip history: {}", e),
+        }),
+    }
+}
+
+/// Get user preferences
+async fn get_preferences(State(state): State<ApiState>) -> Result<Json<crate::database::UserPreferences>, ErrorResponse> {
+    match state.db.get_preferences() {
+        Ok(prefs) => Ok(Json(prefs)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get preferences: {}", e),
+        }),
+    }
+}
+
+/// Update user preferences
+async fn update_preferences(
+    State(state): State<ApiState>,
+    Json(prefs): Json<crate::database::UserPreferences>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_preferences(&prefs) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update preferences: {}", e),
         }),
     }
 }

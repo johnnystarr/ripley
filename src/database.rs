@@ -152,6 +152,24 @@ impl RipStatus {
     }
 }
 
+/// User preferences
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreferences {
+    pub logs_per_page: i64,
+    pub polling_interval_ms: i64,
+    pub theme: String,
+}
+
+impl Default for UserPreferences {
+    fn default() -> Self {
+        UserPreferences {
+            logs_per_page: 100,
+            polling_interval_ms: 3000,
+            theme: "dark".to_string(),
+        }
+    }
+}
+
 /// Drive statistics entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriveStats {
@@ -283,6 +301,24 @@ impl Database {
                 avg_speed_mbps REAL DEFAULT 0.0,
                 last_used TEXT
             )",
+            [],
+        )?;
+
+        // Create user preferences table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS user_preferences (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                logs_per_page INTEGER DEFAULT 100,
+                polling_interval_ms INTEGER DEFAULT 3000,
+                theme TEXT DEFAULT 'dark'
+            )",
+            [],
+        )?;
+
+        // Insert default preferences if table is empty
+        conn.execute(
+            "INSERT OR IGNORE INTO user_preferences (id, logs_per_page, polling_interval_ms, theme)
+             VALUES (1, 100, 3000, 'dark')",
             [],
         )?;
 
@@ -720,6 +756,39 @@ impl Database {
         conn.execute(
             "UPDATE shows SET last_used_at = ?1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get user preferences
+    pub fn get_preferences(&self) -> Result<UserPreferences> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT logs_per_page, polling_interval_ms, theme FROM user_preferences WHERE id = 1",
+            [],
+            |row| {
+                Ok(UserPreferences {
+                    logs_per_page: row.get(0)?,
+                    polling_interval_ms: row.get(1)?,
+                    theme: row.get(2)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(prefs) => Ok(prefs),
+            Err(_) => Ok(UserPreferences::default()),
+        }
+    }
+
+    /// Update user preferences
+    pub fn update_preferences(&self, prefs: &UserPreferences) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE user_preferences SET logs_per_page = ?1, polling_interval_ms = ?2, theme = ?3 WHERE id = 1",
+            params![prefs.logs_per_page, prefs.polling_interval_ms, prefs.theme],
         )?;
 
         Ok(())
