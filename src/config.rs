@@ -11,6 +11,8 @@ pub struct Config {
     pub rsync: RsyncConfig,
     pub speech_match: SpeechMatchConfig,
     pub filebot: FilebotConfig,
+    pub retry: RetryConfig,
+    pub rip_profiles: Vec<RipProfile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +43,25 @@ pub struct FilebotConfig {
     pub use_for_music: bool,  // Whether to use Filebot to standardize music filenames
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryConfig {
+    pub enabled: bool,
+    pub max_attempts: u32,
+    pub initial_delay_seconds: u64,
+    pub max_delay_seconds: u64,
+    pub backoff_multiplier: f64,
+}
+
+/// Rip quality profile for different use cases
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RipProfile {
+    pub name: String,
+    pub description: Option<String>,
+    pub audio_quality: Option<u8>, // 0-9 for FLAC quality (audio CDs)
+    pub makemkv_profile: Option<String>, // MakeMKV profile name (DVDs/Blu-rays)
+    pub is_default: bool,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Config {
@@ -66,6 +87,36 @@ impl Default for Config {
                 order: "Airdate".to_string(),
                 use_for_music: true,  // Enable Filebot for music standardization by default
             },
+            retry: RetryConfig {
+                enabled: true,
+                max_attempts: 3,
+                initial_delay_seconds: 1,
+                max_delay_seconds: 60,
+                backoff_multiplier: 2.0,
+            },
+            rip_profiles: vec![
+                RipProfile {
+                    name: "High Quality".to_string(),
+                    description: Some("Best quality, larger file sizes".to_string()),
+                    audio_quality: Some(8),
+                    makemkv_profile: Some("default".to_string()),
+                    is_default: false,
+                },
+                RipProfile {
+                    name: "Standard".to_string(),
+                    description: Some("Balanced quality and file size".to_string()),
+                    audio_quality: Some(5),
+                    makemkv_profile: Some("default".to_string()),
+                    is_default: true,
+                },
+                RipProfile {
+                    name: "Fast".to_string(),
+                    description: Some("Faster ripping, smaller files".to_string()),
+                    audio_quality: Some(3),
+                    makemkv_profile: Some("default".to_string()),
+                    is_default: false,
+                },
+            ],
         }
     }
 }
@@ -134,6 +185,18 @@ impl Config {
     #[allow(dead_code)]
     pub fn get_tmdb_api_key(&self) -> Option<String> {
         self.tmdb_api_key.clone()
+    }
+    
+    /// Get the default rip profile
+    pub fn get_default_profile(&self) -> Option<&RipProfile> {
+        self.rip_profiles.iter()
+            .find(|p| p.is_default)
+            .or_else(|| self.rip_profiles.first())
+    }
+    
+    /// Get a rip profile by name
+    pub fn get_profile(&self, name: &str) -> Option<&RipProfile> {
+        self.rip_profiles.iter().find(|p| p.name == name)
     }
 }
 

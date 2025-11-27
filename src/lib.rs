@@ -16,3 +16,4 @@ pub mod ripper;
 pub mod rsync;
 pub mod speech_match;
 pub mod tui;
+pub mod checksum;

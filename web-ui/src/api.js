@@ -237,6 +237,11 @@ class ApiClient {
     return this.request('/statistics/drives');
   }
 
+  // Get error frequency statistics
+  async getErrorFrequency() {
+    return this.request('/statistics/errors');
+  }
+
   // Get rip history
   async getRipHistory(limit = 50) {
     return this.request(`/rip-history?limit=${limit}`);

@@ -15,9 +15,11 @@ import {
   faEdit,
   faSave,
   faTimes,
+  faCircleQuestion,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
+import { getErrorSuggestion, getErrorCategory } from '../utils/errorHelper';
 
 export default function Issues() {
   const [issues, setIssues] = useState([]);
@@ -424,6 +426,32 @@ export default function Issues() {
                   </div>
                   
                   <p className="text-slate-300 mb-3">{issue.description}</p>
+                  
+                  {/* Contextual Help Based on Issue Type */}
+                  {(() => {
+                    const suggestion = getErrorSuggestion(issue.description);
+                    if (suggestion) {
+                      return (
+                        <div className="mb-3 bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+                          <div className="flex items-start gap-2">
+                            <FontAwesomeIcon icon={faCircleQuestion} className="text-blue-400 mt-0.5 flex-shrink-0" />
+                            <div className="flex-1">
+                              <h4 className="text-sm font-semibold text-blue-400 mb-2">{suggestion.title} - Suggested Solutions</h4>
+                              <ul className="text-xs text-slate-300 space-y-1">
+                                {suggestion.suggestions.map((sug, idx) => (
+                                  <li key={idx} className="flex items-start gap-2">
+                                    <span className="text-blue-400 mt-1">•</span>
+                                    <span>{sug}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                   
                   <div className="flex flex-wrap gap-4 text-sm text-slate-400">
                     <div>

@@ -16,6 +16,7 @@ mod filebot;
 mod rsync;
 mod speech_match;
 mod rename;
+mod checksum;
 
 use anyhow::Result;
 use cli::{Args, Command, RipArgs};

@@ -135,6 +135,7 @@ pub struct RipHistory {
     pub output_path: Option<String>,
     pub error_message: Option<String>,
     pub avg_speed_mbps: Option<f32>, // Average ripping speed in MB/s
+    pub checksum: Option<String>, // SHA-256 checksum of ripped files
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +196,54 @@ pub struct DriveStats {
     pub last_used: Option<DateTime<Utc>>,
 }
 
+/// Rip queue entry for managing pending rip operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RipQueueEntry {
+    pub id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub drive: Option<String>, // None means any available drive
+    pub output_path: Option<String>,
+    pub title: Option<String>,
+    pub skip_metadata: bool,
+    pub skip_filebot: bool,
+    pub profile: Option<String>,
+    pub priority: i32, // Higher number = higher priority (default 0)
+    pub status: QueueStatus,
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueStatus {
+    Pending,
+    Processing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl QueueStatus {
+    fn to_string(&self) -> &str {
+        match self {
+            QueueStatus::Pending => "pending",
+            QueueStatus::Processing => "processing",
+            QueueStatus::Completed => "completed",
+            QueueStatus::Failed => "failed",
+            QueueStatus::Cancelled => "cancelled",
+        }
+    }
+
+    fn from_string(s: &str) -> Self {
+        match s {
+            "processing" => QueueStatus::Processing,
+            "completed" => QueueStatus::Completed,
+            "failed" => QueueStatus::Failed,
+            "cancelled" => QueueStatus::Cancelled,
+            _ => QueueStatus::Pending,
+        }
+    }
+}
+
 /// Database manager for logs and issues
 pub struct Database {
     conn: Mutex<Connection>,
@@ -218,16 +267,10 @@ impl Database {
         };
 
         db.initialize_schema()?;
+        db.run_migrations()?;
         Ok(db)
     }
 
-    fn get_db_path() -> PathBuf {
-        if let Some(home) = dirs::home_dir() {
-            home.join(".config").join("ripley").join("ripley.db")
-        } else {
-            PathBuf::from("ripley.db")
-        }
-    }
 
     /// Initialize database schema
     fn initialize_schema(&self) -> Result<()> {
@@ -313,7 +356,8 @@ impl Database {
                 file_size_bytes INTEGER,
                 output_path TEXT,
                 error_message TEXT,
-                avg_speed_mbps REAL
+                avg_speed_mbps REAL,
+                checksum TEXT
             )",
             [],
         )?;
@@ -383,20 +427,8 @@ impl Database {
             [],
         )?;
 
-        // Add last_used_at column to shows table if it doesn't exist (migration)
-        let column_exists: Result<i64, _> = conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('shows') WHERE name='last_used_at'",
-            [],
-            |row| row.get(0),
-        );
-        
-        if column_exists.unwrap_or(0) == 0 {
-            info!("Running migration: Adding last_used_at column to shows table");
-            conn.execute(
-                "ALTER TABLE shows ADD COLUMN last_used_at TEXT",
-                [],
-            )?;
-        }
+        // Create rip queue table (created via migration)
+        // Create FTS5 virtual table for full-text search (created via migration)
 
         debug!("Database schema initialized");
         
@@ -404,6 +436,282 @@ impl Database {
         Self::seed_initial_shows(&conn)?;
         
         Ok(())
+    }
+
+    /// Run database migrations
+    pub fn run_migrations(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Create migrations tracking table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS migrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                version INTEGER NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        // Get current database version (highest migration version applied)
+        let current_version: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM migrations",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        // Migration 1: Add last_used_at to shows (if not exists)
+        if current_version < 1 {
+            info!("Applying migration 1: add_last_used_at_to_shows");
+            let column_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('shows') WHERE name='last_used_at'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if column_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE shows ADD COLUMN last_used_at TEXT",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![1, "add_last_used_at_to_shows", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        // Migration 2: Add assignment fields to issues (if not exists)
+        if current_version < 2 {
+            info!("Applying migration 2: add_issue_assignment_fields");
+            let assigned_to_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='assigned_to'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if assigned_to_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE issues ADD COLUMN assigned_to TEXT",
+                    [],
+                )?;
+            }
+            
+            let resolution_notes_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('issues') WHERE name='resolution_notes'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if resolution_notes_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE issues ADD COLUMN resolution_notes TEXT",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![2, "add_issue_assignment_fields", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        // Migration 3: Add checksum column to rip_history
+        if current_version < 3 {
+            info!("Applying migration 3: add_checksum_to_rip_history");
+            let checksum_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('rip_history') WHERE name='checksum'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if checksum_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE rip_history ADD COLUMN checksum TEXT",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![3, "add_checksum_to_rip_history", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        // Migration 4: Add FTS5 full-text search for logs
+        if current_version < 4 {
+            info!("Applying migration 4: add_fts5_for_logs");
+            
+            // Check if FTS5 table exists
+            let fts_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='logs_fts'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if fts_exists.unwrap_or(0) == 0 {
+                // Create FTS5 virtual table
+                conn.execute(
+                    "CREATE VIRTUAL TABLE logs_fts USING fts5(
+                        id UNINDEXED,
+                        message,
+                        drive,
+                        disc,
+                        title,
+                        context,
+                        content='logs',
+                        content_rowid='id'
+                    )",
+                    [],
+                )?;
+                
+                // Create triggers to keep FTS5 table in sync with logs table
+                conn.execute(
+                    "CREATE TRIGGER logs_fts_insert AFTER INSERT ON logs BEGIN
+                        INSERT INTO logs_fts(rowid, message, drive, disc, title, context)
+                        VALUES (new.id, new.message, new.drive, new.disc, new.title, new.context);
+                    END",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE TRIGGER logs_fts_delete AFTER DELETE ON logs BEGIN
+                        INSERT INTO logs_fts(logs_fts, rowid, message, drive, disc, title, context)
+                        VALUES ('delete', old.id, old.message, old.drive, old.disc, old.title, old.context);
+                    END",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE TRIGGER logs_fts_update AFTER UPDATE ON logs BEGIN
+                        INSERT INTO logs_fts(logs_fts, rowid, message, drive, disc, title, context)
+                        VALUES ('delete', old.id, old.message, old.drive, old.disc, old.title, old.context);
+                        INSERT INTO logs_fts(rowid, message, drive, disc, title, context)
+                        VALUES (new.id, new.message, new.drive, new.disc, new.title, new.context);
+                    END",
+                    [],
+                )?;
+                
+                // Populate FTS5 table with existing logs
+                info!("Populating FTS5 index with existing logs...");
+                conn.execute(
+                    "INSERT INTO logs_fts(rowid, message, drive, disc, title, context)
+                     SELECT id, message, drive, disc, title, context FROM logs",
+                    [],
+                )?;
+                
+                info!("FTS5 index populated with {} log entries", conn.changes());
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![4, "add_fts5_for_logs", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        // Migration 5: Add rip queue table
+        if current_version < 5 {
+            info!("Applying migration 5: add_rip_queue_table");
+            
+            let queue_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rip_queue'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if queue_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE rip_queue (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        created_at TEXT NOT NULL,
+                        drive TEXT,
+                        output_path TEXT,
+                        title TEXT,
+                        skip_metadata INTEGER NOT NULL DEFAULT 0,
+                        skip_filebot INTEGER NOT NULL DEFAULT 0,
+                        profile TEXT,
+                        priority INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        started_at TEXT
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_rip_queue_status ON rip_queue(status, priority DESC, created_at ASC)",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![5, "add_rip_queue_table", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Backup database to a file
+    pub fn backup_database(&self, backup_path: &std::path::Path) -> Result<()> {
+        let db_path = Self::get_db_path();
+        
+        if !db_path.exists() {
+            return Err(anyhow::anyhow!("Database file does not exist"));
+        }
+        
+        // Ensure backup directory exists
+        if let Some(parent) = backup_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        
+        // Copy database file
+        std::fs::copy(&db_path, backup_path)?;
+        info!("Database backed up to {}", backup_path.display());
+        
+        Ok(())
+    }
+
+    /// Restore database from a backup file
+    pub fn restore_database(&self, backup_path: &std::path::Path) -> Result<()> {
+        if !backup_path.exists() {
+            return Err(anyhow::anyhow!("Backup file does not exist"));
+        }
+        
+        let db_path = Self::get_db_path();
+        
+        // Close current connection
+        drop(self.conn.lock().unwrap());
+        
+        // Backup current database if it exists
+        if db_path.exists() {
+            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+            let auto_backup = db_path.with_file_name(format!("ripley.db.backup.{}", timestamp));
+            std::fs::copy(&db_path, &auto_backup)?;
+            info!("Current database backed up to {}", auto_backup.display());
+        }
+        
+        // Ensure directory exists
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        
+        // Copy backup over current database
+        std::fs::copy(backup_path, &db_path)?;
+        info!("Database restored from {}", backup_path.display());
+        
+        // Reopen connection (will happen on next access)
+        Ok(())
+    }
+
+    /// Get database file path
+    pub fn get_db_path() -> PathBuf {
+        if let Some(home) = dirs::home_dir() {
+            home.join(".config").join("ripley").join("ripley.db")
+        } else {
+            PathBuf::from("ripley.db")
+        }
     }
 
     /// Seed initial shows if the table is empty
@@ -495,7 +803,7 @@ impl Database {
         Ok(logs)
     }
 
-    /// Search logs with filters
+    /// Search logs with filters (using FTS5 for full-text search)
     pub fn search_logs(
         &self,
         query: Option<&str>,
@@ -505,12 +813,32 @@ impl Database {
     ) -> Result<Vec<LogEntry>> {
         let conn = self.conn.lock().unwrap();
         
-        let mut sql = "SELECT id, timestamp, level, message, drive, disc, title, context FROM logs WHERE 1=1".to_string();
+        // Build the search query
+        let mut sql = if query.is_some() {
+            // Use FTS5 for full-text search when query is provided
+            "SELECT l.id, l.timestamp, l.level, l.message, l.drive, l.disc, l.title, l.context
+             FROM logs l
+             INNER JOIN logs_fts fts ON l.id = fts.rowid
+             WHERE 1=1".to_string()
+        } else {
+            // Regular search without FTS5
+            "SELECT id, timestamp, level, message, drive, disc, title, context FROM logs WHERE 1=1".to_string()
+        };
+        
         let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(q) = query {
-            sql.push_str(" AND message LIKE ?");
-            params.push(Box::new(format!("%{}%", q)));
+            // Use FTS5 syntax for full-text search
+            // Escape special FTS5 characters and build query
+            let fts_query = q.replace('"', "\"\"") // Escape quotes
+                .replace("'", "''") // Escape single quotes
+                .split_whitespace()
+                .map(|term| format!("\"{}\"", term)) // Wrap each term in quotes for phrase matching
+                .collect::<Vec<_>>()
+                .join(" OR "); // Use OR to match any term
+            
+            sql.push_str(" AND fts MATCH ?");
+            params.push(Box::new(fts_query));
         }
 
         if let Some(l) = level {
@@ -906,8 +1234,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         conn.execute(
-            "INSERT INTO rip_history (timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO rip_history (timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps, checksum)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 entry.timestamp.to_rfc3339(),
                 entry.drive,
@@ -920,6 +1248,7 @@ impl Database {
                 entry.output_path,
                 entry.error_message,
                 entry.avg_speed_mbps,
+                entry.checksum,
             ],
         )?;
 
@@ -1005,11 +1334,233 @@ impl Database {
         Ok(stats)
     }
 
+    /// Get error frequency statistics by issue type
+    pub fn get_error_frequency(&self) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT 
+                issue_type,
+                COUNT(*) as count,
+                SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN resolved = 1 THEN 1 ELSE 0 END) as resolved
+             FROM issues
+             GROUP BY issue_type
+             ORDER BY count DESC"
+        )?;
+
+        let mut frequency = Vec::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (issue_type, count, active, resolved) = row?;
+            frequency.push(serde_json::json!({
+                "issue_type": issue_type,
+                "count": count,
+                "active": active,
+                "resolved": resolved,
+            }));
+        }
+
+        // Also get error frequency over time (last 30 days)
+        let mut stmt_time = conn.prepare(
+            "SELECT 
+                date(timestamp) as date,
+                issue_type,
+                COUNT(*) as count
+             FROM issues
+             WHERE timestamp > datetime('now', '-30 days')
+             GROUP BY date(timestamp), issue_type
+             ORDER BY date ASC"
+        )?;
+
+        let mut time_series = Vec::new();
+        let rows_time = stmt_time.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+
+        for row in rows_time {
+            let (date, issue_type, count) = row?;
+            time_series.push(serde_json::json!({
+                "date": date,
+                "issue_type": issue_type,
+                "count": count,
+            }));
+        }
+
+        Ok(serde_json::json!({
+            "by_type": frequency,
+            "over_time": time_series,
+        }))
+    }
+
+    /// Add entry to rip queue
+    pub fn add_to_queue(&self, entry: &RipQueueEntry) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "INSERT INTO rip_queue (created_at, drive, output_path, title, skip_metadata, skip_filebot, profile, priority, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                entry.created_at.to_rfc3339(),
+                entry.drive,
+                entry.output_path,
+                entry.title,
+                entry.skip_metadata as i64,
+                entry.skip_filebot as i64,
+                entry.profile,
+                entry.priority,
+                entry.status.to_string(),
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get next pending queue entry (highest priority first, then oldest)
+    pub fn get_next_queue_entry(&self, drive: Option<&str>) -> Result<Option<RipQueueEntry>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let entry = if let Some(d) = drive {
+            let mut stmt = conn.prepare(
+                "SELECT id, created_at, drive, output_path, title, skip_metadata, skip_filebot, profile, priority, status, started_at
+                 FROM rip_queue
+                 WHERE status = 'pending' AND (drive IS NULL OR drive = ?1)
+                 ORDER BY priority DESC, created_at ASC
+                 LIMIT 1"
+            )?;
+            stmt.query_row([d], |row| {
+                Ok(RipQueueEntry {
+                    id: Some(row.get(0)?),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    drive: row.get(2)?,
+                    output_path: row.get(3)?,
+                    title: row.get(4)?,
+                    skip_metadata: row.get::<_, i64>(5)? != 0,
+                    skip_filebot: row.get::<_, i64>(6)? != 0,
+                    profile: row.get(7)?,
+                    priority: row.get(8)?,
+                    status: QueueStatus::from_string(&row.get::<_, String>(9)?),
+                    started_at: row.get::<_, Option<String>>(10)?
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                })
+            }).ok()
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, created_at, drive, output_path, title, skip_metadata, skip_filebot, profile, priority, status, started_at
+                 FROM rip_queue
+                 WHERE status = 'pending'
+                 ORDER BY priority DESC, created_at ASC
+                 LIMIT 1"
+            )?;
+            stmt.query_row([], |row| {
+                Ok(RipQueueEntry {
+                    id: Some(row.get(0)?),
+                    created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                        .unwrap()
+                        .with_timezone(&Utc),
+                    drive: row.get(2)?,
+                    output_path: row.get(3)?,
+                    title: row.get(4)?,
+                    skip_metadata: row.get::<_, i64>(5)? != 0,
+                    skip_filebot: row.get::<_, i64>(6)? != 0,
+                    profile: row.get(7)?,
+                    priority: row.get(8)?,
+                    status: QueueStatus::from_string(&row.get::<_, String>(9)?),
+                    started_at: row.get::<_, Option<String>>(10)?
+                        .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&Utc)),
+                })
+            }).ok()
+        };
+
+        Ok(entry)
+    }
+
+    /// Update queue entry status
+    pub fn update_queue_status(&self, id: i64, status: QueueStatus, started_at: Option<DateTime<Utc>>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        if let Some(started) = started_at {
+            conn.execute(
+                "UPDATE rip_queue SET status = ?1, started_at = ?2 WHERE id = ?3",
+                params![status.to_string(), started.to_rfc3339(), id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE rip_queue SET status = ?1 WHERE id = ?2",
+                params![status.to_string(), id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Get all queue entries
+    pub fn get_queue_entries(&self, include_completed: bool) -> Result<Vec<RipQueueEntry>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let sql = if include_completed {
+            "SELECT id, created_at, drive, output_path, title, skip_metadata, skip_filebot, profile, priority, status, started_at
+             FROM rip_queue
+             ORDER BY priority DESC, created_at ASC"
+        } else {
+            "SELECT id, created_at, drive, output_path, title, skip_metadata, skip_filebot, profile, priority, status, started_at
+             FROM rip_queue
+             WHERE status != 'completed'
+             ORDER BY priority DESC, created_at ASC"
+        };
+
+        let mut stmt = conn.prepare(sql)?;
+        let entries = stmt.query_map([], |row| {
+            Ok(RipQueueEntry {
+                id: Some(row.get(0)?),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                drive: row.get(2)?,
+                output_path: row.get(3)?,
+                title: row.get(4)?,
+                skip_metadata: row.get::<_, i64>(5)? != 0,
+                skip_filebot: row.get::<_, i64>(6)? != 0,
+                profile: row.get(7)?,
+                priority: row.get(8)?,
+                status: QueueStatus::from_string(&row.get::<_, String>(9)?),
+                started_at: row.get::<_, Option<String>>(10)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(entries)
+    }
+
+    /// Remove queue entry (for cancellation)
+    pub fn remove_queue_entry(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM rip_queue WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     /// Get recent rip history
     pub fn get_rip_history(&self, limit: i64) -> Result<Vec<RipHistory>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps
+            "SELECT id, timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps, checksum
              FROM rip_history
              ORDER BY timestamp DESC
              LIMIT ?1"
@@ -1031,6 +1582,7 @@ impl Database {
                 output_path: row.get(9)?,
                 error_message: row.get(10)?,
                 avg_speed_mbps: row.get(11)?,
+                checksum: row.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

@@ -19,7 +19,7 @@ use tracing::info;
 
 use crate::cli::RipArgs;
 use crate::config::Config;
-use crate::database::{Database, LogEntry, Issue, Show};
+use crate::database::{Database, LogEntry, Issue, Show, RipQueueEntry, QueueStatus};
 
 /// Start the REST API server
 pub async fn start_server(
@@ -254,6 +254,8 @@ pub struct StartRipRequest {
     pub title: Option<String>,
     pub skip_metadata: bool,
     pub skip_filebot: bool,
+    pub profile: Option<String>, // Optional profile name
+    pub priority: Option<i32>, // Optional priority for queue (higher = higher priority, default 0)
 }
 
 /// Response for API errors
@@ -303,9 +305,15 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/shows/:id/select", post(select_show))
         .route("/statistics", get(get_statistics))
         .route("/statistics/drives", get(get_drive_stats))
+        .route("/statistics/errors", get(get_error_frequency))
         .route("/rip-history", get(get_rip_history_handler))
         .route("/preferences", get(get_preferences))
         .route("/preferences", post(update_preferences))
+        .route("/rip-profiles", get(get_rip_profiles))
+        .route("/queue", get(get_queue_handler))
+        .route("/queue/:id/cancel", delete(cancel_queue_handler))
+        .route("/database/backup", post(backup_database_handler))
+        .route("/database/restore", post(restore_database_handler))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -362,25 +370,65 @@ async fn update_config(
     Ok(Json(new_config))
 }
 
-/// Start ripping operation
+/// Start ripping operation (queues if drive is busy)
 async fn start_rip(
     State(state): State<ApiState>,
     Json(request): Json<StartRipRequest>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
     // Determine the drive identifier (use "default" if not specified)
-    let drive = request.drive.clone().unwrap_or_else(|| "default".to_string());
+    let drive = request.drive.clone();
     
     let mut status = state.rip_status.write().await;
     
-    // Check if this specific drive is already ripping
-    if status.active_rips.contains_key(&drive) {
-        return Err(ErrorResponse {
-            error: format!("A rip operation is already in progress on drive {}", drive),
-        });
+    // Check if this specific drive (or any drive if not specified) is already ripping
+    let drive_busy = if let Some(ref d) = drive {
+        status.active_rips.contains_key(d)
+    } else {
+        !status.active_rips.is_empty()
+    };
+    
+    if drive_busy {
+        // Queue the request instead of rejecting
+        let queue_entry = RipQueueEntry {
+            id: None,
+            created_at: chrono::Utc::now(),
+            drive: drive.clone(),
+            output_path: request.output_path.clone(),
+            title: request.title.clone(),
+            skip_metadata: request.skip_metadata,
+            skip_filebot: request.skip_filebot,
+            profile: request.profile.clone(),
+            priority: request.priority.unwrap_or(0), // Use provided priority or default to 0
+            status: QueueStatus::Pending,
+            started_at: None,
+        };
+        
+        drop(status);
+        
+        match state.db.add_to_queue(&queue_entry) {
+            Ok(queue_id) => {
+                // Queue will be processed when current rip completes
+                // We trigger queue processing after rips complete, not here
+                
+                return Ok(Json(serde_json::json!({
+                    "status": "queued",
+                    "queue_id": queue_id,
+                    "message": "Rip operation queued - will start when drive becomes available"
+                })));
+            }
+            Err(e) => {
+                return Err(ErrorResponse {
+                    error: format!("Failed to queue rip operation: {}", e),
+                });
+            }
+        }
     }
     
+    // Drive is available, start immediately
+    let drive_id = drive.clone().unwrap_or_else(|| "default".to_string());
+    
     // Mark this drive as active
-    status.active_rips.insert(drive.clone(), DriveRipStatus {
+    status.active_rips.insert(drive_id.clone(), DriveRipStatus {
         current_disc: None,
         current_title: request.title.clone(),
         progress: 0.0,
@@ -390,7 +438,7 @@ async fn start_rip(
     // Clone state for async task
     let state_clone = state.clone();
     let request_clone = request;
-    let drive_clone = drive.clone();
+    let drive_clone = drive_id.clone();
     
     // Spawn rip operation in background
     tokio::spawn(async move {
@@ -403,11 +451,14 @@ async fn start_rip(
         if let Err(e) = result {
             tracing::error!("Rip operation failed: {:?}", e);
         }
+        
+        // Process queue after rip completes (use tokio::task::spawn_local or check queue on next start_rip)
+        // Note: Queue processing happens automatically when checking for available drives
     });
     
     Ok(Json(serde_json::json!({
         "status": "started",
-        "drive": drive
+        "drive": drive_id
     })))
 }
 
@@ -527,16 +578,137 @@ async fn handle_websocket(mut socket: WebSocket, state: ApiState) {
     }
 }
 
-/// Run the rip operation in background
+/// Check if an error is retryable (some errors shouldn't be retried)
+fn is_retryable_error(error: &str) -> bool {
+    let error_lower = error.to_lowercase();
+    // Don't retry on permission errors, disk full, or invalid configurations
+    let non_retryable = [
+        "permission denied",
+        "access denied",
+        "disk full",
+        "no space",
+        "invalid",
+        "not found",
+        "no such file",
+    ];
+    
+    !non_retryable.iter().any(|term| error_lower.contains(term))
+}
+
+/// Run the rip operation in background with automatic retry logic
 async fn run_rip_operation(
     state: ApiState,
     request: StartRipRequest,
     drive_id: String,
 ) -> anyhow::Result<()> {
-    use crate::database::{RipHistory, RipStatus};
+    
+    let retry_config = {
+        let config = state.config.read().await;
+        config.retry.clone()
+    };
     
     let start_time = chrono::Utc::now();
-    let drive = drive_id; // Use the provided drive identifier
+    let drive = drive_id.clone(); // Use the provided drive identifier
+    
+    // Attempt rip with retries
+    let mut last_error = None;
+    let mut attempt = 1u32;
+    let max_attempts = if retry_config.enabled { retry_config.max_attempts } else { 1 };
+    
+    // Get title once at the start
+    let title = if request.title.is_some() {
+        request.title.clone()
+    } else {
+        state.db.get_last_title().ok().flatten()
+    };
+    
+    while attempt <= max_attempts {
+        if attempt > 1 {
+            // Calculate exponential backoff delay
+            let delay = std::cmp::min(
+                (retry_config.initial_delay_seconds as f64 * retry_config.backoff_multiplier.powi(attempt as i32 - 2)) as u64,
+                retry_config.max_delay_seconds
+            );
+            
+            let _ = state.event_tx.send(ApiEvent::Log {
+                level: "warning".to_string(),
+                message: format!("Retrying rip (attempt {}/{} after {}s delay)...", attempt, max_attempts, delay),
+                drive: Some(drive.clone()),
+            });
+            
+            tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+        }
+        
+        let is_final_attempt = attempt >= max_attempts;
+        match run_single_rip_attempt(&state, &request, &drive, start_time, is_final_attempt).await {
+            Ok(_) => {
+                // Success - return immediately (history already logged)
+                return Ok(());
+            }
+            Err(e) => {
+                last_error = Some(e);
+                let error_msg = last_error.as_ref().unwrap().to_string();
+                
+                // Check if error is retryable
+                if !is_retryable_error(&error_msg) || is_final_attempt {
+                    // Not retryable or out of retries - break and log failure
+                    break;
+                }
+                
+                attempt += 1;
+            }
+        }
+    }
+    
+    // All retries failed - log to history and return error
+    use crate::database::{RipHistory, RipStatus};
+    let end_time = chrono::Utc::now();
+    let duration_seconds = (end_time - start_time).num_seconds();
+    let title = if request.title.is_some() {
+        request.title.clone()
+    } else {
+        state.db.get_last_title().ok().flatten()
+    };
+    
+    let error_msg = last_error.as_ref().map(|e| e.to_string()).unwrap_or_else(|| "Unknown error".to_string());
+    
+    let _ = state.event_tx.send(ApiEvent::RipError {
+        error: error_msg.clone(),
+        drive: Some(drive.clone()),
+    });
+    
+    let history = RipHistory {
+        id: None,
+        timestamp: start_time,
+        drive: drive.clone(),
+        disc: None,
+        title: title.clone(),
+        disc_type: None,
+        status: RipStatus::Failed,
+        duration_seconds: Some(duration_seconds),
+        file_size_bytes: None,
+        output_path: request.output_path.clone(),
+        error_message: Some(format!("Failed after {} attempts: {}", max_attempts, error_msg)),
+        avg_speed_mbps: None,
+        checksum: None, // No checksum for failed rips
+    };
+    
+    if let Err(e) = state.db.add_rip_history(&history) {
+        tracing::error!("Failed to save rip history: {}", e);
+    }
+    
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Rip operation failed after {} attempts", max_attempts)))
+}
+
+/// Run a single rip attempt (without retry logic)
+async fn run_single_rip_attempt(
+    state: &ApiState,
+    request: &StartRipRequest,
+    drive: &String,
+    start_time: chrono::DateTime<chrono::Utc>,
+    is_final_attempt: bool,
+) -> anyhow::Result<()> {
+    use crate::database::{RipHistory, RipStatus};
     
     // Use provided title or fall back to last saved title
     let title = if request.title.is_some() {
@@ -545,107 +717,94 @@ async fn run_rip_operation(
         state.db.get_last_title().ok().flatten()
     };
     
-    // Send RipStarted event
-    let _ = state.event_tx.send(ApiEvent::RipStarted {
-        disc: title.clone().unwrap_or_else(|| "Unknown Disc".to_string()),
-        drive: drive.clone(),
-    });
-    
-    let _ = state.event_tx.send(ApiEvent::Log {
-        level: "info".to_string(),
-        message: format!("Starting rip: {}", title.clone().unwrap_or_else(|| "Unknown".to_string())),
-        drive: Some(drive.clone()),
-    });
+    // Get quality from profile or use default
+    let quality = {
+        let config = state.config.read().await;
+        let profile = if let Some(ref profile_name) = request.profile {
+            config.get_profile(profile_name)
+        } else {
+            config.get_default_profile()
+        };
+        
+        profile
+            .and_then(|p| p.audio_quality)
+            .unwrap_or(5) // Default quality if no profile found
+    };
     
     let args = RipArgs {
         output_folder: request.output_path.clone().map(PathBuf::from),
         title: title.clone(),
         skip_metadata: request.skip_metadata,
         skip_filebot: request.skip_filebot,
-        quality: 5,
-        eject_when_done: true,
+        quality,
+        eject_when_done: is_final_attempt,
     };
     
-    // Note: We'll need to refactor app::run to work without TUI
-    // For now, this is a placeholder
+    // Run the actual rip operation
     let result = crate::app::run(args).await;
     
-    // Calculate duration
-    let end_time = chrono::Utc::now();
-    let duration_seconds = (end_time - start_time).num_seconds();
-    
-    // Try to get file size from output path
-    let file_size_bytes = if let Some(ref path) = request.output_path {
-        get_directory_size(&std::path::PathBuf::from(path)).await.ok()
-    } else {
-        None
-    };
-    
-    // Log to rip history
-    match &result {
-        Ok(_) => {
-            let _ = state.event_tx.send(ApiEvent::RipCompleted {
-                disc: title.clone().unwrap_or_else(|| "Unknown".to_string()),
-                drive: drive.clone(),
-            });
-            
-            // Save successful rip to history
-            let history = RipHistory {
-                id: None,
-                timestamp: start_time,
-                drive: drive.clone(),
-                disc: None,
-                title: title.clone(),
-                disc_type: None, // Could be detected from media type
-                status: RipStatus::Success,
-                duration_seconds: Some(duration_seconds),
-                file_size_bytes,
-                output_path: request.output_path.clone(),
-                error_message: None,
-                avg_speed_mbps: file_size_bytes.map(|bytes| {
-                    if duration_seconds > 0 {
-                        (bytes as f32 / 1_048_576.0) / duration_seconds as f32
-                    } else {
-                        0.0
+    // On success, log to history
+    if result.is_ok() {
+        let end_time = chrono::Utc::now();
+        let duration_seconds = (end_time - start_time).num_seconds();
+        
+        let file_size_bytes = if let Some(ref path) = request.output_path {
+            get_directory_size(&std::path::PathBuf::from(path)).await.ok()
+        } else {
+            None
+        };
+        
+        let _ = state.event_tx.send(ApiEvent::RipCompleted {
+            disc: title.clone().unwrap_or_else(|| "Unknown".to_string()),
+            drive: drive.clone(),
+        });
+        
+        // Calculate checksum if output path exists
+        let checksum = if let Some(ref output_path) = request.output_path {
+            let path = std::path::PathBuf::from(output_path);
+            if path.exists() {
+                match crate::checksum::calculate_directory_checksum(&path) {
+                    Ok(cs) => Some(cs),
+                    Err(e) => {
+                        tracing::warn!("Failed to calculate checksum: {}", e);
+                        None
                     }
-                }),
-            };
-            
-            if let Err(e) = state.db.add_rip_history(&history) {
-                tracing::error!("Failed to save rip history: {}", e);
+                }
+            } else {
+                None
             }
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            let _ = state.event_tx.send(ApiEvent::RipError {
-                error: error_msg.clone(),
-                drive: Some(drive.clone()),
-            });
-            
-            // Save failed rip to history
-            let history = RipHistory {
-                id: None,
-                timestamp: start_time,
-                drive: drive.clone(),
-                disc: None,
-                title: title.clone(),
-                disc_type: None,
-                status: RipStatus::Failed,
-                duration_seconds: Some(duration_seconds),
-                file_size_bytes: None,
-                output_path: request.output_path.clone(),
-                error_message: Some(error_msg),
-                avg_speed_mbps: None,
-            };
-            
-            if let Err(e) = state.db.add_rip_history(&history) {
-                tracing::error!("Failed to save rip history: {}", e);
-            }
+        } else {
+            None
+        };
+
+        let history = RipHistory {
+            id: None,
+            timestamp: start_time,
+            drive: drive.clone(),
+            disc: None,
+            title: title.clone(),
+            disc_type: None,
+            status: RipStatus::Success,
+            duration_seconds: Some(duration_seconds),
+            file_size_bytes,
+            output_path: request.output_path.clone(),
+            error_message: None,
+            avg_speed_mbps: file_size_bytes.map(|bytes| {
+                if duration_seconds > 0 {
+                    (bytes as f32 / 1_048_576.0) / duration_seconds as f32
+                } else {
+                    0.0
+                }
+            }),
+            checksum,
+        };
+        
+        if let Err(e) = state.db.add_rip_history(&history) {
+            tracing::error!("Failed to save rip history: {}", e);
         }
     }
     
-    // Drive will be removed from active_rips in the spawned task
-    Ok(())
+    result
 }
 
 /// Get total size of a directory recursively
@@ -1052,6 +1211,197 @@ async fn get_drive_stats(State(state): State<ApiState>) -> Result<Json<Vec<crate
         Ok(stats) => Ok(Json(stats)),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to get drive statistics: {}", e),
+        }),
+    }
+}
+
+/// Get error frequency statistics
+async fn get_error_frequency(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_error_frequency() {
+        Ok(frequency) => Ok(Json(frequency)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get error frequency: {}", e),
+        }),
+    }
+}
+
+/// Get available rip profiles
+async fn get_rip_profiles(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<crate::config::RipProfile>>, ErrorResponse> {
+    let config = state.config.read().await;
+    Ok(Json(config.rip_profiles.clone()))
+}
+
+/// Backup database
+#[derive(Debug, Deserialize)]
+struct BackupRequest {
+    path: Option<String>,
+}
+
+async fn backup_database_handler(
+    State(state): State<ApiState>,
+    Json(request): Json<BackupRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let backup_path = if let Some(ref path) = request.path {
+        PathBuf::from(path)
+    } else {
+        // Default backup location
+        if let Some(home) = dirs::home_dir() {
+            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+            home.join(".config").join("ripley").join(format!("ripley.db.backup.{}", timestamp))
+        } else {
+            let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+            PathBuf::from(format!("ripley.db.backup.{}", timestamp))
+        }
+    };
+    
+    match state.db.backup_database(&backup_path) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "path": backup_path.to_string_lossy().to_string()
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to backup database: {}", e),
+        }),
+    }
+}
+
+/// Restore database
+#[derive(Debug, Deserialize)]
+struct RestoreRequest {
+    path: String,
+}
+
+async fn restore_database_handler(
+    State(state): State<ApiState>,
+    Json(request): Json<RestoreRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let backup_path = PathBuf::from(&request.path);
+    
+    match state.db.restore_database(&backup_path) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "Database restored successfully. Please restart the server."
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to restore database: {}", e),
+        }),
+    }
+}
+
+/// Process rip queue - checks for available drives and starts queued rips
+async fn process_queue(state: ApiState) {
+    let status = state.rip_status.read().await;
+    let active_drives: std::collections::HashSet<String> = status.active_rips.keys().cloned().collect();
+    drop(status);
+    
+    // Check for queue entries that can be processed
+    let next_entry = match state.db.get_next_queue_entry(None) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return, // No queued items
+        Err(e) => {
+            tracing::error!("Failed to get next queue entry: {}", e);
+            return;
+        }
+    };
+    
+    // Check if the requested drive is available
+    let drive_available = if let Some(ref requested_drive) = next_entry.drive {
+        !active_drives.contains(requested_drive)
+    } else {
+        // Any drive can be used - check if we have at least one free
+        active_drives.is_empty()
+    };
+    
+    if !drive_available {
+        return; // No available drives
+    }
+    
+    let queue_id = next_entry.id.unwrap();
+    let drive_id = next_entry.drive.clone().unwrap_or_else(|| "default".to_string());
+    
+    // Mark as processing
+    if let Err(e) = state.db.update_queue_status(queue_id, QueueStatus::Processing, Some(chrono::Utc::now())) {
+        tracing::error!("Failed to update queue status: {}", e);
+        return;
+    }
+    
+    // Mark drive as active
+    let mut status = state.rip_status.write().await;
+    status.active_rips.insert(drive_id.clone(), DriveRipStatus {
+        current_disc: None,
+        current_title: next_entry.title.clone(),
+        progress: 0.0,
+    });
+    drop(status);
+    
+    // Convert queue entry to StartRipRequest
+    let request = StartRipRequest {
+        drive: next_entry.drive.clone(),
+        output_path: next_entry.output_path.clone(),
+        title: next_entry.title.clone(),
+        skip_metadata: next_entry.skip_metadata,
+        skip_filebot: next_entry.skip_filebot,
+        profile: next_entry.profile.clone(),
+        priority: Some(next_entry.priority), // Preserve priority
+    };
+    
+    let state_clone = state.clone();
+    let drive_clone = drive_id.clone();
+    let queue_id_clone = queue_id;
+    
+    // Spawn rip operation
+    tokio::spawn(async move {
+        let result = run_rip_operation(state_clone.clone(), request, drive_clone.clone()).await;
+        
+        // Remove from active rips when done
+        let mut status = state_clone.rip_status.write().await;
+        status.active_rips.remove(&drive_clone);
+        
+        // Update queue status
+        let queue_status = if result.is_ok() {
+            QueueStatus::Completed
+        } else {
+            QueueStatus::Failed
+        };
+        
+        if let Err(e) = state_clone.db.update_queue_status(queue_id_clone, queue_status, None) {
+            tracing::error!("Failed to update queue status: {}", e);
+        }
+        
+        if let Err(e) = result {
+            tracing::error!("Rip operation failed: {:?}", e);
+        }
+        
+        // Queue will be processed on next start_rip call or when checking for available drives
+    });
+}
+
+/// Get rip queue
+async fn get_queue_handler(State(state): State<ApiState>) -> Result<Json<Vec<RipQueueEntry>>, ErrorResponse> {
+    match state.db.get_queue_entries(false) {
+        Ok(entries) => Ok(Json(entries)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get queue: {}", e),
+        }),
+    }
+}
+
+/// Cancel queue entry
+async fn cancel_queue_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_queue_status(id, QueueStatus::Cancelled, None) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "Queue entry cancelled"
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to cancel queue entry: {}", e),
         }),
     }
 }

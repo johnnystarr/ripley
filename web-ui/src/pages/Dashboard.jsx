@@ -40,6 +40,7 @@ export default function Dashboard() {
   const [showFailedRips, setShowFailedRips] = useState(false);
   const [ripHistory, setRipHistory] = useState([]);
   const [driveStats, setDriveStats] = useState([]);
+  const [errorFrequency, setErrorFrequency] = useState(null);
   const logsEndRef = useRef(null);
 
   // Fetch drives and logs on mount
@@ -53,6 +54,7 @@ export default function Dashboard() {
     fetchFailedRips();
     fetchRipHistory();
     fetchDriveStats();
+    fetchErrorFrequency();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -332,6 +334,15 @@ export default function Dashboard() {
       setDriveStats(data);
     } catch (err) {
       console.error('Failed to fetch drive stats:', err);
+    }
+  }, []);
+
+  const fetchErrorFrequency = useCallback(async () => {
+    try {
+      const data = await api.getErrorFrequency();
+      setErrorFrequency(data);
+    } catch (err) {
+      console.error('Failed to fetch error frequency:', err);
     }
   }, []);
 
@@ -724,6 +735,92 @@ export default function Dashboard() {
           <p className="text-slate-400 text-xs mt-3">
             Darker shades indicate more frequent usage. Hover for details.
           </p>
+        </div>
+      )}
+
+      {/* Error Frequency Chart */}
+      {errorFrequency && errorFrequency.by_type && errorFrequency.by_type.length > 0 && (
+        <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+          <h2 className="text-lg font-semibold text-slate-100 mb-4">Error Frequency by Type</h2>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={errorFrequency.by_type}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+              <XAxis 
+                dataKey="issue_type" 
+                stroke="#94a3b8" 
+                tick={{ fontSize: 12 }}
+                angle={-45}
+                textAnchor="end"
+                height={80}
+              />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: '#1e293b', 
+                  border: '1px solid #334155',
+                  borderRadius: '8px',
+                  color: '#f1f5f9'
+                }}
+              />
+              <Legend />
+              <Bar dataKey="count" fill="#ef4444" name="Total Errors" />
+              <Bar dataKey="active" fill="#f59e0b" name="Active" />
+              <Bar dataKey="resolved" fill="#22d3ee" name="Resolved" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Timeline View of Rip Operations */}
+      {ripHistory.length > 0 && (
+        <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+          <h2 className="text-lg font-semibold text-slate-100 mb-4">Rip Operations Timeline</h2>
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {[...ripHistory].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).slice(0, 20).map((rip, idx) => {
+              const statusColor = rip.status === 'success' ? 'bg-green-500' : 
+                                  rip.status === 'failed' ? 'bg-red-500' : 'bg-slate-500';
+              const statusBorderColor = rip.status === 'success' ? 'border-green-500/50' : 
+                                       rip.status === 'failed' ? 'border-red-500/50' : 'border-slate-500/50';
+              const duration = rip.duration_seconds ? formatElapsedTime(rip.duration_seconds) : 'N/A';
+              
+              return (
+                <div key={idx} className={`${statusBorderColor} border-l-4 bg-slate-900/50 rounded p-3`}>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className={`w-2 h-2 rounded-full ${statusColor}`}></div>
+                        <h3 className="font-semibold text-slate-100 text-sm">
+                          {rip.title || 'Unknown Title'}
+                        </h3>
+                        <span className={`px-2 py-0.5 rounded text-xs ${
+                          rip.status === 'success' ? 'bg-green-500/20 text-green-400' :
+                          rip.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                          'bg-slate-500/20 text-slate-400'
+                        }`}>
+                          {rip.status.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-xs text-slate-400 ml-4">
+                        <span>📅 {new Date(rip.timestamp).toLocaleString()}</span>
+                        {rip.drive && <span>💿 {rip.drive}</span>}
+                        {rip.duration_seconds && <span>⏱️ {duration}</span>}
+                        {rip.file_size_bytes && <span>💾 {formatBytes(rip.file_size_bytes)}</span>}
+                        {rip.avg_speed_mbps && <span>⚡ {rip.avg_speed_mbps.toFixed(1)} MB/s</span>}
+                      </div>
+                      {rip.error_message && (
+                        <p className="text-xs text-red-400 mt-2 ml-4">{rip.error_message}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {ripHistory.length > 20 && (
+            <p className="text-slate-400 text-xs mt-3 text-center">
+              Showing last 20 operations. Total: {ripHistory.length}
+            </p>
+          )}
         </div>
       )}
 
