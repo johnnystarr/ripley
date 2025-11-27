@@ -128,7 +128,27 @@ class ApiClient {
     });
   }
 
-  // Get last used title
+  // Get notes for an issue
+  async getIssueNotes(issueId) {
+    return this.request(`/issues/${issueId}/notes`);
+  }
+
+  // Add a note to an issue
+  async addIssueNote(issueId, note) {
+    return this.request(`/issues/${issueId}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    });
+  }
+
+  // Delete an issue note
+  async deleteIssueNote(issueId, noteId) {
+    return this.request(`/issues/${issueId}/notes/${noteId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Set last used title
   async getLastTitle() {
     return this.request('/settings/last-title');
   }

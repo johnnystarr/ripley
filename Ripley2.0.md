@@ -67,7 +67,7 @@
 ### Issues Page (New)
 - [x] Create dedicated Issues page with filtering
 - [x] Add issue categories and tags
-- [ ] Add notes/comments to issues
+- [x] Add notes/comments to issues
 - [x] Show related logs for each issue
 - [x] Add issue export (for bug reports)
 - [ ] Track issue resolution time

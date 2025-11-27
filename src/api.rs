@@ -284,6 +284,9 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/issues", get(get_all_issues_handler))
         .route("/issues/active", get(get_active_issues))
         .route("/issues/:id/resolve", post(resolve_issue))
+        .route("/issues/:id/notes", get(get_issue_notes_handler))
+        .route("/issues/:id/notes", post(add_issue_note_handler))
+        .route("/issues/:id/notes/:note_id", delete(delete_issue_note_handler))
         .route("/settings/last-title", get(get_last_title))
         .route("/settings/last-title", post(set_last_title))
         .route("/settings/last-show", get(get_last_show_id_handler))
@@ -773,6 +776,51 @@ async fn resolve_issue(
         Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to resolve issue: {}", e),
+        }),
+    }
+}
+
+/// Get notes for an issue
+async fn get_issue_notes_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<Vec<crate::database::IssueNote>>, ErrorResponse> {
+    match state.db.get_issue_notes(id) {
+        Ok(notes) => Ok(Json(notes)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get issue notes: {}", e),
+        }),
+    }
+}
+
+/// Add a note to an issue
+#[derive(Deserialize)]
+struct AddNoteRequest {
+    note: String,
+}
+
+async fn add_issue_note_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(request): Json<AddNoteRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.add_issue_note(id, &request.note) {
+        Ok(note_id) => Ok(Json(serde_json::json!({ "success": true, "id": note_id }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to add note: {}", e),
+        }),
+    }
+}
+
+/// Delete an issue note
+async fn delete_issue_note_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path((_issue_id, note_id)): axum::extract::Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.delete_issue_note(note_id) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to delete note: {}", e),
         }),
     }
 }

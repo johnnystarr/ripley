@@ -62,6 +62,15 @@ pub struct Issue {
     pub resolved_at: Option<DateTime<Utc>>,
 }
 
+/// Issue note/comment for tracking resolution progress
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueNote {
+    pub id: Option<i64>,
+    pub issue_id: i64,
+    pub timestamp: DateTime<Utc>,
+    pub note: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IssueType {
@@ -250,6 +259,18 @@ impl Database {
             [],
         )?;
 
+        // Create issue notes table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS issue_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                note TEXT NOT NULL,
+                FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
         // Create settings table for persistent user preferences
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -330,6 +351,11 @@ impl Database {
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_issues_resolved ON issues(resolved)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_issue_notes_issue_id ON issue_notes(issue_id)",
             [],
         )?;
 
@@ -613,6 +639,47 @@ impl Database {
             params![Utc::now().to_rfc3339(), id],
         )?;
 
+        Ok(())
+    }
+
+    /// Add a note to an issue
+    pub fn add_issue_note(&self, issue_id: i64, note: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "INSERT INTO issue_notes (issue_id, timestamp, note) VALUES (?1, ?2, ?3)",
+            params![issue_id, Utc::now().to_rfc3339(), note],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get notes for an issue
+    pub fn get_issue_notes(&self, issue_id: i64) -> Result<Vec<IssueNote>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, issue_id, timestamp, note FROM issue_notes WHERE issue_id = ?1 ORDER BY timestamp ASC"
+        )?;
+
+        let notes = stmt.query_map([issue_id], |row| {
+            Ok(IssueNote {
+                id: Some(row.get(0)?),
+                issue_id: row.get(1)?,
+                timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                note: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(notes)
+    }
+
+    /// Delete an issue note
+    pub fn delete_issue_note(&self, note_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM issue_notes WHERE id = ?1", [note_id])?;
         Ok(())
     }
 

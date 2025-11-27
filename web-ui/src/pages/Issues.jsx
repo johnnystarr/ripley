@@ -22,6 +22,9 @@ export default function Issues() {
   const [typeFilter, setTypeFilter] = useState('all'); // all, drive_error, network_error, rip_error
   const [expandedIssue, setExpandedIssue] = useState(null);
   const [issueLogs, setIssueLogs] = useState({});
+  const [issueNotes, setIssueNotes] = useState({});
+  const [newNote, setNewNote] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
 
   useEffect(() => {
     fetchIssues();
@@ -74,6 +77,43 @@ export default function Issues() {
     toast.success('Issues exported');
   }, [filteredIssues]);
 
+  const fetchIssueNotes = useCallback(async (issueId) => {
+    try {
+      const notes = await api.getIssueNotes(issueId);
+      setIssueNotes(prev => ({ ...prev, [issueId]: notes }));
+    } catch (err) {
+      console.error('Failed to fetch notes:', err);
+    }
+  }, []);
+
+  const handleAddNote = useCallback(async (issueId) => {
+    if (!newNote.trim()) return;
+    
+    try {
+      setAddingNote(true);
+      await api.addIssueNote(issueId, newNote.trim());
+      setNewNote('');
+      toast.success('Note added');
+      fetchIssueNotes(issueId);
+    } catch (err) {
+      toast.error('Failed to add note: ' + err.message);
+    } finally {
+      setAddingNote(false);
+    }
+  }, [newNote, fetchIssueNotes]);
+
+  const handleDeleteNote = useCallback(async (issueId, noteId) => {
+    if (!confirm('Delete this note?')) return;
+    
+    try {
+      await api.deleteIssueNote(issueId, noteId);
+      toast.success('Note deleted');
+      fetchIssueNotes(issueId);
+    } catch (err) {
+      toast.error('Failed to delete note: ' + err.message);
+    }
+  }, [fetchIssueNotes]);
+
   const toggleIssueLogs = useCallback(async (issue) => {
     if (expandedIssue === issue.id) {
       setExpandedIssue(null);
@@ -81,6 +121,11 @@ export default function Issues() {
     }
     
     setExpandedIssue(issue.id);
+    
+    // Fetch notes if not already cached
+    if (!issueNotes[issue.id]) {
+      fetchIssueNotes(issue.id);
+    }
     
     // Fetch logs if not already cached
     if (!issueLogs[issue.id]) {
@@ -104,7 +149,7 @@ export default function Issues() {
         console.error('Failed to fetch issue logs:', err);
       }
     }
-  }, [expandedIssue, issueLogs]);
+  }, [expandedIssue, issueLogs, issueNotes, fetchIssueNotes]);
 
   const getIssueIcon = useCallback((issueType) => {
     switch (issueType?.toLowerCase()) {
@@ -333,6 +378,55 @@ export default function Issues() {
                   >
                     {expandedIssue === issue.id ? '▼' : '▶'} Show Related Logs
                   </button>
+                  
+                  {/* Notes Section */}
+                  {expandedIssue === issue.id && (
+                    <div className="mt-3 bg-slate-900/50 rounded p-3">
+                      <h4 className="text-sm font-semibold text-slate-300 mb-2">Notes & Comments</h4>
+                      
+                      {/* Existing Notes */}
+                      {issueNotes[issue.id] && issueNotes[issue.id].length > 0 && (
+                        <div className="space-y-2 mb-3">
+                          {issueNotes[issue.id].map((note) => (
+                            <div key={note.id} className="bg-slate-800 rounded p-2 text-sm">
+                              <div className="flex justify-between items-start">
+                                <p className="text-slate-300 flex-1">{note.note}</p>
+                                <button
+                                  onClick={() => handleDeleteNote(issue.id, note.id)}
+                                  className="text-red-400 hover:text-red-300 ml-2"
+                                  title="Delete note"
+                                >
+                                  ×
+                                </button>
+                              </div>
+                              <p className="text-xs text-slate-500 mt-1">
+                                {new Date(note.timestamp).toLocaleString()}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* Add Note Form */}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newNote}
+                          onChange={(e) => setNewNote(e.target.value)}
+                          onKeyPress={(e) => e.key === 'Enter' && handleAddNote(issue.id)}
+                          placeholder="Add a note..."
+                          className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-slate-100 text-sm placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                        />
+                        <button
+                          onClick={() => handleAddNote(issue.id)}
+                          disabled={!newNote.trim() || addingNote}
+                          className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded text-sm transition-colors"
+                        >
+                          {addingNote ? 'Adding...' : 'Add'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Related Logs */}
                   {expandedIssue === issue.id && (
