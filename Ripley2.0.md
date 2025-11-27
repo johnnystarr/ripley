@@ -1,5 +1,9 @@
 # Ripley 2.0 - Enhancement Roadmap
 
+## TUI Feature Parity
+- [ ] Validate DVD, BluRay, CDs work still
+- [ ] Multiple Disk Drives
+
 ## Frontend Enhancements
 
 ### Dashboard Improvements
@@ -30,9 +34,7 @@
 ### Navigation & Layout
 - [ ] Add breadcrumbs navigation
 - [ ] Improve mobile responsiveness (sidebar toggle)
-- [ ] Add keyboard shortcuts (Ctrl+K for search, etc.)
 - [ ] Add global search (search across logs, shows, issues)
-- [ ] Add dark/light mode toggle (currently dark only)
 - [ ] Add user preferences (logs per page, polling interval, etc.)
 
 ### Real-time Features
@@ -77,10 +79,7 @@
 - [ ] Add user preferences table
 - [ ] Add database migrations system
 - [ ] Add database backup/restore functionality
-- [ ] Add database vacuum/optimization scheduler
 - [ ] Add full-text search for logs
-- [ ] Add automatic log rotation (by size/date)
-- [ ] Add configurable log retention policies
 
 ### Ripping Features
 - [ ] Add support for multiple simultaneous rips (multi-drive)
@@ -119,9 +118,7 @@
 **Low Priority (v2.2+):**
 - PWA support
 - Checksum verification
-- Database backup/restore
 - Full-text log search
-- Auto log rotation
 
 ---
 
