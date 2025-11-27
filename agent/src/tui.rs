@@ -397,8 +397,10 @@ impl TuiApp {
                                 if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
                                     match self.editing_field {
                                         EditingField::ServerUrl => {
-                                            // Allow all characters for URL/IP (including dots, colons, slashes, etc.)
-                                            self.server_url_input.push(c);
+                                            // Only allow IP address characters (digits, dots)
+                                            if c.is_ascii_digit() || c == '.' {
+                                                self.server_url_input.push(c);
+                                            }
                                         }
                                         EditingField::AgentName => {
                                             // Allow alphanumeric, dash, underscore for agent name
@@ -540,13 +542,18 @@ impl TuiApp {
                 ])
                 .split(chunks[2]);
             
-            // Server URL input
+            // Server IP input
             let editing_url = editing_field == EditingField::ServerUrl;
+            let display_url = if server_url_input.is_empty() {
+                "192.168.1.100".to_string()
+            } else {
+                server_url_input.clone()
+            };
             let url_prompt = Paragraph::new(vec![
                 Line::from(vec![
-                    Span::styled("Server URL/IP: ", Style::default().fg(Color::Cyan)),
+                    Span::styled("Server IP Address: ", Style::default().fg(Color::Cyan)),
                     Span::styled(
-                        if server_url_input.is_empty() { "http://..." } else { server_url_input },
+                        &display_url,
                         Style::default()
                             .fg(if editing_url { Color::Yellow } else { Color::White })
                             .add_modifier(if editing_url { Modifier::BOLD | Modifier::UNDERLINED } else { Modifier::empty() }),
@@ -558,12 +565,17 @@ impl TuiApp {
                     },
                 ]),
                 Line::from(vec![
-                    Span::styled("Example: http://192.168.1.100:3000", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Will connect to: http://", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        if server_url_input.is_empty() { "192.168.1.100" } else { server_url_input },
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(":3000", Style::default().fg(Color::DarkGray)),
                 ]),
             ])
             .block(Block::default()
                 .borders(Borders::ALL)
-                .title(if editing_url { "Server URL (Press Tab for Agent Name)" } else { "Server URL" }))
+                .title(if editing_url { "Server IP (Press Tab for Agent Name)" } else { "Server IP" }))
             .wrap(Wrap { trim: true });
             f.render_widget(url_prompt, inner_chunks[0]);
             
