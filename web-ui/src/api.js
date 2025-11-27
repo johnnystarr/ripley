@@ -296,6 +296,14 @@ class ApiClient {
     return this.request('/monitor/operations');
   }
 
+  async getOperationHistory(limit, status) {
+    const params = new URLSearchParams();
+    if (limit) params.append('limit', limit);
+    if (status) params.append('status', status);
+    const query = params.toString();
+    return this.request(`/monitor/operations/history${query ? `?${query}` : ''}`);
+  }
+
   // Get monitor drives
   async getMonitorDrives() {
     return this.request('/monitor/drives');

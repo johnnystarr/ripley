@@ -366,12 +366,41 @@ async fn complete_operation(
             op.message = msg;
         }
         
-        let operation_id = operation_id.to_string();
+        // Clone operation data for saving to database
+        let op_for_db = op.clone();
+        let operation_id_str = operation_id.to_string();
         drop(operations);
+        
+        // Save to operation history
+        let operation_type_str = match op_for_db.operation_type {
+            OperationType::Rip => "rip",
+            OperationType::Upscale => "upscale",
+            OperationType::Rename => "rename",
+            OperationType::Transfer => "transfer",
+            OperationType::Other => "other",
+        };
+        let status_str = "completed";
+        let started_at_str = op_for_db.started_at.to_rfc3339();
+        let completed_at_str = op_for_db.completed_at.map(|dt| dt.to_rfc3339());
+        
+        if let Err(e) = state.db.save_operation_to_history(
+            &operation_id_str,
+            operation_type_str,
+            status_str,
+            op_for_db.drive.as_deref(),
+            op_for_db.title.as_deref(),
+            op_for_db.progress,
+            &op_for_db.message,
+            &started_at_str,
+            completed_at_str.as_deref(),
+            None,
+        ) {
+            tracing::warn!("Failed to save operation to history: {}", e);
+        }
         
         // Broadcast completion event
         let _ = state.event_tx.send(ApiEvent::OperationCompleted {
-            operation_id: operation_id.clone(),
+            operation_id: operation_id_str.clone(),
         });
         
         // Remove from active operations after a delay (to allow clients to see completion)
@@ -391,12 +420,42 @@ async fn fail_operation(
         op.completed_at = Some(chrono::Utc::now());
         op.error = Some(error.clone());
         
-        let operation_id = operation_id.to_string();
+        // Clone operation data for saving to database
+        let op_for_db = op.clone();
+        let operation_id_str = operation_id.to_string();
+        let error_str = error.clone();
         drop(operations);
+        
+        // Save to operation history
+        let operation_type_str = match op_for_db.operation_type {
+            OperationType::Rip => "rip",
+            OperationType::Upscale => "upscale",
+            OperationType::Rename => "rename",
+            OperationType::Transfer => "transfer",
+            OperationType::Other => "other",
+        };
+        let status_str = "failed";
+        let started_at_str = op_for_db.started_at.to_rfc3339();
+        let completed_at_str = op_for_db.completed_at.map(|dt| dt.to_rfc3339());
+        
+        if let Err(e) = state.db.save_operation_to_history(
+            &operation_id_str,
+            operation_type_str,
+            status_str,
+            op_for_db.drive.as_deref(),
+            op_for_db.title.as_deref(),
+            op_for_db.progress,
+            &op_for_db.message,
+            &started_at_str,
+            completed_at_str.as_deref(),
+            Some(&error_str),
+        ) {
+            tracing::warn!("Failed to save failed operation to history: {}", e);
+        }
         
         // Broadcast failure event
         let _ = state.event_tx.send(ApiEvent::OperationFailed {
-            operation_id: operation_id.clone(),
+            operation_id: operation_id_str.clone(),
             error,
         });
     }
@@ -514,6 +573,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/database/backup", post(backup_database_handler))
         .route("/database/restore", post(restore_database_handler))
         .route("/monitor/operations", get(get_monitor_operations))
+        .route("/monitor/operations/history", get(get_operation_history))
         .route("/monitor/drives", get(get_monitor_drives))
         // Agent endpoints
         .route("/agents", get(get_agents))
@@ -546,6 +606,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/upscaling-jobs/:job_id/assign", post(assign_upscaling_job))
         .route("/upscaling-jobs/:job_id/status", put(update_upscaling_job_status))
         .route("/upscaling-jobs/:job_id/output", put(update_upscaling_job_output))
+        .route("/upscaling-jobs/cleanup", post(cleanup_old_upscaling_jobs))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -1982,6 +2043,24 @@ async fn get_monitor_operations(State(state): State<ApiState>) -> Result<Json<Ve
     Ok(Json(all_operations))
 }
 
+/// Get operation history (completed/failed operations)
+async fn get_operation_history(
+    State(state): State<ApiState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<Operation>>, ErrorResponse> {
+    let limit = params.get("limit")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(50);
+    let status_filter = params.get("status").map(|s| s.as_str());
+    
+    match state.db.get_operation_history(Some(limit), status_filter) {
+        Ok(history) => Ok(Json(history)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get operation history: {}", e),
+        }),
+    }
+}
+
 /// Get monitor drives information
 async fn get_monitor_drives(State(_state): State<ApiState>) -> Result<Json<Vec<crate::drive::DriveInfo>>, ErrorResponse> {
     match crate::drive::detect_drives().await {
@@ -2756,6 +2835,36 @@ async fn download_file(
         })?;
     
     Ok(response)
+}
+
+/// Cleanup old upscaling jobs
+#[derive(Debug, Deserialize)]
+struct CleanupJobsRequest {
+    days_threshold: Option<i64>,
+    keep_recent: Option<i64>,
+}
+
+async fn cleanup_old_upscaling_jobs(
+    State(state): State<ApiState>,
+    Json(request): Json<CleanupJobsRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let days_threshold = request.days_threshold.unwrap_or(30); // Default: 30 days
+    let keep_recent = request.keep_recent; // Optional: keep N most recent jobs
+    
+    match state.db.cleanup_old_upscaling_jobs(days_threshold, keep_recent) {
+        Ok(deleted_count) => {
+            info!("Cleaned up {} old upscaling jobs (threshold: {} days)", deleted_count, days_threshold);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "deleted_count": deleted_count,
+                "days_threshold": days_threshold,
+                "keep_recent": keep_recent
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to cleanup old jobs: {}", e),
+        }),
+    }
 }
 
 #[cfg(test)]

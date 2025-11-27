@@ -15,7 +15,7 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Add endpoint to get drive information `/api/monitor/drives`
 - [x] Implement operation lifecycle management (start, update, complete, error)
 - [ ] Add real-time log streaming per operation via WebSocket
-- [ ] Store operation history in database for past operations view
+- [x] Store operation history in database for past operations view
 
 ### Frontend - Monitor Page
 
@@ -34,7 +34,7 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Implement log level filtering (error, warning, info) - shown in log entries
 - [x] Add timestamps and drive indicators to log entries
 - [x] Create empty state when no operations are active
-- [ ] Add operation history view (show recently completed operations)
+- [x] Add operation history view (show recently completed operations)
 
 ### Dashboard Cleanup
 
@@ -119,7 +119,7 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Add file transfer preparation (prepare file for agent download)
 - [x] Implement job status tracking (queued, assigned, processing, completed, failed)
 - [x] Add job result reporting (output file path, processing time, etc.)
-- [ ] Create job cleanup/garbage collection for old jobs
+- [x] Create job cleanup/garbage collection for old jobs
 - [ ] Add job retry logic for failed upscaling jobs
 - [ ] Integrate with existing rename workflow (wait for upscaling before renaming)
 

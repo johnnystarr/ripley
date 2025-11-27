@@ -13,6 +13,8 @@ import {
   faExclamationTriangle,
   faCircle,
   faFilter,
+  faHistory,
+  faClock,
 } from '@fortawesome/free-solid-svg-icons';
 import { api } from '../api';
 import { wsManager } from '../websocket';
@@ -20,26 +22,45 @@ import toast from 'react-hot-toast';
 
 export default function Monitor() {
   const [operations, setOperations] = useState([]);
+  const [historyOperations, setHistoryOperations] = useState([]);
   const [drives, setDrives] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expandedOperations, setExpandedOperations] = useState(new Set());
   const [operationLogs, setOperationLogs] = useState({}); // operation_id -> logs array
   const [statusFilter, setStatusFilter] = useState('all'); // all, running, completed, failed
+  const [viewMode, setViewMode] = useState('active'); // 'active' or 'history'
   const logEndRefs = useRef({});
+
+  const fetchOperationHistory = useCallback(async () => {
+    try {
+      const limit = 50;
+      const status = statusFilter !== 'all' ? statusFilter : undefined;
+      const data = await api.getOperationHistory(limit, status);
+      setHistoryOperations(data);
+    } catch (err) {
+      console.error('Failed to fetch operation history:', err);
+    }
+  }, [statusFilter]);
 
   // Fetch initial data
   useEffect(() => {
     fetchOperations();
     fetchDrives();
+    if (viewMode === 'history') {
+      fetchOperationHistory();
+    }
     
     // Poll for updates every 2 seconds
     const interval = setInterval(() => {
       fetchOperations();
       fetchDrives();
+      if (viewMode === 'history') {
+        fetchOperationHistory();
+      }
     }, 2000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [viewMode, fetchOperationHistory]);
 
   // Set up WebSocket listeners for real-time updates
   useEffect(() => {
@@ -138,6 +159,7 @@ export default function Monitor() {
     }
   }, []);
 
+
   const toggleOperationExpansion = useCallback((operationId) => {
     setExpandedOperations(prev => {
       const newSet = new Set(prev);
@@ -202,10 +224,15 @@ export default function Monitor() {
     return `${diffSecs}s`;
   };
 
-  const filteredOperations = operations.filter(op => {
-    if (statusFilter === 'all') return true;
-    return op.status === statusFilter;
-  });
+  const filteredOperations = viewMode === 'active'
+    ? operations.filter(op => {
+        if (statusFilter === 'all') return true;
+        return op.status === statusFilter;
+      })
+    : historyOperations.filter(op => {
+        if (statusFilter === 'all') return true;
+        return op.status === statusFilter;
+      });
 
   const activeOperations = operations.filter(op => op.status === 'running' || op.status === 'paused');
 
@@ -223,10 +250,39 @@ export default function Monitor() {
         <div>
           <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Monitor</h1>
           <p className="text-slate-400 mt-2 text-sm sm:text-base">
-            Real-time monitoring of all active operations
+            {viewMode === 'active' 
+              ? 'Real-time monitoring of all active operations'
+              : 'View completed and failed operations from history'}
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 bg-slate-800 rounded-lg p-1 border border-slate-700">
+            <button
+              onClick={() => setViewMode('active')}
+              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                viewMode === 'active'
+                  ? 'bg-cyan-500 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FontAwesomeIcon icon={faClock} className="mr-2" />
+              Active
+            </button>
+            <button
+              onClick={() => {
+                setViewMode('history');
+                fetchOperationHistory();
+              }}
+              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                viewMode === 'history'
+                  ? 'bg-cyan-500 text-white'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FontAwesomeIcon icon={faHistory} className="mr-2" />
+              History
+            </button>
+          </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -247,9 +303,15 @@ export default function Monitor() {
         <div className="lg:col-span-2 space-y-4">
           {filteredOperations.length === 0 ? (
             <div className="bg-slate-800 rounded-lg p-12 border border-slate-700 text-center">
-              <FontAwesomeIcon icon={faCompactDisc} className="text-slate-600 text-5xl mb-4" />
-              <h3 className="text-xl font-semibold text-slate-100 mb-2">No Operations</h3>
-              <p className="text-slate-400">No operations match the current filter</p>
+              <FontAwesomeIcon icon={viewMode === 'history' ? faHistory : faCompactDisc} className="text-slate-600 text-5xl mb-4" />
+              <h3 className="text-xl font-semibold text-slate-100 mb-2">
+                {viewMode === 'history' ? 'No History' : 'No Operations'}
+              </h3>
+              <p className="text-slate-400">
+                {viewMode === 'history' 
+                  ? 'No completed or failed operations found'
+                  : 'No operations match the current filter'}
+              </p>
             </div>
           ) : (
             filteredOperations.map((operation) => {

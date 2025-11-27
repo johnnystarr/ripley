@@ -1041,6 +1041,52 @@ impl Database {
                 params![8, "add_agent_output_location", chrono::Utc::now().to_rfc3339()],
             )?;
         }
+
+        // Migration 9: Add operation_history table
+        if current_version < 9 {
+            info!("Applying migration 9: add_operation_history_table");
+            
+            let table_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='operation_history'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if table_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE operation_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        operation_id TEXT NOT NULL UNIQUE,
+                        operation_type TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        drive TEXT,
+                        title TEXT,
+                        progress REAL NOT NULL DEFAULT 0.0,
+                        message TEXT NOT NULL,
+                        started_at TEXT NOT NULL,
+                        completed_at TEXT,
+                        error TEXT,
+                        created_at TEXT NOT NULL
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_operation_history_status ON operation_history(status, completed_at DESC)",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_operation_history_type ON operation_history(operation_type, completed_at DESC)",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![9, "add_operation_history_table", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
         
         Ok(())
     }
@@ -1898,6 +1944,195 @@ impl Database {
         )?;
         
         Ok(())
+    }
+
+    /// Clean up old upscaling jobs (delete completed/failed jobs older than X days, keeping recent N jobs)
+    /// Returns total number of deleted jobs
+    pub fn cleanup_old_upscaling_jobs(&self, days_threshold: i64, keep_recent: Option<i64>) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let threshold = chrono::Utc::now() - chrono::Duration::days(days_threshold);
+        let threshold_str = threshold.to_rfc3339();
+        
+        // First, count jobs that will be deleted
+        let completed_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM upscaling_jobs 
+             WHERE status IN ('completed', 'failed', 'cancelled') 
+             AND completed_at IS NOT NULL 
+             AND completed_at < ?1",
+            params![&threshold_str],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        let queued_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM upscaling_jobs 
+             WHERE status = 'queued' 
+             AND created_at < ?1",
+            params![&threshold_str],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        // If keep_recent is specified, adjust threshold to keep that many recent jobs
+        if let Some(keep) = keep_recent {
+            // Get the oldest job that should be kept
+            let oldest_to_keep: Option<String> = conn.query_row(
+                "SELECT completed_at FROM upscaling_jobs 
+                 WHERE status IN ('completed', 'failed', 'cancelled') 
+                 AND completed_at IS NOT NULL
+                 ORDER BY completed_at DESC 
+                 LIMIT 1 OFFSET ?",
+                params![keep],
+                |row| row.get(0),
+            ).ok();
+            
+            if let Some(oldest_date) = oldest_to_keep {
+                // Only delete jobs older than the oldest job we want to keep
+                let deleted_completed = conn.execute(
+                    "DELETE FROM upscaling_jobs 
+                     WHERE status IN ('completed', 'failed', 'cancelled') 
+                     AND completed_at IS NOT NULL 
+                     AND completed_at < ?1 
+                     AND completed_at < ?2",
+                    params![&threshold_str, &oldest_date],
+                )?;
+                
+                let deleted_queued = conn.execute(
+                    "DELETE FROM upscaling_jobs 
+                     WHERE status = 'queued' 
+                     AND created_at < ?1",
+                    params![&threshold_str],
+                )?;
+                
+                return Ok(deleted_completed + deleted_queued);
+            }
+        }
+        
+        // Delete completed/failed/cancelled jobs older than threshold
+        let deleted_completed = conn.execute(
+            "DELETE FROM upscaling_jobs 
+             WHERE status IN ('completed', 'failed', 'cancelled') 
+             AND completed_at IS NOT NULL 
+             AND completed_at < ?1",
+            params![&threshold_str],
+        )?;
+        
+        // Delete stale queued jobs (never assigned)
+        let deleted_queued = conn.execute(
+            "DELETE FROM upscaling_jobs 
+             WHERE status = 'queued' 
+             AND created_at < ?1",
+            params![&threshold_str],
+        )?;
+        
+        Ok(deleted_completed + deleted_queued)
+    }
+
+    // Operation History methods
+
+    /// Save an operation to history (when it completes or fails)
+    pub fn save_operation_to_history(
+        &self,
+        operation_id: &str,
+        operation_type: &str,
+        status: &str,
+        drive: Option<&str>,
+        title: Option<&str>,
+        progress: f32,
+        message: &str,
+        started_at: &str,
+        completed_at: Option<&str>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        // Insert or replace (in case operation was already saved)
+        conn.execute(
+            "INSERT OR REPLACE INTO operation_history 
+             (operation_id, operation_type, status, drive, title, progress, message, started_at, completed_at, error, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                operation_id,
+                operation_type,
+                status,
+                drive,
+                title,
+                progress,
+                message,
+                started_at,
+                completed_at,
+                error,
+                now,
+            ],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Get operation history (completed/failed operations)
+    pub fn get_operation_history(&self, limit: Option<i64>, status_filter: Option<&str>) -> Result<Vec<crate::api::Operation>> {
+        use chrono::DateTime;
+        use chrono::Utc;
+        
+        let conn = self.conn.lock().unwrap();
+        let limit = limit.unwrap_or(100);
+        
+        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(ref status) = status_filter {
+            (
+                "SELECT operation_id, operation_type, status, drive, title, progress, message, started_at, completed_at, error
+                 FROM operation_history
+                 WHERE status = ?
+                 ORDER BY completed_at DESC, created_at DESC
+                 LIMIT ?".to_string(),
+                vec![Box::new(status.to_string()), Box::new(limit)],
+            )
+        } else {
+            (
+                "SELECT operation_id, operation_type, status, drive, title, progress, message, started_at, completed_at, error
+                 FROM operation_history
+                 ORDER BY completed_at DESC, created_at DESC
+                 LIMIT ?".to_string(),
+                vec![Box::new(limit)],
+            )
+        };
+        
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        
+        let operations = stmt.query_map(&param_refs[..], |row| {
+            Ok(crate::api::Operation {
+                operation_id: row.get(0)?,
+                operation_type: match row.get::<_, String>(1)?.as_str() {
+                    "rip" => crate::api::OperationType::Rip,
+                    "upscale" => crate::api::OperationType::Upscale,
+                    "rename" => crate::api::OperationType::Rename,
+                    "transfer" => crate::api::OperationType::Transfer,
+                    _ => crate::api::OperationType::Other,
+                },
+                status: match row.get::<_, String>(2)?.as_str() {
+                    "queued" => crate::api::OperationStatus::Queued,
+                    "running" => crate::api::OperationStatus::Running,
+                    "paused" => crate::api::OperationStatus::Paused,
+                    "completed" => crate::api::OperationStatus::Completed,
+                    "failed" => crate::api::OperationStatus::Failed,
+                    "cancelled" => crate::api::OperationStatus::Cancelled,
+                    _ => crate::api::OperationStatus::Failed,
+                },
+                drive: row.get(3)?,
+                title: row.get(4)?,
+                progress: row.get(5)?,
+                message: row.get(6)?,
+                started_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                completed_at: row.get::<_, Option<String>>(8)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+                error: row.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(operations)
     }
 
     /// Get all upscaling jobs
