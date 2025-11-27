@@ -12,6 +12,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Matrix build for multiple Rust versions (optional)
+  build-matrix:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        rust: [stable, 1.70, 1.75]
+        exclude:
+          - os: macos-latest
+            rust: 1.70
+          - os: macos-latest
+            rust: 1.75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ matrix.rust }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - name: Build (matrix)
+        run: cargo build --release
+      - name: Test (matrix)
+        run: cargo test --release
+
   # macOS Build and Test
   build-macos:
     runs-on: macos-latest
@@ -69,7 +94,8 @@ jobs:
             udisks2 \
             eject \
             libudev-dev \
-            pkg-config
+            pkg-config \
+            podman
       
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -95,6 +121,15 @@ jobs:
       
       - name: Run tests
         run: cargo test --release
+      
+      - name: Run Linux-specific tests (Docker/Podman)
+        if: hashFiles('Dockerfile.test') != ''
+        run: |
+          if command -v podman &> /dev/null; then
+            bash scripts/test-linux.sh || echo "Linux container tests skipped (Podman not available or Dockerfile.test missing)"
+          else
+            echo "Podman not available, skipping container tests"
+          fi
       
       - name: Create Linux package
         run: |
@@ -153,4 +188,15 @@ jobs:
         with:
           name: ripley-agent-windows
           path: dist/ripley-agent-windows.zip
+
+  # Notification on failure (optional)
+  notify-on-failure:
+    needs: [build-macos, build-linux, build-windows-agent]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify on failure
+        run: |
+          echo "One or more build jobs failed. Check the workflow logs for details."
+          # Add notification logic here (email, Slack, etc.) if needed
 

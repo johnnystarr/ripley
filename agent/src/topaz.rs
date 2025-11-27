@@ -44,9 +44,14 @@ impl TopazVideo {
         
         info!("Found Topaz Video AI at: {:?}", executable_path);
         
-        Ok(Self {
+        let instance = Self {
             executable_path,
-        })
+        };
+        
+        // Validate configuration
+        instance.validate_configuration()?;
+        
+        Ok(instance)
     }
     
     /// Get Topaz version
@@ -69,10 +74,19 @@ impl TopazVideo {
                 }
             }
             
-            // Fallback: Use executable file name or path as version identifier
-            // Extract version from path if available (e.g., "Topaz Video AI 4.0.0")
+            // Try to extract version from path (e.g., "Topaz Video AI 4.0.0" or "Topaz Video AI 5")
             if let Some(file_stem) = self.executable_path.parent() {
                 if let Some(parent_name) = file_stem.file_name().and_then(|n| n.to_str()) {
+                    // Try to extract version number from folder name
+                    let version_re = regex::Regex::new(r"(\d+\.\d+(?:\.\d+)?)").unwrap_or_else(|_| {
+                        // Fallback regex if compilation fails
+                        regex::Regex::new(r"(\d+)").unwrap()
+                    });
+                    if let Some(caps) = version_re.captures(parent_name) {
+                        if let Some(version) = caps.get(1) {
+                            return Ok(version.as_str().to_string());
+                        }
+                    }
                     return Ok(parent_name.to_string());
                 }
             }
@@ -84,6 +98,46 @@ impl TopazVideo {
         {
             Ok("Installed".to_string())
         }
+    }
+    
+    /// Check if Topaz version is supported
+    #[allow(dead_code)] // May be used in future version checks
+    pub fn is_version_supported(version: &str) -> bool {
+        // Extract major version number
+        let version_re = regex::Regex::new(r"^(\d+)").unwrap_or_else(|_| {
+            regex::Regex::new(r"(\d+)").unwrap()
+        });
+        if let Some(caps) = version_re.captures(version) {
+            if let Some(major_str) = caps.get(1) {
+                if let Ok(major) = major_str.as_str().parse::<u32>() {
+                    // Support Topaz Video AI 3.x, 4.x, and 5.x
+                    return major >= 3 && major <= 5;
+                }
+            }
+        }
+        // If we can't parse version, assume it's supported
+        true
+    }
+    
+    /// Validate Topaz configuration
+    pub fn validate_configuration(&self) -> Result<()> {
+        // Check executable exists
+        if !self.executable_path.exists() {
+            return Err(anyhow::anyhow!("Topaz executable not found at: {:?}", self.executable_path));
+        }
+        
+        // Check executable is actually executable
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(&self.executable_path)?;
+            let permissions = metadata.permissions();
+            if permissions.mode() & 0o111 == 0 {
+                return Err(anyhow::anyhow!("Topaz executable is not executable"));
+            }
+        }
+        
+        Ok(())
     }
     
     /// Execute upscaling with Topaz Video AI

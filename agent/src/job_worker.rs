@@ -298,9 +298,16 @@ impl JobWorker {
             
             info!("Job {} completed successfully", job_id);
             
-            // Don't clean up files - keep them in processing/ and upscaled/ folders
-            // Files can be manually cleaned up later if needed
-            // The processing folder can be cleaned periodically
+            // Clean up temporary input file after successful processing
+            // Keep upscaled output files for user review
+            if let Err(e) = tokio::fs::remove_file(&local_input_path).await {
+                warn!("Failed to clean up temporary input file {:?}: {}", local_input_path, e);
+            } else {
+                info!("Cleaned up temporary input file: {:?}", local_input_path);
+            }
+            
+            // Note: Upscaled files are kept in upscaled/ folder for user review
+            // They can be manually cleaned up or managed via a cleanup job
             
             // Clear current job
             *current_job.lock().await = None;

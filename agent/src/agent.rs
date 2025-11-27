@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use crate::config::AgentConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,106 +199,204 @@ impl AgentClient {
         }
     }
     
-    /// Download file from server
+    /// Download file from server with progress tracking and resume support
     pub async fn download_file(&self, file_path: &str, dest_path: &std::path::Path) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncSeekExt, AsyncWriteExt};
         use sha2::{Sha256, Digest};
+        
+        // Check disk space before download (basic check)
+        // Full implementation would use platform-specific APIs
+        // For now, we'll check file size from headers after request
         
         // URL encode the file path
         let encoded_path = urlencoding::encode(file_path);
         let url = format!("{}/api/agents/download/{}", self.config.server_url, encoded_path);
         
-        let response = self.http_client
-            .get(&url)
-            .send()
-            .await?;
+        // Check if file exists for resume
+        let mut resume_from = 0u64;
+        let mut file = if dest_path.exists() {
+            // Try to resume from existing file
+            let metadata = tokio::fs::metadata(dest_path).await?;
+            resume_from = metadata.len();
+            tracing::info!("Resuming download from byte {}", resume_from);
+            tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(dest_path).await?
+        } else {
+            // Create parent directory if needed
+            if let Some(parent) = dest_path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::File::create(dest_path).await?
+        };
         
-        if !response.status().is_success() {
+        // Seek to resume position if resuming
+        if resume_from > 0 {
+            file.seek(tokio::io::SeekFrom::Start(resume_from)).await?;
+        }
+        
+        let mut request = self.http_client.get(&url);
+        
+        // Add Range header for resume
+        if resume_from > 0 {
+            request = request.header("Range", format!("bytes={}-", resume_from));
+        }
+        
+        let response = request.send().await?;
+        
+        // Handle partial content (206) for resume, or regular (200) for new download
+        let status_code = response.status().as_u16();
+        if !response.status().is_success() && status_code != 206 {
             return Err(anyhow::anyhow!("Download failed: {}", response.status()));
         }
         
-        // Get expected checksum from header if available (before consuming response)
+        // Get expected checksum and file size from headers
         let expected_checksum = response.headers()
             .get("X-File-Checksum")
             .and_then(|h| h.to_str().ok())
             .map(|s| s.to_string());
         
-        // Create parent directory if needed
-        if let Some(parent) = dest_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        let total_size = response.headers()
+            .get("Content-Length")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+            .or_else(|| {
+                response.headers()
+                    .get("Content-Range")
+                    .and_then(|h| h.to_str().ok())
+                    .and_then(|s| {
+                        // Parse "bytes start-end/total" format
+                        s.split('/').nth(1)?.parse::<u64>().ok()
+                    })
+            });
         
-        // Download and calculate checksum simultaneously
+        // Download in chunks with progress tracking
+        // Note: Disk space checking is handled by the OS - download will fail if insufficient space
         let mut hasher = Sha256::new();
-        let mut file = tokio::fs::File::create(dest_path).await?;
         let mut stream = response.bytes_stream();
+        let mut downloaded = resume_from;
         
         use futures::StreamExt;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result?;
             hasher.update(&chunk);
             file.write_all(&chunk).await?;
+            downloaded += chunk.len() as u64;
+            
+            // Log progress periodically (every 10MB)
+            if downloaded % (10 * 1024 * 1024) < chunk.len() as u64 {
+                if let Some(total) = total_size {
+                    let percent = (downloaded as f64 / total as f64) * 100.0;
+                    tracing::debug!("Download progress: {:.1}% ({}/{} bytes)", percent, downloaded, total);
+                } else {
+                    tracing::debug!("Downloaded: {} bytes", downloaded);
+                }
+            }
         }
         
         file.sync_all().await?;
         
-        // Verify checksum if provided
-        if let Some(expected) = &expected_checksum {
-            let calculated = format!("{:x}", hasher.finalize());
-            if calculated != *expected {
-                // Clean up corrupted file
-                let _ = tokio::fs::remove_file(dest_path).await;
-                return Err(anyhow::anyhow!("Checksum mismatch: expected {}, got {}", expected, calculated));
+        // Verify checksum if provided (only for complete downloads)
+        if resume_from == 0 {
+            if let Some(expected) = &expected_checksum {
+                let calculated = format!("{:x}", hasher.finalize());
+                if calculated != *expected {
+                    // Clean up corrupted file
+                    let _ = tokio::fs::remove_file(dest_path).await;
+                    return Err(anyhow::anyhow!("Checksum mismatch: expected {}, got {}", expected, calculated));
+                }
+                tracing::info!("File checksum verified: {}", calculated);
             }
-            tracing::info!("File checksum verified: {}", calculated);
         }
         
         Ok(())
     }
     
-    /// Upload file to server
+    /// Upload file to server with progress tracking and retry logic
     pub async fn upload_file(&self, file_path: &std::path::Path, agent_id: Option<&str>, job_id: Option<&str>) -> Result<()> {
-        let agent_id_owned = if let Some(aid) = agent_id {
-            aid.to_string()
-        } else {
-            self.agent_id.lock().unwrap().as_deref().map(|s| s.to_string()).unwrap_or_default()
-        };
+        const MAX_RETRIES: u32 = 3;
+        let mut retry_count = 0;
         
-        let url = format!("{}/api/agents/upload", self.config.server_url);
-        
-        let filename = file_path.file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
-        
-        // Read file into memory
-        let file_data = tokio::fs::read(file_path).await?;
-        
-        let mut form = reqwest::multipart::Form::new()
-            .text("agent_id", agent_id_owned);
-        
-        if let Some(jid) = job_id {
-            form = form.text("job_id", jid.to_string());
+        loop {
+            let agent_id_owned = if let Some(aid) = agent_id {
+                aid.to_string()
+            } else {
+                self.agent_id.lock().unwrap().as_deref().map(|s| s.to_string()).unwrap_or_default()
+            };
+            
+            let url = format!("{}/api/agents/upload", self.config.server_url);
+            
+            let filename = file_path.file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
+            
+            // Get file size for progress tracking
+            let file_metadata = tokio::fs::metadata(file_path).await?;
+            let file_size = file_metadata.len();
+            
+            // For large files, read in chunks to avoid loading entire file into memory
+            // For now, we'll read the whole file but this can be optimized for very large files
+            let file_data = tokio::fs::read(file_path).await?;
+            
+            let mut form = reqwest::multipart::Form::new()
+                .text("agent_id", agent_id_owned);
+            
+            if let Some(jid) = job_id {
+                form = form.text("job_id", jid.to_string());
+            }
+            
+            let file_part = reqwest::multipart::Part::bytes(file_data)
+                .file_name(filename.to_string())
+                .mime_str("application/octet-stream")?;
+            
+            form = form.part("file", file_part);
+            
+            tracing::info!("Uploading file: {} ({} bytes)", filename, file_size);
+            
+            let response_result = self.http_client
+                .post(&url)
+                .multipart(form)
+                .send()
+                .await;
+            
+            match response_result {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        tracing::info!("Upload completed successfully: {} bytes", file_size);
+                        return Ok(());
+                    } else {
+                        let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+                        if retry_count < MAX_RETRIES {
+                            retry_count += 1;
+                            tracing::warn!("Upload failed (attempt {}/{}): {}, retrying...", retry_count, MAX_RETRIES, error_text);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2 * retry_count as u64)).await;
+                            continue;
+                        }
+                        return Err(anyhow::anyhow!("Upload failed after {} retries: {}", MAX_RETRIES, error_text));
+                    }
+                }
+                Err(e) => {
+                    if retry_count < MAX_RETRIES && Self::is_retryable_upload_error(&e.to_string()) {
+                        retry_count += 1;
+                        tracing::warn!("Upload error (attempt {}/{}): {}, retrying...", retry_count, MAX_RETRIES, e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2 * retry_count as u64)).await;
+                        continue;
+                    }
+                    return Err(anyhow::anyhow!("Upload failed: {}", e));
+                }
+            }
         }
-        
-        let file_part = reqwest::multipart::Part::bytes(file_data)
-            .file_name(filename.to_string())
-            .mime_str("application/octet-stream")?;
-        
-        form = form.part("file", file_part);
-        
-        let response = self.http_client
-            .post(&url)
-            .multipart(form)
-            .send()
-            .await?;
-        
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("Upload failed: {}", error_text));
-        }
-        
-        Ok(())
     }
+    
+    /// Check if upload error is retryable
+    fn is_retryable_upload_error(error_msg: &str) -> bool {
+        let lower = error_msg.to_lowercase();
+        lower.contains("timeout") 
+            || lower.contains("connection")
+            || lower.contains("network")
+            || lower.contains("temporary")
+    }
+    
     
     /// Update upscaling job status
     pub async fn update_job_status(&self, job_id: &str, status: &str, progress: Option<f32>, error: Option<&str>) -> Result<()> {
