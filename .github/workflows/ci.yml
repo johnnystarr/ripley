@@ -1,0 +1,156 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  release:
+    types: [ created ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # macOS Build and Test
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      
+      - name: Build
+        run: cargo build --release
+      
+      - name: Run tests
+        run: cargo test --release
+      
+      - name: Create macOS package
+        run: |
+          mkdir -p dist
+          cp target/release/ripley dist/
+          tar -czf dist/ripley-macos.tar.gz -C dist ripley
+      
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ripley-macos
+          path: dist/ripley-macos.tar.gz
+
+  # Linux Build and Test
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            lsblk \
+            udisks2 \
+            eject \
+            libudev-dev \
+            pkg-config
+      
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      
+      - name: Build
+        run: cargo build --release
+      
+      - name: Run tests
+        run: cargo test --release
+      
+      - name: Create Linux package
+        run: |
+          mkdir -p dist
+          cp target/release/ripley dist/
+          tar -czf dist/ripley-linux.tar.gz -C dist ripley
+      
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ripley-linux
+          path: dist/ripley-linux.tar.gz
+
+  # Windows Agent Build
+  build-windows-agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          override: true
+      
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            agent/target/
+          key: ${{ runner.os }}-cargo-agent-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-agent-
+      
+      - name: Build agent
+        working-directory: agent
+        run: cargo build --release
+      
+      - name: Run agent tests
+        working-directory: agent
+        run: cargo test --release
+      
+      - name: Create Windows package
+        run: |
+          mkdir dist
+          copy agent\target\release\ripley-agent.exe dist\
+          powershell Compress-Archive -Path dist\ripley-agent.exe -DestinationPath dist\ripley-agent-windows.zip
+      
+      - name: Upload Windows agent artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ripley-agent-windows
+          path: dist/ripley-agent-windows.zip
+

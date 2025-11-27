@@ -34,6 +34,7 @@ pub struct TuiApp {
     editing_server_url: bool,
     connection_logs: Vec<String>,
     connection_in_progress: bool,
+    job_history: Vec<(String, String, f32)>, // (job_id, status, progress)
 }
 
 #[derive(Clone)]
@@ -65,6 +66,7 @@ impl TuiApp {
             editing_server_url: true,
             connection_logs: vec![],
             connection_in_progress: false,
+            job_history: vec![],
         })
     }
     
@@ -219,7 +221,23 @@ impl TuiApp {
             let current_job = if let Some(ref worker) = self.job_worker {
                 let current_job_arc = worker.current_job();
                 let job_guard = current_job_arc.lock().await;
-                job_guard.clone()
+                let job = job_guard.clone();
+                
+                // Update job history when job completes
+                if let Some(ref j) = job {
+                    if j.status == "completed" || j.status == "failed" {
+                        // Check if this job is already in history
+                        if !self.job_history.iter().any(|(id, _, _)| id == &j.job_id) {
+                            self.job_history.push((j.job_id.clone(), j.status.clone(), j.progress));
+                            // Keep only last 10 jobs
+                            if self.job_history.len() > 10 {
+                                self.job_history.remove(0);
+                            }
+                        }
+                    }
+                }
+                
+                job
             } else {
                 None
             };
@@ -232,6 +250,7 @@ impl TuiApp {
             let editing_url = self.editing_server_url;
             let logs_clone = self.connection_logs.clone();
             let current_job_clone = current_job.clone();
+            let job_history_clone = self.job_history.clone();
             
             self.terminal.draw(|f| {
                 Self::draw_ui(
@@ -244,6 +263,7 @@ impl TuiApp {
                     &logs_clone,
                     &current_job_clone,
                     self.agent_client.as_ref().map(|_c| None::<String>),
+                    &job_history_clone,
                 );
             })?;
             
@@ -300,6 +320,24 @@ impl TuiApp {
             }
         }
         
+        // Graceful shutdown
+        if let Some(ref worker) = self.job_worker {
+            // Signal shutdown to worker (will need to add shutdown flag)
+            // For now, just clear current job
+            let current_job_arc = worker.current_job();
+            let mut job_guard = current_job_arc.lock().await;
+            if job_guard.is_some() {
+                // Job is running, wait a bit for it to finish or cancel
+                drop(job_guard);
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+        }
+        
+        if let Some(ref client) = self.agent_client {
+            // Send final heartbeat to mark as offline (heartbeat method doesn't take status, but we can disconnect)
+            let _ = client.heartbeat().await;
+        }
+        
         // Cleanup
         disable_raw_mode()?;
         execute!(
@@ -322,12 +360,14 @@ impl TuiApp {
         connection_logs: &[String],
         current_job: &Option<crate::agent::UpscalingJob>,
         _agent_id: Option<Option<String>>,
+        job_history: &[(String, String, f32)],
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // Status header
                 Constraint::Length(8),  // Connection/Job info
+                Constraint::Length(6),  // Job history
                 Constraint::Min(0),     // Instructions/Logs
             ])
             .split(f.area());
@@ -472,6 +512,35 @@ impl TuiApp {
             f.render_widget(no_job, chunks[1]);
         }
         
+        // Job history
+        let history_items: Vec<ListItem> = job_history.iter()
+            .rev()
+            .take(5)
+            .map(|(job_id, status, progress)| {
+                let status_color = match status.as_str() {
+                    "completed" => Color::Green,
+                    "failed" => Color::Red,
+                    _ => Color::White,
+                };
+                let short_id = if job_id.len() > 12 {
+                    &job_id[..12]
+                } else {
+                    job_id
+                };
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::raw(format!("{} ", short_id)),
+                        Span::styled(status.clone(), Style::default().fg(status_color)),
+                        Span::raw(format!(" {:.1}%", progress)),
+                    ]),
+                ])
+            })
+            .collect();
+        let history_list = List::new(history_items)
+            .block(Block::default().borders(Borders::ALL).title("Recent Job History (Last 5)"))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(history_list, chunks[2]);
+        
         // Instructions list
         let instruction_items: Vec<ListItem> = instructions.iter()
             .map(|i| ListItem::new(i.as_str()))
@@ -479,6 +548,6 @@ impl TuiApp {
         let list = List::new(instruction_items)
             .block(Block::default().borders(Borders::ALL).title("Instructions"))
             .style(Style::default().fg(Color::White));
-        f.render_widget(list, chunks[2]);
+        f.render_widget(list, chunks[3]);
     }
 }

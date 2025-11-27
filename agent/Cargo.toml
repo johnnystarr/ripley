@@ -14,6 +14,10 @@ tokio = { version = "1.40", features = ["full"] }
 # HTTP client
 reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 urlencoding = "2.1"
+futures = "0.3"
+
+# Cryptography
+sha2 = "0.10"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -30,6 +34,9 @@ tracing-subscriber = "0.3"
 # Configuration
 dirs = "5.0"
 toml = "0.8"
+
+# Date/time
+chrono = "0.4"
 
 # File operations
 walkdir = "2.5"

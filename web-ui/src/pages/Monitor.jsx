@@ -293,6 +293,7 @@ export default function Monitor() {
             <option value="paused">Paused</option>
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
+            <option value="agent">Agent Operations</option>
           </select>
         </div>
       </div>

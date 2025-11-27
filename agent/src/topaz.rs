@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopazProfile {
@@ -130,12 +130,93 @@ impl TopazVideo {
         
         info!("Executing Topaz command: {:?}", cmd);
         
-        let output = cmd.output().await?;
+        // Spawn the process and capture output streams
+        let mut child = cmd.spawn()?;
         
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            error!("Topaz upscale failed: {}", stderr);
-            return Err(anyhow::anyhow!("Topaz upscale failed: {}", stderr));
+        // Read stderr in real-time for error detection
+        let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
+            let input_path_clone = input_path.to_path_buf();
+            let output_path_clone = output_path.to_path_buf();
+            Some(tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let reader = BufReader::new(&mut stderr);
+                let mut lines = reader.lines();
+                
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let line_lower = line.to_lowercase();
+                    
+                    // Check for common error patterns
+                    if line_lower.contains("error") || line_lower.contains("failed") || line_lower.contains("exception") {
+                        error!("Topaz error output: {}", line);
+                    } else if line_lower.contains("warning") {
+                        warn!("Topaz warning: {}", line);
+                    } else {
+                        debug!("Topaz stderr: {}", line);
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+        
+        // Read stdout for progress information
+        let stdout_handle = if let Some(mut stdout) = child.stdout.take() {
+            Some(tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let reader = BufReader::new(&mut stdout);
+                let mut lines = reader.lines();
+                
+                while let Ok(Some(line)) = lines.next_line().await {
+                    // Try to parse progress from output
+                    // Topaz may output progress in various formats
+                    if line.contains("%") || line.contains("progress") || line.contains("frame") {
+                        debug!("Topaz progress: {}", line);
+                    } else {
+                        debug!("Topaz stdout: {}", line);
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+        
+        // Wait for process to complete
+        let status = child.wait().await?;
+        
+        // Wait for output handlers to finish
+        if let Some(handle) = stderr_handle {
+            let _ = handle.await;
+        }
+        if let Some(handle) = stdout_handle {
+            let _ = handle.await;
+        }
+        
+        if !status.success() {
+            let exit_code = status.code().unwrap_or(-1);
+            error!("Topaz upscale failed with exit code: {}", exit_code);
+            
+            // Provide more helpful error messages based on exit code
+            let error_msg = match exit_code {
+                1 => "Topaz Video AI: General error or invalid arguments".to_string(),
+                2 => "Topaz Video AI: File not found or inaccessible".to_string(),
+                3 => "Topaz Video AI: Insufficient resources or memory".to_string(),
+                _ => format!("Topaz Video AI failed with exit code: {}", exit_code),
+            };
+            
+            return Err(anyhow::anyhow!("{}", error_msg));
+        }
+        
+        // Verify output file was created
+        if !output_path.exists() {
+            return Err(anyhow::anyhow!("Topaz upscale completed but output file not found: {:?}", output_path));
+        }
+        
+        // Check output file size (should be non-zero)
+        if let Ok(metadata) = std::fs::metadata(&output_path) {
+            if metadata.len() == 0 {
+                return Err(anyhow::anyhow!("Topaz upscale produced empty output file"));
+            }
+            info!("Output file size: {} bytes", metadata.len());
         }
         
         info!("Topaz upscale completed successfully");

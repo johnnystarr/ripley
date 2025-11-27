@@ -203,6 +203,7 @@ impl AgentClient {
     /// Download file from server
     pub async fn download_file(&self, file_path: &str, dest_path: &std::path::Path) -> Result<()> {
         use tokio::io::AsyncWriteExt;
+        use sha2::{Sha256, Digest};
         
         // URL encode the file path
         let encoded_path = urlencoding::encode(file_path);
@@ -217,15 +218,40 @@ impl AgentClient {
             return Err(anyhow::anyhow!("Download failed: {}", response.status()));
         }
         
+        // Get expected checksum from header if available
+        let expected_checksum = response.headers()
+            .get("X-File-Checksum")
+            .and_then(|h| h.to_str().ok());
+        
         // Create parent directory if needed
         if let Some(parent) = dest_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         
-        // Save file
+        // Download and calculate checksum simultaneously
+        let mut hasher = Sha256::new();
         let mut file = tokio::fs::File::create(dest_path).await?;
-        let bytes = response.bytes().await?;
-        file.write_all(&bytes).await?;
+        let mut stream = response.bytes_stream();
+        
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            hasher.update(&chunk);
+            file.write_all(&chunk).await?;
+        }
+        
+        file.sync_all().await?;
+        
+        // Verify checksum if provided
+        if let Some(expected) = expected_checksum {
+            let calculated = format!("{:x}", hasher.finalize());
+            if calculated != expected {
+                // Clean up corrupted file
+                let _ = tokio::fs::remove_file(dest_path).await;
+                return Err(anyhow::anyhow!("Checksum mismatch: expected {}, got {}", expected, calculated));
+            }
+            tracing::info!("File checksum verified: {}", calculated);
+        }
         
         Ok(())
     }

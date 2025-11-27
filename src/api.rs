@@ -606,6 +606,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/upscaling-jobs/:job_id/assign", post(assign_upscaling_job))
         .route("/upscaling-jobs/:job_id/status", put(update_upscaling_job_status))
         .route("/upscaling-jobs/:job_id/output", put(update_upscaling_job_output))
+        .route("/upscaling-jobs/:job_id/retry", post(retry_upscaling_job))
         .route("/upscaling-jobs/cleanup", post(cleanup_old_upscaling_jobs))
         .route("/ws", get(websocket_handler))
         .with_state(state);
@@ -1032,7 +1033,7 @@ async fn run_rip_operation(
                 level: "warning".to_string(),
                 message: format!("Retrying rip (attempt {}/{} after {}s delay)...", attempt, max_attempts, delay),
                 drive: Some(drive.clone()),
-                operation_id: None,
+                operation_id: Some(operation_id.clone()),
             });
             
             tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
@@ -1350,33 +1351,119 @@ async fn run_rename_operation(
         operation_id: None,
     });
     
-    // Call existing rename functionality
-    // Note: We'll need to refactor rename::run_rename to work without prompts
-    // For now, log the parameters that would be used
-    if let Some(ref title) = request.title {
-        let _ = state.event_tx.send(ApiEvent::Log {
-            level: "info".to_string(),
-            message: format!("Using title: {}", title),
-            drive: None,
-            operation_id: None,
-        });
+    // Check for pending upscaling jobs for files in this directory
+    let directory_path = std::path::PathBuf::from(&request.directory);
+    if directory_path.exists() {
+        // Find all MKV files in the directory
+        let mut mkv_files = Vec::new();
+        if let Ok(mut entries) = tokio::fs::read_dir(&directory_path).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                    if let Some(file_str) = path.to_str() {
+                        mkv_files.push(file_str.to_string());
+                    }
+                }
+            }
+        }
+        
+        // Check if any of these files have pending upscaling jobs
+        let mut pending_jobs = Vec::new();
+        for file_path in &mkv_files {
+            if let Ok(jobs) = state.db.get_upscaling_jobs(None) {
+                for job in jobs {
+                    if job.input_file_path == *file_path 
+                        && (job.status == crate::database::JobStatus::Queued 
+                            || job.status == crate::database::JobStatus::Assigned
+                            || job.status == crate::database::JobStatus::Processing) {
+                        pending_jobs.push(job.job_id.clone());
+                    }
+                }
+            }
+        }
+        
+        if !pending_jobs.is_empty() {
+            let _ = state.event_tx.send(ApiEvent::Log {
+                level: "warning".to_string(),
+                message: format!("Waiting for {} upscaling job(s) to complete before renaming...", pending_jobs.len()),
+                drive: None,
+                operation_id: None,
+            });
+            
+            // Poll for job completion (with timeout)
+            let start_time = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(3600); // 1 hour timeout
+            
+            while start_time.elapsed() < timeout {
+                let mut all_complete = true;
+                for job_id in &pending_jobs {
+                    if let Ok(jobs) = state.db.get_upscaling_jobs(None) {
+                        if let Some(job) = jobs.iter().find(|j| j.job_id == *job_id) {
+                            if job.status == crate::database::JobStatus::Queued 
+                                || job.status == crate::database::JobStatus::Assigned
+                                || job.status == crate::database::JobStatus::Processing {
+                                all_complete = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if all_complete {
+                    let _ = state.event_tx.send(ApiEvent::Log {
+                        level: "info".to_string(),
+                        message: "All upscaling jobs completed, proceeding with rename".to_string(),
+                        drive: None,
+                        operation_id: None,
+                    });
+                    break;
+                }
+                
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+            
+            if start_time.elapsed() >= timeout {
+                let _ = state.event_tx.send(ApiEvent::Log {
+                    level: "warning".to_string(),
+                    message: "Timeout waiting for upscaling jobs, proceeding with rename anyway".to_string(),
+                    drive: None,
+                    operation_id: None,
+                });
+            }
+        }
     }
-    let _ = state.event_tx.send(ApiEvent::Log {
-        level: "info".to_string(),
-        message: format!(
-            "Options: skip_speech={}, skip_filebot={}",
-            request.skip_speech, request.skip_filebot
-        ),
-        drive: None,
-        operation_id: None,
-    });
     
-    let _ = state.event_tx.send(ApiEvent::Log {
-        level: "success".to_string(),
-        message: "Rename operation completed".to_string(),
-        drive: None,
-        operation_id: None,
-    });
+    // Call existing rename functionality
+    let directory = if request.directory.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(&request.directory))
+    };
+    
+    match crate::rename::run_rename(
+        directory,
+        request.title.clone(),
+        request.skip_speech,
+        request.skip_filebot,
+    ).await {
+        Ok(_) => {
+            let _ = state.event_tx.send(ApiEvent::Log {
+                level: "success".to_string(),
+                message: "Rename operation completed successfully".to_string(),
+                drive: None,
+                operation_id: None,
+            });
+        }
+        Err(e) => {
+            let _ = state.event_tx.send(ApiEvent::Log {
+                level: "error".to_string(),
+                message: format!("Rename operation failed: {}", e),
+                drive: None,
+                operation_id: None,
+            });
+            return Err(e);
+        }
+    }
     
     Ok(())
 }
@@ -2835,6 +2922,34 @@ async fn download_file(
         })?;
     
     Ok(response)
+}
+
+/// Retry a failed upscaling job
+async fn retry_upscaling_job(
+    State(state): State<ApiState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let max_retries = params.get("max_retries")
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(3);
+    
+    match state.db.retry_upscaling_job(&job_id, max_retries) {
+        Ok(true) => {
+            info!("Retrying upscaling job: {}", job_id);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "job_id": job_id,
+                "message": "Job queued for retry"
+            })))
+        }
+        Ok(false) => Err(ErrorResponse {
+            error: format!("Job {} has exceeded maximum retry count ({})", job_id, max_retries),
+        }),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to retry job: {}", e),
+        }),
+    }
 }
 
 /// Cleanup old upscaling jobs

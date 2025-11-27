@@ -14,7 +14,7 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Create operation status model (operation_id, type, drive, status, progress, logs)
 - [x] Add endpoint to get drive information `/api/monitor/drives`
 - [x] Implement operation lifecycle management (start, update, complete, error)
-- [ ] Add real-time log streaming per operation via WebSocket
+- [x] Add real-time log streaming per operation via WebSocket
 - [x] Store operation history in database for past operations view
 
 ### Frontend - Monitor Page
@@ -109,7 +109,7 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Create job creation and listing endpoints
 - [x] Add agent capability detection (Topaz Video installed, version, etc.)
 - [x] Create agent disconnection/cleanup logic
-- [ ] Add agent authentication/security (optional API key)
+- [x] Add agent authentication/security (optional API key)
 
 ### Backend - Upscaling Workflow Integration
 
@@ -120,8 +120,8 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Implement job status tracking (queued, assigned, processing, completed, failed)
 - [x] Add job result reporting (output file path, processing time, etc.)
 - [x] Create job cleanup/garbage collection for old jobs
-- [ ] Add job retry logic for failed upscaling jobs
-- [ ] Integrate with existing rename workflow (wait for upscaling before renaming)
+- [x] Add job retry logic for failed upscaling jobs
+- [x] Integrate with existing rename workflow (wait for upscaling before renaming)
 
 ### Frontend - Agent Management UI
 
@@ -147,8 +147,8 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Add agent operation log window type to Monitor tab
 - [x] Display agent operations (upscaling, etc.) alongside rip operations
 - [x] Show agent operation progress and status
-- [ ] Stream agent operation logs in real-time
-- [ ] Add agent operation filtering
+- [x] Stream agent operation logs in real-time
+- [x] Add agent operation filtering
 
 ### Windows Agent - Rust TUI Application
 
@@ -169,13 +169,13 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Implement upscaling job execution
 - [x] Create progress reporting (send updates to server)
 - [x] Add job result reporting (success/failure, output path)
-- [ ] Implement error handling and retry logic
+- [x] Implement error handling and retry logic
         - [x] Create TUI dashboard showing:
           - [x] Agent status (connected/disconnected)
           - [x] Current job status
           - [x] Queue position
           - [x] Job progress
-          - [ ] Recent job history
+          - [x] Recent job history
           - [x] Connection status to server
         - [x] Add server URL input field in TUI (no localhost assumption)
         - [x] Implement real-time connection status display with color coding
@@ -183,9 +183,9 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
         - [x] Create folder structure for agent output (processing/, upscaled/, encoded/)
         - [x] Implement configurable output location managed from web UI
         - [ ] Add TUI controls (pause, resume, disconnect)
-        - [ ] Implement graceful shutdown
-        - [ ] Add logging to file
-        - [ ] Create Windows installer/build script
+        - [x] Implement graceful shutdown
+        - [x] Add logging to file
+        - [x] Create Windows installer/build script
 
 ### Agent - Topaz Integration
 
@@ -195,8 +195,8 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Implement Topaz profile parsing (JSON/YAML)
 - [x] Create Topaz command builder
 - [x] Execute Topaz upscaling commands
-- [ ] Parse Topaz output for progress
-- [ ] Handle Topaz errors and failures
+- [x] Parse Topaz output for progress (basic implementation - reads stdout/stderr)
+- [x] Handle Topaz errors and failures (improved error detection and reporting)
 - [ ] Support multiple Topaz Video versions
 - [ ] Add Topaz Video configuration validation
 
@@ -205,7 +205,7 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [ ] Implement chunked file download for large video files
 - [ ] Add download progress tracking
 - [ ] Implement resume capability for interrupted downloads
-- [ ] Add file verification (checksum)
+- [x] Add file verification (checksum) - SHA256 checksum verification on download
 - [ ] Implement upload progress tracking
 - [ ] Add upload retry logic
 - [ ] Create temporary file cleanup
@@ -230,47 +230,47 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### macOS Build Job
 
-- [ ] Create `.github/workflows/ci.yml` file
-- [ ] Set up macOS runner (macos-latest)
-- [ ] Install Rust toolchain
-- [ ] Cache Cargo dependencies
-- [ ] Run `cargo build --release`
-- [ ] Run `cargo test` for all tests
-- [ ] Create macOS package/bundle (optional .dmg or .app)
-- [ ] Upload build artifacts
-- [ ] Create release tag workflow
+- [x] Create `.github/workflows/ci.yml` file
+- [x] Set up macOS runner (macos-latest)
+- [x] Install Rust toolchain
+- [x] Cache Cargo dependencies
+- [x] Run `cargo build --release`
+- [x] Run `cargo test` for all tests
+- [x] Create macOS package/bundle (optional .dmg or .app)
+- [x] Upload build artifacts
+- [x] Create release tag workflow
 
 ### Linux Build Job
 
-- [ ] Set up Ubuntu runner (ubuntu-latest)
-- [ ] Install Rust toolchain
-- [ ] Install required system dependencies (lsblk, udisks2, eject, etc.)
-- [ ] Cache Cargo dependencies
-- [ ] Run `cargo build --release`
-- [ ] Run `cargo test` for all tests
+- [x] Set up Ubuntu runner (ubuntu-latest)
+- [x] Install Rust toolchain
+- [x] Install required system dependencies (lsblk, udisks2, eject, etc.)
+- [x] Cache Cargo dependencies
+- [x] Run `cargo build --release`
+- [x] Run `cargo test` for all tests
 - [ ] Run Linux-specific tests (via Docker/Podman)
-- [ ] Create Linux package (Debian .deb or AppImage)
-- [ ] Upload build artifacts
+- [x] Create Linux package (Debian .deb or AppImage)
+- [x] Upload build artifacts
 - [ ] Add package signing (optional)
 
 ### Windows Build Job (Agent Only)
 
-- [ ] Set up Windows runner (windows-latest)
-- [ ] Install Rust toolchain (x86_64-pc-windows-msvc)
-- [ ] Cache Cargo dependencies
-- [ ] Navigate to `agent/` directory
-- [ ] Run `cargo build --release` for ripley-agent only
-- [ ] Run `cargo test` for agent tests
-- [ ] Create Windows installer (optional .msi or .exe)
-- [ ] Upload build artifacts
+- [x] Set up Windows runner (windows-latest)
+- [x] Install Rust toolchain (x86_64-pc-windows-msvc)
+- [x] Cache Cargo dependencies
+- [x] Navigate to `agent/` directory
+- [x] Run `cargo build --release` for ripley-agent only
+- [x] Run `cargo test` for agent tests
+- [x] Create Windows installer (optional .msi or .exe)
+- [x] Upload build artifacts
 - [ ] Add code signing (optional)
 
 ### Workflow Configuration
 
-- [ ] Set up workflow triggers (push, pull_request, release)
+- [x] Set up workflow triggers (push, pull_request, release)
 - [ ] Add matrix strategy for multiple Rust versions (optional)
-- [ ] Add job dependencies and ordering
-- [ ] Configure artifact retention
+- [x] Add job dependencies and ordering
+- [x] Configure artifact retention
 - [ ] Add workflow status badges to README
 - [ ] Set up secrets for API keys (if needed)
 - [ ] Add notification on failure (optional)

@@ -275,6 +275,7 @@ pub struct UpscalingJob {
     pub progress: f32,
     pub error_message: Option<String>,
     pub processing_time_seconds: Option<i64>,
+    pub retry_count: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1087,6 +1088,29 @@ impl Database {
                 params![9, "add_operation_history_table", chrono::Utc::now().to_rfc3339()],
             )?;
         }
+
+        // Migration 10: Add retry_count to upscaling_jobs
+        if current_version < 10 {
+            info!("Applying migration 10: add_retry_count_to_upscaling_jobs");
+            
+            let column_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('upscaling_jobs') WHERE name='retry_count'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if column_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE upscaling_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![10, "add_retry_count_to_upscaling_jobs", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
         
         Ok(())
     }
@@ -1806,8 +1830,8 @@ impl Database {
         let now = chrono::Utc::now().to_rfc3339();
         
         conn.execute(
-            "INSERT INTO upscaling_jobs (job_id, input_file_path, show_id, topaz_profile_id, status, priority, created_at, progress)
-             VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, 0.0)",
+            "INSERT INTO upscaling_jobs (job_id, input_file_path, show_id, topaz_profile_id, status, priority, created_at, progress, retry_count)
+             VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, 0.0, 0)",
             params![job_id, input_file_path, show_id, topaz_profile_id, priority, now],
         )?;
         
@@ -1821,7 +1845,7 @@ impl Database {
         let mut stmt = conn.prepare(
             "SELECT id, job_id, input_file_path, output_file_path, show_id, topaz_profile_id, status, priority, 
                     agent_id, instruction_id, created_at, assigned_at, started_at, completed_at, progress, 
-                    error_message, processing_time_seconds
+                    error_message, processing_time_seconds, retry_count
              FROM upscaling_jobs
              WHERE status = 'queued'
              ORDER BY priority DESC, created_at ASC
@@ -1855,6 +1879,7 @@ impl Database {
                 progress: row.get(14)?,
                 error_message: row.get(15)?,
                 processing_time_seconds: row.get(16)?,
+                retry_count: row.get(17).unwrap_or(0),
             })
         }) {
             Ok(job) => Some(job),
@@ -1944,6 +1969,35 @@ impl Database {
         )?;
         
         Ok(())
+    }
+
+    /// Retry a failed upscaling job (reset status to queued and increment retry_count)
+    pub fn retry_upscaling_job(&self, job_id: &str, max_retries: i32) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Check current retry count
+        let current_retry_count: i32 = conn.query_row(
+            "SELECT retry_count FROM upscaling_jobs WHERE job_id = ?1",
+            params![job_id],
+            |row| row.get(0),
+        )?;
+        
+        if current_retry_count >= max_retries {
+            return Ok(false); // Max retries reached
+        }
+        
+        // Reset job to queued status and increment retry count
+        conn.execute(
+            "UPDATE upscaling_jobs 
+             SET status = 'queued', agent_id = NULL, instruction_id = NULL, 
+                 assigned_at = NULL, started_at = NULL, completed_at = NULL,
+                 progress = 0.0, error_message = NULL, processing_time_seconds = NULL,
+                 retry_count = retry_count + 1
+             WHERE job_id = ?1 AND status = 'failed'",
+            params![job_id],
+        )?;
+        
+        Ok(true)
     }
 
     /// Clean up old upscaling jobs (delete completed/failed jobs older than X days, keeping recent N jobs)
@@ -2143,7 +2197,7 @@ impl Database {
             (
                 "SELECT id, job_id, input_file_path, output_file_path, show_id, topaz_profile_id, status, priority, 
                         agent_id, instruction_id, created_at, assigned_at, started_at, completed_at, progress, 
-                        error_message, processing_time_seconds
+                        error_message, processing_time_seconds, retry_count
                  FROM upscaling_jobs
                  WHERE status = ?
                  ORDER BY priority DESC, created_at DESC".to_string(),
@@ -2153,7 +2207,7 @@ impl Database {
             (
                 "SELECT id, job_id, input_file_path, output_file_path, show_id, topaz_profile_id, status, priority, 
                         agent_id, instruction_id, created_at, assigned_at, started_at, completed_at, progress, 
-                        error_message, processing_time_seconds
+                        error_message, processing_time_seconds, retry_count
                  FROM upscaling_jobs
                  ORDER BY priority DESC, created_at DESC".to_string(),
                 vec![],
@@ -2199,6 +2253,7 @@ impl Database {
             progress: row.get(14)?,
             error_message: row.get(15)?,
             processing_time_seconds: row.get(16)?,
+            retry_count: row.get(17).unwrap_or(0),
         })
     }
 
