@@ -21,7 +21,9 @@ describe('ApiClient', () => {
     expect(result).toEqual(mockResponse);
     expect(global.fetch).toHaveBeenCalledWith(
       'http://localhost:3000/api/test',
-      expect.objectContaining({ method: 'GET' })
+      expect.objectContaining({ 
+        method: 'GET'
+      })
     );
   });
 

@@ -13,6 +13,7 @@ fn create_test_state() -> ApiState {
         rip_status: Arc::new(RwLock::new(RipStatus::default())),
         event_tx,
         db,
+        operations: Arc::new(RwLock::new(std::collections::HashMap::new())),
     }
 }
 
@@ -37,24 +38,29 @@ async fn test_api_event_serialization() {
         ApiEvent::RipStarted {
             disc: "Test Disc".to_string(),
             drive: "/dev/disk2".to_string(),
+            operation_id: Some("test-op-1".to_string()),
         },
         ApiEvent::RipProgress {
             progress: 0.5,
             message: "Processing...".to_string(),
             drive: "/dev/disk2".to_string(),
+            operation_id: Some("test-op-1".to_string()),
         },
         ApiEvent::RipCompleted {
             disc: "Test Disc".to_string(),
             drive: "/dev/disk2".to_string(),
+            operation_id: Some("test-op-1".to_string()),
         },
         ApiEvent::RipError {
             error: "Test error".to_string(),
             drive: Some("/dev/disk2".to_string()),
+            operation_id: Some("test-op-1".to_string()),
         },
         ApiEvent::Log {
             level: "info".to_string(),
             message: "Test log".to_string(),
             drive: None,
+            operation_id: None,
         },
     ];
 
@@ -78,6 +84,12 @@ async fn test_api_event_serialization() {
             ApiEvent::IssueCreated { .. } => {}
             ApiEvent::RipPaused { .. } => {}
             ApiEvent::RipResumed { .. } => {}
+            ApiEvent::OperationStarted { .. } => {}
+            ApiEvent::OperationProgress { .. } => {}
+            ApiEvent::OperationCompleted { .. } => {}
+            ApiEvent::OperationFailed { .. } => {}
+            ApiEvent::AgentStatusChanged { .. } => {}
+            ApiEvent::UpscalingJobStatusChanged { .. } => {}
         }
     }
 }
@@ -89,6 +101,7 @@ async fn test_broadcast_channel() {
     let mut rx2 = state.event_tx.subscribe();
 
     let event = ApiEvent::Log {
+        operation_id: None,
         level: "info".to_string(),
         message: "Test broadcast".to_string(),
         drive: None,
@@ -219,6 +232,7 @@ async fn test_multiple_log_events() {
     // Send multiple events
     for i in 1..=5 {
         let event = ApiEvent::Log {
+        operation_id: None,
             level: "info".to_string(),
             message: format!("Log message {}", i),
             drive: None,

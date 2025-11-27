@@ -135,8 +135,8 @@ impl TopazVideo {
         
         // Read stderr in real-time for error detection
         let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
-            let input_path_clone = input_path.to_path_buf();
-            let output_path_clone = output_path.to_path_buf();
+            let _input_path_clone = input_path.to_path_buf();
+            let _output_path_clone = output_path.to_path_buf();
             Some(tokio::spawn(async move {
                 use tokio::io::{AsyncBufReadExt, BufReader};
                 let reader = BufReader::new(&mut stderr);

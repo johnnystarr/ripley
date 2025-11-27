@@ -2008,7 +2008,7 @@ impl Database {
         let threshold_str = threshold.to_rfc3339();
         
         // First, count jobs that will be deleted
-        let completed_count: i64 = conn.query_row(
+        let _completed_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM upscaling_jobs 
              WHERE status IN ('completed', 'failed', 'cancelled') 
              AND completed_at IS NOT NULL 
@@ -2017,7 +2017,7 @@ impl Database {
             |row| row.get(0),
         ).unwrap_or(0);
         
-        let queued_count: i64 = conn.query_row(
+        let _queued_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM upscaling_jobs 
              WHERE status = 'queued' 
              AND created_at < ?1",

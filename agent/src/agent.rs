@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tracing::{error, info, warn};
 use crate::config::AgentConfig;
 
@@ -218,10 +217,11 @@ impl AgentClient {
             return Err(anyhow::anyhow!("Download failed: {}", response.status()));
         }
         
-        // Get expected checksum from header if available
+        // Get expected checksum from header if available (before consuming response)
         let expected_checksum = response.headers()
             .get("X-File-Checksum")
-            .and_then(|h| h.to_str().ok());
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
         
         // Create parent directory if needed
         if let Some(parent) = dest_path.parent() {
@@ -243,9 +243,9 @@ impl AgentClient {
         file.sync_all().await?;
         
         // Verify checksum if provided
-        if let Some(expected) = expected_checksum {
+        if let Some(expected) = &expected_checksum {
             let calculated = format!("{:x}", hasher.finalize());
-            if calculated != expected {
+            if calculated != *expected {
                 // Clean up corrupted file
                 let _ = tokio::fs::remove_file(dest_path).await;
                 return Err(anyhow::anyhow!("Checksum mismatch: expected {}, got {}", expected, calculated));

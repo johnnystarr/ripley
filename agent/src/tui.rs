@@ -19,7 +19,6 @@ use crate::agent::AgentClient;
 use crate::config::AgentConfig;
 use crate::job_worker::JobWorker;
 use std::sync::Arc;
-use std::path::Path;
 
 pub struct TuiApp {
     agent_client: Option<Arc<AgentClient>>,
@@ -217,11 +216,12 @@ impl TuiApp {
                 }
             }
             
-            // Get current job if connected
-            let current_job = if let Some(ref worker) = self.job_worker {
+            // Get current job and pause state if connected
+            let (current_job, is_paused) = if let Some(ref worker) = self.job_worker {
                 let current_job_arc = worker.current_job();
                 let job_guard = current_job_arc.lock().await;
                 let job = job_guard.clone();
+                let paused = worker.is_paused().await;
                 
                 // Update job history when job completes
                 if let Some(ref j) = job {
@@ -237,9 +237,9 @@ impl TuiApp {
                     }
                 }
                 
-                job
+                (job, paused)
             } else {
-                None
+                (None, false)
             };
             
             // Draw UI - prepare data for drawing
@@ -264,6 +264,7 @@ impl TuiApp {
                     &current_job_clone,
                     self.agent_client.as_ref().map(|_c| None::<String>),
                     &job_history_clone,
+                    is_paused,
                 );
             })?;
             
@@ -277,6 +278,35 @@ impl TuiApp {
                                 } else {
                                     // Cancel editing
                                     self.editing_server_url = false;
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                // Disconnect from server
+                                if matches!(self.connection_state, ConnectionState::Connected) {
+                                    self.add_log("Disconnecting from server...".to_string());
+                                    self.connection_state = ConnectionState::Disconnected;
+                                    self.status = "Disconnected".to_string();
+                                    self.agent_client = None;
+                                    self.job_worker = None;
+                                    self.add_log("Disconnected successfully".to_string());
+                                }
+                            }
+                            KeyCode::Char('p') => {
+                                // Pause job processing
+                                if let Some(ref worker) = self.job_worker {
+                                    if !worker.is_paused().await {
+                                        worker.pause().await;
+                                        self.add_log("Job processing paused".to_string());
+                                    }
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                // Resume job processing
+                                if let Some(ref worker) = self.job_worker {
+                                    if worker.is_paused().await {
+                                        worker.resume().await;
+                                        self.add_log("Job processing resumed".to_string());
+                                    }
                                 }
                             }
                             KeyCode::Enter => {
@@ -325,7 +355,7 @@ impl TuiApp {
             // Signal shutdown to worker (will need to add shutdown flag)
             // For now, just clear current job
             let current_job_arc = worker.current_job();
-            let mut job_guard = current_job_arc.lock().await;
+            let job_guard = current_job_arc.lock().await;
             if job_guard.is_some() {
                 // Job is running, wait a bit for it to finish or cancel
                 drop(job_guard);
@@ -361,11 +391,13 @@ impl TuiApp {
         current_job: &Option<crate::agent::UpscalingJob>,
         _agent_id: Option<Option<String>>,
         job_history: &[(String, String, f32)],
+        is_paused: bool,
     ) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // Status header
+                Constraint::Length(1),  // Controls/Help
                 Constraint::Length(8),  // Connection/Job info
                 Constraint::Length(6),  // Job history
                 Constraint::Min(0),     // Instructions/Logs
@@ -393,6 +425,22 @@ impl TuiApp {
         .block(Block::default().borders(Borders::ALL).title("Status"))
         .alignment(Alignment::Left);
         f.render_widget(header, chunks[0]);
+        
+        // Controls/Help bar
+        let controls_text = if matches!(connection_state, ConnectionState::Connected) {
+            if is_paused {
+                format!("Controls: [P]ause (paused) | [R]esume | [D]isconnect | [Q]uit")
+            } else {
+                format!("Controls: [P]ause | [R]esume | [D]isconnect | [Q]uit")
+            }
+        } else {
+            format!("Controls: [Q]uit | Enter to connect")
+        };
+        
+        let controls = Paragraph::new(controls_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .block(Block::default().borders(Borders::NONE));
+        f.render_widget(controls, chunks[1]);
         
         // Connection panel or Job panel
         if matches!(connection_state, ConnectionState::Disconnected | ConnectionState::Connecting | ConnectionState::Failed(_)) {
@@ -436,6 +484,37 @@ impl TuiApp {
                 .block(Block::default().borders(Borders::ALL).title("Connection Log"))
                 .style(Style::default().fg(Color::White));
             f.render_widget(log_list, inner_chunks[2]);
+        } else if matches!(connection_state, ConnectionState::Connected) {
+            // Show connected but no job
+            let no_job_text = if is_paused {
+                vec![
+                    Line::from(vec![
+                        Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                        Span::styled("PAUSED", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("Waiting for upscaling jobs..."),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("Press 'R' to resume processing"),
+                    ]),
+                ]
+            } else {
+                vec![
+                    Line::from(vec![
+                        Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                        Span::styled("Connected", Style::default().fg(Color::Green)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("Waiting for upscaling jobs..."),
+                    ]),
+                ]
+            };
+            
+            let no_job = Paragraph::new(no_job_text)
+                .block(Block::default().borders(Borders::ALL).title("Job Status"))
+                .alignment(Alignment::Center);
+            f.render_widget(no_job, chunks[2]);
         } else if let Some(ref job) = current_job {
             // Show job info
             let progress = job.progress;
@@ -447,7 +526,7 @@ impl TuiApp {
             };
             
             let progress_text = format!("{:.1}%", progress);
-            let input_filename = Path::new(&job.input_file_path)
+            let input_filename = std::path::Path::new(&job.input_file_path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(&job.input_file_path)
@@ -478,7 +557,7 @@ impl TuiApp {
                     Constraint::Length(4),
                     Constraint::Length(1),
                 ])
-                .split(chunks[1]);
+                .split(chunks[2]);
             
             let info_block = Paragraph::new(job_info)
                 .block(Block::default().borders(Borders::NONE))
@@ -539,7 +618,7 @@ impl TuiApp {
         let history_list = List::new(history_items)
             .block(Block::default().borders(Borders::ALL).title("Recent Job History (Last 5)"))
             .style(Style::default().fg(Color::White));
-        f.render_widget(history_list, chunks[2]);
+        f.render_widget(history_list, chunks[4]);
         
         // Instructions list
         let instruction_items: Vec<ListItem> = instructions.iter()

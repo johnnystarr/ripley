@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -13,6 +13,7 @@ pub struct JobWorker {
     work_dir: PathBuf,
     current_job: Arc<Mutex<Option<UpscalingJob>>>,
     shutdown: Arc<tokio::sync::Notify>,
+    paused: Arc<tokio::sync::RwLock<bool>>,
 }
 
 impl JobWorker {
@@ -48,6 +49,7 @@ impl JobWorker {
             work_dir,
             current_job: Arc::new(Mutex::new(None)),
             shutdown: Arc::new(tokio::sync::Notify::new()),
+            paused: Arc::new(tokio::sync::RwLock::new(false)),
         })
     }
     
@@ -65,6 +67,12 @@ impl JobWorker {
                 }
             }
             
+            // Check if paused
+            if *self.paused.read().await {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            
             // Check if we're already processing a job
             let has_job = self.current_job.lock().await.is_some();
             if has_job {
@@ -77,7 +85,7 @@ impl JobWorker {
                     info!("Found new upscaling job: {}", job.job_id);
                     
                     // Assign job to this agent
-                    if let Some(agent_id) = self.agent_client.agent_id() {
+                    if self.agent_client.agent_id().is_some() {
                         // The server should auto-assign when we fetch, but let's set it in our state
                         *self.current_job.lock().await = Some(job.clone());
                         
@@ -114,6 +122,23 @@ impl JobWorker {
     /// Get current job (for TUI display)
     pub fn current_job(&self) -> Arc<Mutex<Option<UpscalingJob>>> {
         Arc::clone(&self.current_job)
+    }
+    
+    /// Pause job processing
+    pub async fn pause(&self) {
+        *self.paused.write().await = true;
+        tracing::info!("Job worker paused");
+    }
+    
+    /// Resume job processing
+    pub async fn resume(&self) {
+        *self.paused.write().await = false;
+        tracing::info!("Job worker resumed");
+    }
+    
+    /// Check if paused
+    pub async fn is_paused(&self) -> bool {
+        *self.paused.read().await
     }
     
     async fn process_job(
@@ -158,7 +183,7 @@ impl JobWorker {
             tokio::fs::create_dir_all(&encoded_dir).await?;
             
             // Download input file to processing folder
-            let input_file_name = Path::new(&job.input_file_path)
+            let input_file_name = std::path::Path::new(&job.input_file_path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .ok_or_else(|| anyhow::anyhow!("Invalid input file path"))?;
@@ -170,7 +195,7 @@ impl JobWorker {
             
             if let Err(e) = download_result {
                 error!("Download failed for job {}: {}", job_id, e);
-                if retry_count < MAX_RETRIES && is_retryable_error(&e.to_string()) {
+                if retry_count < MAX_RETRIES && Self::is_retryable_error(&e.to_string()) {
                     retry_count += 1;
                     warn!("Retrying download (attempt {}/{})...", retry_count, MAX_RETRIES);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5 * retry_count as u64)).await;
@@ -215,7 +240,7 @@ impl JobWorker {
                     }
                     Err(e) => {
                         error!("Topaz upscale failed for job {}: {}", job_id, e);
-                        if retry_count < MAX_RETRIES && is_retryable_error(&e.to_string()) {
+                        if retry_count < MAX_RETRIES && Self::is_retryable_error(&e.to_string()) {
                             retry_count += 1;
                             warn!("Retrying Topaz upscale (attempt {}/{})...", retry_count, MAX_RETRIES);
                             // Clean up failed output file if it exists
@@ -247,7 +272,7 @@ impl JobWorker {
             
             if let Err(e) = upload_result {
                 error!("Upload failed for job {}: {}", job_id, e);
-                if retry_count < MAX_RETRIES && is_retryable_error(&e.to_string()) {
+                if retry_count < MAX_RETRIES && Self::is_retryable_error(&e.to_string()) {
                     retry_count += 1;
                     warn!("Retrying upload (attempt {}/{})...", retry_count, MAX_RETRIES);
                     tokio::time::sleep(tokio::time::Duration::from_secs(5 * retry_count as u64)).await;
