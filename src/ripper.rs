@@ -14,6 +14,8 @@ pub struct RipProgress {
     pub track_name: String,
     pub percentage: f32,
     pub status: RipStatus,
+    pub speed_mbps: Option<f32>, // Ripping speed in MB/s
+    pub bytes_processed: Option<u64>, // Total bytes processed so far
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +166,8 @@ where
                                     track_name: track_name.clone(),
                                     percentage: (current_track as f32 / total_tracks as f32) * 100.0,
                                     status: RipStatus::Ripping,
+                                    speed_mbps: None,
+                                    bytes_processed: None,
                                 });
                             }
                         } else if line.contains("Encoding") || line.contains("encoding") {
@@ -175,6 +179,8 @@ where
                                     .unwrap_or_else(|| format!("Track {}", current_track)),
                                 percentage: (current_track as f32 / total_tracks as f32) * 100.0,
                                 status: RipStatus::Encoding,
+                                speed_mbps: None,
+                                bytes_processed: None,
                             });
                         }
                     }
@@ -225,6 +231,8 @@ where
             track_name: "Complete".to_string(),
             percentage: 100.0,
             status: RipStatus::Complete,
+            speed_mbps: None,
+            bytes_processed: None,
         });
         Ok(())
     } else {
@@ -339,6 +347,8 @@ mod tests {
             track_name: "Test".to_string(),
             percentage: 10.0,
             status: RipStatus::Ripping,
+            speed_mbps: None,
+            bytes_processed: None,
         };
         
         assert_eq!(progress.current_track, 1);

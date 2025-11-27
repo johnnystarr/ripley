@@ -39,7 +39,7 @@
 
 ### Real-time Features
 - [x] Add browser/desktop notifications for completed rips
-- [ ] Add configurable sound notifications
+- [x] Add configurable sound notifications
 - [x] Show active rip progress in browser tab title
 - [ ] Add pause/resume for rip operations
 - [x] Add cancel/abort operation button
@@ -50,8 +50,8 @@
 - [x] Add charts for rip history (successful vs failed over time)
 - [x] Show status distribution pie chart
 - [x] Show storage usage statistics with charts (cumulative growth)
-- [ ] Display ripping speed/performance metrics
-- [ ] Add drive usage heatmap (which drives used most)
+- [x] Display ripping speed/performance metrics
+- [x] Add drive usage heatmap (which drives used most)
 - [ ] Show episode matching accuracy statistics
 - [ ] Add timeline view of all rip operations
 

@@ -27,12 +27,14 @@ import Issues from './pages/Issues';
 import Preferences from './pages/Preferences';
 import GlobalSearch from './components/GlobalSearch';
 import Breadcrumbs from './components/Breadcrumbs';
+import { api } from './api';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 1024); // Default closed on mobile
   const [wsConnected, setWsConnected] = useState(false);
   const [ripProgress, setRipProgress] = useState(null); // { disc: string, progress: number }
   const [searchOpen, setSearchOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true); // Default to enabled
 
   // Handle responsive sidebar
   useEffect(() => {
@@ -71,6 +73,11 @@ function App() {
     // Request notification permission on mount
     requestNotificationPermission();
 
+    // Load user preferences for sound notifications
+    api.getPreferences()
+      .then(prefs => setSoundEnabled(prefs.sound_notifications))
+      .catch(err => console.warn('Failed to load sound preferences:', err));
+
     // Connect to WebSocket
     wsManager.connect();
 
@@ -93,6 +100,7 @@ function App() {
         title: data.disc_title || 'Unknown Disc',
         status: 'success',
         message: `Successfully ripped to ${data.output_path || 'output directory'}`,
+        playSound: soundEnabled,
       });
       setRipProgress(null); // Clear progress
     });
@@ -103,6 +111,7 @@ function App() {
         title: data.disc_title || 'Unknown Disc',
         status: 'failed',
         message: data.error || 'Rip operation failed',
+        playSound: soundEnabled,
       });
       setRipProgress(null); // Clear progress
     });

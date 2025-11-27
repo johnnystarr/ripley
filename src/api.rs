@@ -598,6 +598,13 @@ async fn run_rip_operation(
                 file_size_bytes,
                 output_path: request.output_path.clone(),
                 error_message: None,
+                avg_speed_mbps: file_size_bytes.map(|bytes| {
+                    if duration_seconds > 0 {
+                        (bytes as f32 / 1_048_576.0) / duration_seconds as f32
+                    } else {
+                        0.0
+                    }
+                }),
             };
             
             if let Err(e) = state.db.add_rip_history(&history) {
@@ -624,6 +631,7 @@ async fn run_rip_operation(
                 file_size_bytes: None,
                 output_path: request.output_path.clone(),
                 error_message: Some(error_msg),
+                avg_speed_mbps: None,
             };
             
             if let Err(e) = state.db.add_rip_history(&history) {

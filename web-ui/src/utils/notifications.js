@@ -3,6 +3,8 @@
  * Handles desktop notification permissions and display
  */
 
+import { playNotificationSound } from './sound';
+
 let notificationPermission = null;
 
 /**
@@ -53,8 +55,9 @@ export function getNotificationPermission() {
  * @param {string} options.status 'success' or 'failed'
  * @param {string} [options.message] Additional message
  * @param {Function} [options.onClick] Click handler
+ * @param {boolean} [options.playSound] Whether to play notification sound
  */
-export function showRipNotification({ title, status, message, onClick }) {
+export function showRipNotification({ title, status, message, onClick, playSound = true }) {
   if (!('Notification' in window)) {
     return;
   }
@@ -76,6 +79,11 @@ export function showRipNotification({ title, status, message, onClick }) {
     requireInteraction: !isSuccess, // Keep failed notifications visible
     silent: false,
   });
+
+  // Play sound notification if enabled
+  if (playSound) {
+    playNotificationSound(isSuccess ? 'success' : 'error');
+  }
 
   if (onClick) {
     notification.onclick = () => {

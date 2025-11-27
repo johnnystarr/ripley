@@ -132,6 +132,7 @@ pub struct RipHistory {
     pub file_size_bytes: Option<i64>,
     pub output_path: Option<String>,
     pub error_message: Option<String>,
+    pub avg_speed_mbps: Option<f32>, // Average ripping speed in MB/s
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -307,7 +308,8 @@ impl Database {
                 duration_seconds INTEGER,
                 file_size_bytes INTEGER,
                 output_path TEXT,
-                error_message TEXT
+                error_message TEXT,
+                avg_speed_mbps REAL
             )",
             [],
         )?;
@@ -870,8 +872,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         conn.execute(
-            "INSERT INTO rip_history (timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO rip_history (timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 entry.timestamp.to_rfc3339(),
                 entry.drive,
@@ -883,6 +885,7 @@ impl Database {
                 entry.file_size_bytes,
                 entry.output_path,
                 entry.error_message,
+                entry.avg_speed_mbps,
             ],
         )?;
 
@@ -972,7 +975,7 @@ impl Database {
     pub fn get_rip_history(&self, limit: i64) -> Result<Vec<RipHistory>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message
+            "SELECT id, timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps
              FROM rip_history
              ORDER BY timestamp DESC
              LIMIT ?1"
@@ -993,6 +996,7 @@ impl Database {
                 file_size_bytes: row.get(8)?,
                 output_path: row.get(9)?,
                 error_message: row.get(10)?,
+                avg_speed_mbps: row.get(11)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

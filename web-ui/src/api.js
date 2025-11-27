@@ -239,6 +239,11 @@ class ApiClient {
     });
   }
 
+  // Get drive statistics
+  async getDriveStats() {
+    return await this.request('GET', '/statistics/drives');
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {

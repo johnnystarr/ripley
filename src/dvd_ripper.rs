@@ -69,6 +69,8 @@ where
         track_name: "Scanning...".to_string(),
         percentage: 0.0,
         status: crate::ripper::RipStatus::FetchingMetadata,
+        speed_mbps: None,
+        bytes_processed: None,
     });
 
     let mut scan_child = Command::new("makemkvcon")
@@ -196,6 +198,8 @@ where
         track_name: "Starting rip...".to_string(),
         percentage: 0.0,
         status: crate::ripper::RipStatus::Ripping,
+        speed_mbps: None,
+        bytes_processed: None,
     });
 
     // Rip each title individually
@@ -208,6 +212,8 @@ where
             total_tracks: titles_to_rip.len() as u32,
             track_name: format!("Title {} - 0%", title_num),
             percentage: title_progress,
+            speed_mbps: None,
+            bytes_processed: None,
             status: crate::ripper::RipStatus::Ripping,
         });
         
@@ -265,6 +271,8 @@ where
                                                 track_name: format!("Title {} - {:.0}%", title_num, title_percentage),
                                                 percentage: overall,
                                                 status: crate::ripper::RipStatus::Ripping,
+                                                speed_mbps: None,
+                                                bytes_processed: None,
                                             });
                                         }
                                     }
@@ -328,6 +336,8 @@ where
         track_name: "Complete".to_string(),
         percentage: 100.0,
         status: crate::ripper::RipStatus::Complete,
+        speed_mbps: None,
+        bytes_processed: None,
     });
     
     Ok(())

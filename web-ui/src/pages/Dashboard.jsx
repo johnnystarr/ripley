@@ -13,6 +13,7 @@ import {
   faTimes,
   faBan,
   faSync,
+  faBolt,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -36,6 +37,7 @@ export default function Dashboard() {
   const [failedRips, setFailedRips] = useState([]);
   const [showFailedRips, setShowFailedRips] = useState(false);
   const [ripHistory, setRipHistory] = useState([]);
+  const [driveStats, setDriveStats] = useState([]);
   const logsEndRef = useRef(null);
 
   // Fetch drives and logs on mount
@@ -48,6 +50,7 @@ export default function Dashboard() {
     fetchStatistics();
     fetchFailedRips();
     fetchRipHistory();
+    fetchDriveStats();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -272,6 +275,15 @@ export default function Dashboard() {
       setRipHistory(data);
     } catch (err) {
       console.error('Failed to fetch rip history:', err);
+    }
+  }, []);
+
+  const fetchDriveStats = useCallback(async () => {
+    try {
+      const data = await api.getDriveStats();
+      setDriveStats(data);
+    } catch (err) {
+      console.error('Failed to fetch drive stats:', err);
     }
   }, []);
 
@@ -613,6 +625,96 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Drive Usage Heatmap */}
+      {driveStats.length > 0 && (
+        <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+          <h2 className="text-lg font-semibold text-slate-100 mb-4">Drive Usage</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {driveStats.map((drive, idx) => {
+              const maxRips = Math.max(...driveStats.map(d => d.rips_completed));
+              const intensity = maxRips > 0 ? (drive.rips_completed / maxRips) : 0;
+              const bgColor = intensity > 0.7 ? 'bg-cyan-500/80' : 
+                            intensity > 0.4 ? 'bg-cyan-500/50' : 
+                            intensity > 0.1 ? 'bg-cyan-500/20' : 'bg-slate-700';
+              const textColor = intensity > 0.5 ? 'text-white' : 'text-slate-300';
+              
+              return (
+                <div 
+                  key={idx} 
+                  className={`${bgColor} ${textColor} rounded-lg p-4 border border-slate-600 transition-all hover:scale-105 cursor-pointer`}
+                  title={`${drive.drive} - ${drive.rips_completed} successful rips, ${drive.rips_failed} failed`}
+                >
+                  <div className="font-mono text-sm font-semibold mb-2">{drive.drive}</div>
+                  <div className="text-xs space-y-1">
+                    <div className="flex justify-between">
+                      <span>Successful:</span>
+                      <span className="font-semibold">{drive.rips_completed}</span>
+                    </div>
+                    {drive.rips_failed > 0 && (
+                      <div className="flex justify-between text-red-300">
+                        <span>Failed:</span>
+                        <span className="font-semibold">{drive.rips_failed}</span>
+                      </div>
+                    )}
+                    {drive.avg_speed_mbps && drive.avg_speed_mbps > 0 && (
+                      <div className="flex justify-between">
+                        <span>Avg Speed:</span>
+                        <span className="font-semibold">{drive.avg_speed_mbps.toFixed(1)} MB/s</span>
+                      </div>
+                    )}
+                    {drive.total_bytes_ripped && drive.total_bytes_ripped > 0 && (
+                      <div className="flex justify-between">
+                        <span>Total:</span>
+                        <span className="font-semibold">{(drive.total_bytes_ripped / 1073741824).toFixed(1)} GB</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-slate-400 text-xs mt-3">
+            Darker shades indicate more frequent usage. Hover for details.
+          </p>
+        </div>
+      )}
+
+      {/* Recent Successful Rips */}
+      {ripHistory.filter(r => r.status === 'success').slice(0, 5).length > 0 && (
+        <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+          <h2 className="text-lg font-semibold text-slate-100 mb-4">Recent Successful Rips</h2>
+          <div className="space-y-3">
+            {ripHistory.filter(r => r.status === 'success').slice(0, 5).map((rip, idx) => (
+              <div key={idx} className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-slate-100 mb-1">
+                      {rip.title || 'Unknown Title'}
+                    </h3>
+                    <div className="flex flex-wrap gap-4 text-xs text-slate-400 mt-2">
+                      <span>{new Date(rip.timestamp).toLocaleString()}</span>
+                      {rip.drive && <span>Drive: {rip.drive}</span>}
+                      {rip.duration_seconds && (
+                        <span>Duration: {Math.floor(rip.duration_seconds / 60)}m {rip.duration_seconds % 60}s</span>
+                      )}
+                      {rip.file_size_bytes && (
+                        <span>Size: {(rip.file_size_bytes / 1073741824).toFixed(2)} GB</span>
+                      )}
+                      {rip.avg_speed_mbps && (
+                        <span className="text-cyan-400">
+                          <FontAwesomeIcon icon={faBolt} className="mr-1" />
+                          {rip.avg_speed_mbps.toFixed(2)} MB/s
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Recent Failed Rips */}
       {showFailedRips && failedRips.length > 0 && (
         <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-5">
@@ -637,6 +739,9 @@ export default function Dashboard() {
                     <div className="flex gap-4 text-xs text-slate-400">
                       <span>{new Date(rip.timestamp).toLocaleString()}</span>
                       {rip.drive && <span>Drive: {rip.drive}</span>}
+                      {rip.duration_seconds && (
+                        <span>Duration: {Math.floor(rip.duration_seconds / 60)}m {rip.duration_seconds % 60}s</span>
+                      )}
                     </div>
                   </div>
                   <button
