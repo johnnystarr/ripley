@@ -207,6 +207,7 @@ export default function Dashboard() {
       case 'error': return 'text-red-400';
       case 'warning': return 'text-yellow-400';
       case 'success': return 'text-green-400';
+      case 'info': return 'text-cyan-400';
       default: return 'text-slate-300';
     }
   }, []);
