@@ -36,7 +36,7 @@ tracing-subscriber = "0.3"
 
 # Configuration
 dirs = "5.0"
-toml = "0.8"
+serde_yaml = "0.9"
 
 # Date/time
 chrono = "0.4"

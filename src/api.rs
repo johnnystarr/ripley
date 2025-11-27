@@ -111,16 +111,30 @@ pub async fn start_server(
         }
     });
     
-    // Spawn background task to cleanup stale agents (every 5 minutes)
+    // Spawn background task to cleanup stale agents (every 2 minutes for better responsiveness)
     let db_cleanup = Arc::clone(&db);
+    let event_tx_cleanup = event_tx.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 5 minutes
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(120)); // 2 minutes
         loop {
             interval.tick().await;
-            match db_cleanup.cleanup_stale_agents(5) { // Mark offline if no heartbeat in 5 minutes
+            match db_cleanup.cleanup_stale_agents(2) { // Mark offline if no heartbeat in 2 minutes
                 Ok(count) => {
                     if count > 0 {
                         info!("Marked {} stale agent(s) as offline", count);
+                        // Get list of agents that were marked offline and broadcast status changes
+                        if let Ok(agents) = db_cleanup.get_agents() {
+                            for agent in agents {
+                                if agent.status == "offline" {
+                                    let _ = event_tx_cleanup.send(ApiEvent::AgentStatusChanged {
+                                        agent_id: agent.agent_id.clone(),
+                                        status: "offline".to_string(),
+                                        last_seen: agent.last_seen.clone(),
+                                        operation_id: None,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -2493,8 +2507,7 @@ async fn get_topaz_profiles(
 #[derive(Debug, Deserialize)]
 struct CreateTopazProfileRequest {
     name: String,
-    description: Option<String>,
-    settings_json: serde_json::Value,
+    command: String, // Command to execute for this profile
 }
 
 async fn create_topaz_profile(
@@ -2503,8 +2516,7 @@ async fn create_topaz_profile(
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
     match state.db.create_topaz_profile(
         &request.name,
-        request.description.as_deref(),
-        &request.settings_json,
+        &request.command,
     ) {
         Ok(id) => Ok(Json(serde_json::json!({
             "success": true,
@@ -2536,8 +2548,7 @@ async fn get_topaz_profile(
 #[derive(Debug, Deserialize)]
 struct UpdateTopazProfileRequest {
     name: Option<String>,
-    description: Option<String>,
-    settings_json: Option<serde_json::Value>,
+    command: Option<String>, // Command to execute for this profile
 }
 
 async fn update_topaz_profile(
@@ -2548,8 +2559,7 @@ async fn update_topaz_profile(
     match state.db.update_topaz_profile(
         id,
         request.name.as_deref(),
-        request.description.as_deref(),
-        request.settings_json.as_ref(),
+        request.command.as_deref(),
     ) {
         Ok(_) => Ok(Json(serde_json::json!({
             "success": true,

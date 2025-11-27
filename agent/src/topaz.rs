@@ -9,8 +9,7 @@ use tracing::{debug, error, info, warn};
 pub struct TopazProfile {
     pub id: Option<i64>,
     pub name: String,
-    pub description: Option<String>,
-    pub settings_json: serde_json::Value,
+    pub command: String, // Command to execute
 }
 
 #[derive(Clone)]
@@ -154,35 +153,118 @@ impl TopazVideo {
             tokio::fs::create_dir_all(parent).await?;
         }
         
-        // Build command arguments
-        // Topaz Video AI CLI typically uses these arguments:
-        // -i input file
-        // -o output file
-        // -p profile (if using profiles)
+        // If profile has a command, execute it directly (with input/output path substitution)
+        if let Some(profile) = profile {
+            info!("Using Topaz profile: {} - Executing command", profile.name);
+            
+            // Replace placeholders in command: {input} and {output}
+            let command = profile.command
+                .replace("{input}", input_path.to_string_lossy().as_ref())
+                .replace("{output}", output_path.to_string_lossy().as_ref());
+            
+            info!("Executing profile command: {}", command);
+            
+            // Execute the command (on Windows use cmd.exe /c, on Unix use sh -c)
+            let mut cmd = if cfg!(target_os = "windows") {
+                let mut c = Command::new("cmd.exe");
+                c.arg("/C").arg(&command);
+                c
+            } else {
+                let mut c = Command::new("sh");
+                c.arg("-c").arg(&command);
+                c
+            };
+            
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+            
+            info!("Executing command: {:?}", cmd);
+            
+            // Spawn and handle output (same as below)
+            let mut child = cmd.spawn()?;
+            
+            // Handle stderr and stdout (reuse existing code)
+            let stderr_handle = if let Some(mut stderr) = child.stderr.take() {
+                Some(tokio::spawn(async move {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    let reader = BufReader::new(&mut stderr);
+                    let mut lines = reader.lines();
+                    
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let line_lower = line.to_lowercase();
+                        if line_lower.contains("error") || line_lower.contains("failed") || line_lower.contains("exception") {
+                            error!("Command error output: {}", line);
+                        } else if line_lower.contains("warning") {
+                            warn!("Command warning: {}", line);
+                        } else {
+                            debug!("Command stderr: {}", line);
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+            
+            let stdout_handle = if let Some(mut stdout) = child.stdout.take() {
+                Some(tokio::spawn(async move {
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+                    let reader = BufReader::new(&mut stdout);
+                    let mut lines = reader.lines();
+                    
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if line.contains("%") || line.contains("progress") || line.contains("frame") {
+                            debug!("Command progress: {}", line);
+                        } else {
+                            debug!("Command stdout: {}", line);
+                        }
+                    }
+                }))
+            } else {
+                None
+            };
+            
+            let status = child.wait().await?;
+            
+            if let Some(handle) = stderr_handle {
+                let _ = handle.await;
+            }
+            if let Some(handle) = stdout_handle {
+                let _ = handle.await;
+            }
+            
+            if !status.success() {
+                let exit_code = status.code().unwrap_or(-1);
+                error!("Profile command failed with exit code: {}", exit_code);
+                return Err(anyhow::anyhow!("Profile command failed with exit code: {}", exit_code));
+            }
+            
+            // Verify output file was created
+            if !output_path.exists() {
+                return Err(anyhow::anyhow!("Command completed but output file not found: {:?}", output_path));
+            }
+            
+            if let Ok(metadata) = std::fs::metadata(&output_path) {
+                if metadata.len() == 0 {
+                    return Err(anyhow::anyhow!("Command produced empty output file"));
+                }
+                info!("Output file size: {} bytes", metadata.len());
+            }
+            
+            info!("Profile command completed successfully");
+            return Ok(());
+        }
         
+        // Fallback: Use default Topaz command if no profile
         let mut cmd = Command::new(&self.executable_path);
         cmd.arg("-i").arg(input_path);
         cmd.arg("-o").arg(output_path);
-        
-        // Apply profile settings if provided
-        if let Some(profile) = profile {
-            // Topaz profiles might be applied via settings file or command args
-            // This depends on Topaz Video AI's actual CLI interface
-            // For now, we'll log that a profile is being used
-            info!("Using Topaz profile: {}", profile.name);
-            
-            // If profile has specific settings, apply them
-            // The actual implementation depends on Topaz's API
-        }
-        
-        // Add standard arguments
-        cmd.arg("--overwrite"); // Allow overwriting output file
-        cmd.arg("--quiet"); // Reduce output verbosity
+        cmd.arg("--overwrite");
+        cmd.arg("--quiet");
         
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         
-        info!("Executing Topaz command: {:?}", cmd);
+        info!("Executing default Topaz command: {:?}", cmd);
         
         // Spawn the process and capture output streams
         let mut child = cmd.spawn()?;

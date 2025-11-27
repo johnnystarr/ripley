@@ -30,10 +30,18 @@ pub struct TuiApp {
     instructions: Vec<String>,
     connection_state: ConnectionState,
     server_url_input: String,
-    editing_server_url: bool,
+    agent_name_input: String,
+    editing_field: EditingField,
     connection_logs: Vec<String>,
     connection_in_progress: bool,
     job_history: Vec<(String, String, f32)>, // (job_id, status, progress)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum EditingField {
+    ServerUrl,
+    AgentName,
+    None,
 }
 
 #[derive(Clone)]
@@ -58,11 +66,18 @@ impl TuiApp {
             job_worker: None,
             terminal,
             should_quit: false,
-            status: "Disconnected - Enter server URL".to_string(),
+            status: "Disconnected - Configure connection".to_string(),
             instructions: vec![],
             connection_state: ConnectionState::Disconnected,
             server_url_input: config.server_url.clone(),
-            editing_server_url: true,
+            agent_name_input: config.agent_name.clone(),
+            editing_field: if config.server_url.is_empty() {
+                EditingField::ServerUrl
+            } else if config.agent_name.is_empty() || config.agent_name == "agent" || config.agent_name.starts_with("agent-") {
+                EditingField::AgentName
+            } else {
+                EditingField::None
+            },
             connection_logs: vec![],
             connection_in_progress: false,
             job_history: vec![],
@@ -82,23 +97,31 @@ impl TuiApp {
             return;
         }
         
+        // Validate both fields
         if self.server_url_input.trim().is_empty() {
             self.connection_state = ConnectionState::Failed("Server URL cannot be empty".to_string());
             self.connection_in_progress = false;
             return;
         }
         
+        if self.agent_name_input.trim().is_empty() {
+            self.connection_state = ConnectionState::Failed("Agent name cannot be empty".to_string());
+            self.connection_in_progress = false;
+            return;
+        }
+        
         self.connection_in_progress = true;
         
-        // Update config with new server URL
+        // Update config with both values
         self.config.server_url = self.server_url_input.trim().to_string();
+        self.config.agent_name = self.agent_name_input.trim().to_string();
         if let Err(e) = self.config.save() {
             self.add_log(format!("Failed to save config: {}", e));
         }
         
         self.connection_state = ConnectionState::Connecting;
-        self.status = "Connecting to server...".to_string();
-        self.add_log(format!("Connecting to: {}", self.config.server_url));
+        self.status = format!("Connecting to {} as {}...", self.config.server_url, self.config.agent_name);
+        self.add_log(format!("Connecting to: {} as {}", self.config.server_url, self.config.agent_name));
         
         // Create agent client
         match AgentClient::new(self.config.clone()) {
@@ -146,7 +169,7 @@ impl TuiApp {
                                 self.agent_client = Some(agent_client);
                                 self.job_worker = Some(job_worker);
                                 self.connection_state = ConnectionState::Connected;
-                                self.editing_server_url = false;
+                                self.editing_field = EditingField::None;
                                 self.connection_in_progress = false;
                                 self.add_log("Connection established".to_string());
                             }
@@ -247,7 +270,7 @@ impl TuiApp {
             let instructions_clone = self.instructions.clone();
             let connection_state_clone = self.connection_state.clone();
             let server_url_input_clone = self.server_url_input.clone();
-            let editing_url = self.editing_server_url;
+            let editing_url = self.editing_field == EditingField::ServerUrl;
             let logs_clone = self.connection_logs.clone();
             let current_job_clone = current_job.clone();
             let job_history_clone = self.job_history.clone();
@@ -259,7 +282,8 @@ impl TuiApp {
                     &instructions_clone,
                     &connection_state_clone,
                     &server_url_input_clone,
-                    editing_url,
+                    &self.agent_name_input,
+                    self.editing_field,
                     &logs_clone,
                     &current_job_clone,
                     self.agent_client.as_ref().map(|_c| None::<String>),
@@ -273,11 +297,21 @@ impl TuiApp {
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {
-                                if !self.editing_server_url || matches!(self.connection_state, ConnectionState::Connected) {
+                                if self.editing_field == EditingField::None || matches!(self.connection_state, ConnectionState::Connected) {
                                     self.should_quit = true;
                                 } else {
                                     // Cancel editing
-                                    self.editing_server_url = false;
+                                    self.editing_field = EditingField::None;
+                                }
+                            }
+                            KeyCode::Tab => {
+                                // Switch between editing fields
+                                if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    self.editing_field = match self.editing_field {
+                                        EditingField::ServerUrl => EditingField::AgentName,
+                                        EditingField::AgentName => EditingField::ServerUrl,
+                                        EditingField::None => EditingField::ServerUrl,
+                                    };
                                 }
                             }
                             KeyCode::Char('d') => {
@@ -310,33 +344,83 @@ impl TuiApp {
                                 }
                             }
                             KeyCode::Enter => {
-                                if self.editing_server_url && matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
-                                    // Start connection process
-                                    if !self.server_url_input.trim().is_empty() {
-                                        // Update config
-                                        self.config.server_url = self.server_url_input.trim().to_string();
-                                        if let Err(e) = self.config.save() {
-                                            self.add_log(format!("Failed to save config: {}", e));
+                                if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    match self.editing_field {
+                                        EditingField::ServerUrl => {
+                                            // Move to agent name if URL is entered
+                                            if !self.server_url_input.trim().is_empty() {
+                                                self.config.server_url = self.server_url_input.trim().to_string();
+                                                self.editing_field = EditingField::AgentName;
+                                                self.add_log(format!("Server URL set: {}", self.config.server_url));
+                                            }
                                         }
-                                        self.connection_state = ConnectionState::Connecting;
-                                        self.status = "Connecting...".to_string();
-                                        self.add_log(format!("Connecting to: {}", self.config.server_url));
+                                        EditingField::AgentName => {
+                                            // Save agent name and attempt connection
+                                            if !self.agent_name_input.trim().is_empty() {
+                                                self.config.agent_name = self.agent_name_input.trim().to_string();
+                                                if let Err(e) = self.config.save() {
+                                                    self.add_log(format!("Failed to save config: {}", e));
+                                                } else {
+                                                    self.add_log(format!("Agent name set: {}", self.config.agent_name));
+                                                }
+                                                
+                                                // Validate both fields are set
+                                                if !self.config.server_url.trim().is_empty() && !self.config.agent_name.trim().is_empty() {
+                                                    self.editing_field = EditingField::None;
+                                                    self.connection_state = ConnectionState::Connecting;
+                                                    self.status = "Connecting...".to_string();
+                                                    self.add_log(format!("Connecting to: {} as {}", self.config.server_url, self.config.agent_name));
+                                                } else {
+                                                    self.add_log("Please enter both server URL and agent name".to_string());
+                                                }
+                                            }
+                                        }
+                                        EditingField::None => {
+                                            // Try to connect if both fields are set
+                                            if !self.config.server_url.trim().is_empty() && !self.config.agent_name.trim().is_empty() {
+                                                self.connection_state = ConnectionState::Connecting;
+                                                self.status = "Connecting...".to_string();
+                                                self.add_log(format!("Connecting to: {} as {}", self.config.server_url, self.config.agent_name));
+                                            }
+                                        }
                                     }
                                 }
                             }
                             KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                                if self.editing_server_url {
-                                    self.server_url_input.clear();
+                                match self.editing_field {
+                                    EditingField::ServerUrl => self.server_url_input.clear(),
+                                    EditingField::AgentName => self.agent_name_input.clear(),
+                                    EditingField::None => {}
                                 }
                             }
                             KeyCode::Char(c) => {
-                                if self.editing_server_url && matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
-                                    self.server_url_input.push(c);
+                                if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    match self.editing_field {
+                                        EditingField::ServerUrl => {
+                                            // Allow all characters for URL/IP (including dots, colons, slashes, etc.)
+                                            self.server_url_input.push(c);
+                                        }
+                                        EditingField::AgentName => {
+                                            // Allow alphanumeric, dash, underscore for agent name
+                                            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                                                self.agent_name_input.push(c);
+                                            }
+                                        }
+                                        EditingField::None => {}
+                                    }
                                 }
                             }
                             KeyCode::Backspace => {
-                                if self.editing_server_url && matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
-                                    self.server_url_input.pop();
+                                if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    match self.editing_field {
+                                        EditingField::ServerUrl => {
+                                            self.server_url_input.pop();
+                                        }
+                                        EditingField::AgentName => {
+                                            self.agent_name_input.pop();
+                                        }
+                                        EditingField::None => {}
+                                    }
                                 }
                             }
                             _ => {}
@@ -386,7 +470,8 @@ impl TuiApp {
         instructions: &[String],
         connection_state: &ConnectionState,
         server_url_input: &str,
-        editing_server_url: bool,
+        agent_name_input: &str,
+        editing_field: EditingField,
         connection_logs: &[String],
         current_job: &Option<crate::agent::UpscalingJob>,
         _agent_id: Option<Option<String>>,
@@ -448,33 +533,66 @@ impl TuiApp {
             let inner_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
+                    Constraint::Length(4),
+                    Constraint::Length(4),
                     Constraint::Length(1),
                     Constraint::Min(0),
                 ])
-                .split(chunks[1]);
+                .split(chunks[2]);
             
             // Server URL input
+            let editing_url = editing_field == EditingField::ServerUrl;
             let url_prompt = Paragraph::new(vec![
                 Line::from(vec![
-                    Span::styled("Server URL: ", Style::default().fg(Color::Cyan)),
+                    Span::styled("Server URL/IP: ", Style::default().fg(Color::Cyan)),
                     Span::styled(
-                        server_url_input,
-                        Style::default().fg(Color::White).add_modifier(if editing_server_url { Modifier::BOLD } else { Modifier::empty() }),
+                        if server_url_input.is_empty() { "http://..." } else { server_url_input },
+                        Style::default()
+                            .fg(if editing_url { Color::Yellow } else { Color::White })
+                            .add_modifier(if editing_url { Modifier::BOLD | Modifier::UNDERLINED } else { Modifier::empty() }),
                     ),
-                    if editing_server_url {
+                    if editing_url {
                         Span::styled("_", Style::default().fg(Color::Yellow))
                     } else {
                         Span::raw("")
                     },
                 ]),
                 Line::from(vec![
-                    Span::styled("Press Enter to connect", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Example: http://192.168.1.100:3000", Style::default().fg(Color::DarkGray)),
                 ]),
             ])
-            .block(Block::default().borders(Borders::ALL).title("Connection"))
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(if editing_url { "Server URL (Press Tab for Agent Name)" } else { "Server URL" }))
             .wrap(Wrap { trim: true });
             f.render_widget(url_prompt, inner_chunks[0]);
+            
+            // Agent Name input
+            let editing_name = editing_field == EditingField::AgentName;
+            let name_prompt = Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("Agent Name: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        if agent_name_input.is_empty() { "Enter agent name..." } else { agent_name_input },
+                        Style::default()
+                            .fg(if editing_name { Color::Yellow } else { Color::White })
+                            .add_modifier(if editing_name { Modifier::BOLD | Modifier::UNDERLINED } else { Modifier::empty() }),
+                    ),
+                    if editing_name {
+                        Span::styled("_", Style::default().fg(Color::Yellow))
+                    } else {
+                        Span::raw("")
+                    },
+                ]),
+                Line::from(vec![
+                    Span::styled("Press Enter after entering name to connect", Style::default().fg(Color::DarkGray)),
+                ]),
+            ])
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(if editing_name { "Agent Name (Press Tab for Server URL)" } else { "Agent Name" }))
+            .wrap(Wrap { trim: true });
+            f.render_widget(name_prompt, inner_chunks[1]);
             
             // Connection logs
             let log_items: Vec<ListItem> = connection_logs.iter()
@@ -483,7 +601,7 @@ impl TuiApp {
             let log_list = List::new(log_items)
                 .block(Block::default().borders(Borders::ALL).title("Connection Log"))
                 .style(Style::default().fg(Color::White));
-            f.render_widget(log_list, inner_chunks[2]);
+            f.render_widget(log_list, inner_chunks[3]);
         } else if matches!(connection_state, ConnectionState::Connected) {
             // Show connected but no job
             let no_job_text = if is_paused {

@@ -249,8 +249,7 @@ pub struct AgentInfo {
 pub struct TopazProfile {
     pub id: Option<i64>,
     pub name: String,
-    pub description: Option<String>,
-    pub settings_json: serde_json::Value,
+    pub command: String, // Command to run for this profile
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -951,8 +950,7 @@ impl Database {
                     "CREATE TABLE topaz_profiles (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL UNIQUE,
-                        description TEXT,
-                        settings_json TEXT NOT NULL,
+                        command TEXT NOT NULL,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     )",
@@ -1603,8 +1601,12 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let threshold = chrono::Utc::now() - chrono::Duration::minutes(minutes_threshold);
         
+        // More aggressive cleanup: mark as offline if no heartbeat in threshold
+        // Also check for agents that haven't been seen recently
         let count = conn.execute(
-            "UPDATE agents SET status = 'offline' WHERE status = 'online' AND last_seen < ?1",
+            "UPDATE agents SET status = 'offline' 
+             WHERE (status = 'online' OR status = 'busy') 
+             AND last_seen < ?1",
             params![threshold.to_rfc3339()],
         )?;
 
@@ -1630,17 +1632,59 @@ impl Database {
     pub fn create_topaz_profile(
         &self,
         name: &str,
-        description: Option<&str>,
-        settings_json: &serde_json::Value,
+        command: &str,
     ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
-        let settings_str = serde_json::to_string(settings_json)?;
+        
+        // Check if table needs migration (has old schema)
+        let table_info: Result<Vec<String>, _> = conn.prepare("PRAGMA table_info(topaz_profiles)")?
+            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .collect();
+        
+        let columns = table_info.unwrap_or_default();
+        if columns.contains(&"settings_json".to_string()) && !columns.contains(&"command".to_string()) {
+            // Migrate old schema to new schema
+            conn.execute(
+                "ALTER TABLE topaz_profiles ADD COLUMN command TEXT",
+                [],
+            )?;
+            // Copy description to command if command is empty (for existing profiles)
+            conn.execute(
+                "UPDATE topaz_profiles SET command = COALESCE(description, '') WHERE command IS NULL OR command = ''",
+                [],
+            )?;
+            // Drop old columns
+            conn.execute(
+                "CREATE TABLE topaz_profiles_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    command TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )",
+                [],
+            )?;
+            // Try to get command from existing columns, fallback to empty string
+            let has_description = columns.contains(&"description".to_string());
+            let select_sql = if has_description {
+                "INSERT INTO topaz_profiles_new (id, name, command, created_at, updated_at)
+                 SELECT id, name, COALESCE(command, description, ''), created_at, updated_at
+                 FROM topaz_profiles"
+            } else {
+                "INSERT INTO topaz_profiles_new (id, name, command, created_at, updated_at)
+                 SELECT id, name, COALESCE(command, ''), created_at, updated_at
+                 FROM topaz_profiles"
+            };
+            conn.execute(select_sql, [])?;
+            conn.execute("DROP TABLE topaz_profiles", [])?;
+            conn.execute("ALTER TABLE topaz_profiles_new RENAME TO topaz_profiles", [])?;
+        }
         
         conn.execute(
-            "INSERT INTO topaz_profiles (name, description, settings_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![name, description, settings_str, now, now],
+            "INSERT INTO topaz_profiles (name, command, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![name, command, now, now],
         )?;
         
         Ok(conn.last_insert_rowid())
@@ -1649,26 +1693,30 @@ impl Database {
     /// Get all Topaz profiles
     pub fn get_topaz_profiles(&self) -> Result<Vec<TopazProfile>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, settings_json, created_at, updated_at
-             FROM topaz_profiles
-             ORDER BY name ASC"
-        )?;
+        
+        // Check if command column exists, fallback to old schema if needed
+        let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
+            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .collect::<Result<Vec<_>, _>>()?
+            .contains(&"command".to_string());
+        
+        let sql = if has_command {
+            "SELECT id, name, command, created_at, updated_at FROM topaz_profiles ORDER BY name ASC"
+        } else {
+            "SELECT id, name, COALESCE(description, ''), created_at, updated_at FROM topaz_profiles ORDER BY name ASC"
+        };
+        
+        let mut stmt = conn.prepare(sql)?;
 
         let profiles = stmt.query_map([], |row| {
-            let settings_str: String = row.get(3)?;
-            let settings: serde_json::Value = serde_json::from_str(&settings_str)
-                .unwrap_or_else(|_| serde_json::json!({}));
-            
             Ok(TopazProfile {
                 id: Some(row.get(0)?),
                 name: row.get(1)?,
-                description: row.get(2)?,
-                settings_json: settings,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                command: row.get(2)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
                     .unwrap()
                     .with_timezone(&Utc),
-                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
                     .unwrap()
                     .with_timezone(&Utc),
             })
@@ -1682,26 +1730,29 @@ impl Database {
     pub fn get_topaz_profile(&self, id: i64) -> Result<Option<TopazProfile>> {
         let conn = self.conn.lock().unwrap();
         
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, settings_json, created_at, updated_at
-             FROM topaz_profiles
-             WHERE id = ?1"
-        )?;
+        // Check if command column exists
+        let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
+            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .collect::<Result<Vec<_>, _>>()?
+            .contains(&"command".to_string());
+        
+        let sql = if has_command {
+            "SELECT id, name, command, created_at, updated_at FROM topaz_profiles WHERE id = ?1"
+        } else {
+            "SELECT id, name, COALESCE(description, ''), created_at, updated_at FROM topaz_profiles WHERE id = ?1"
+        };
+        
+        let mut stmt = conn.prepare(sql)?;
 
         let profile = match stmt.query_row(params![id], |row| {
-            let settings_str: String = row.get(3)?;
-            let settings: serde_json::Value = serde_json::from_str(&settings_str)
-                .unwrap_or_else(|_| serde_json::json!({}));
-            
             Ok(TopazProfile {
                 id: Some(row.get(0)?),
                 name: row.get(1)?,
-                description: row.get(2)?,
-                settings_json: settings,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                command: row.get(2)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
                     .unwrap()
                     .with_timezone(&Utc),
-                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
                     .unwrap()
                     .with_timezone(&Utc),
             })
@@ -1719,8 +1770,7 @@ impl Database {
         &self,
         id: i64,
         name: Option<&str>,
-        description: Option<&str>,
-        settings_json: Option<&serde_json::Value>,
+        command: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
@@ -1733,13 +1783,10 @@ impl Database {
             updates.push("name = ?");
             params.push(Box::new(n.to_string()));
         }
-        if let Some(d) = description {
-            updates.push("description = ?");
-            params.push(Box::new(d));
-        }
-        if let Some(s) = settings_json {
-            updates.push("settings_json = ?");
-            params.push(Box::new(serde_json::to_string(s)?));
+        
+        if let Some(cmd) = command {
+            updates.push("command = ?");
+            params.push(Box::new(cmd.to_string()));
         }
         updates.push("updated_at = ?");
         params.push(Box::new(now.clone()));
@@ -1784,28 +1831,38 @@ impl Database {
     /// Get Topaz profiles associated with a show
     pub fn get_profiles_for_show(&self, show_id: i64) -> Result<Vec<TopazProfile>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT p.id, p.name, p.description, p.settings_json, p.created_at, p.updated_at
+        
+        // Check if command column exists
+        let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
+            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .collect::<Result<Vec<_>, _>>()?
+            .contains(&"command".to_string());
+        
+        let sql = if has_command {
+            "SELECT p.id, p.name, p.command, p.created_at, p.updated_at
              FROM topaz_profiles p
              INNER JOIN show_topaz_profiles stp ON p.id = stp.topaz_profile_id
              WHERE stp.show_id = ?1
              ORDER BY p.name ASC"
-        )?;
+        } else {
+            "SELECT p.id, p.name, COALESCE(p.description, ''), p.created_at, p.updated_at
+             FROM topaz_profiles p
+             INNER JOIN show_topaz_profiles stp ON p.id = stp.topaz_profile_id
+             WHERE stp.show_id = ?1
+             ORDER BY p.name ASC"
+        };
+        
+        let mut stmt = conn.prepare(sql)?;
 
         let profiles = stmt.query_map(params![show_id], |row| {
-            let settings_str: String = row.get(3)?;
-            let settings: serde_json::Value = serde_json::from_str(&settings_str)
-                .unwrap_or_else(|_| serde_json::json!({}));
-            
             Ok(TopazProfile {
                 id: Some(row.get(0)?),
                 name: row.get(1)?,
-                description: row.get(2)?,
-                settings_json: settings,
-                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                command: row.get(2)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
                     .unwrap()
                     .with_timezone(&Utc),
-                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
                     .unwrap()
                     .with_timezone(&Utc),
             })

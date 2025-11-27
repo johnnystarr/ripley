@@ -212,10 +212,21 @@ impl JobWorker {
             let local_output_path = upscaled_dir.join(&output_file_name);
             
             // Load Topaz profile if specified
-            let profile: Option<TopazProfile> = if let Some(_profile_id) = job.topaz_profile_id {
-                // TODO: Fetch profile from server
-                // For now, we'll skip profile loading
-                None
+            let profile: Option<TopazProfile> = if let Some(profile_id) = job.topaz_profile_id {
+                match agent_client.get_topaz_profile(profile_id).await {
+                    Ok(Some(p)) => {
+                        info!("Loaded Topaz profile: {} (command: {})", p.name, p.command);
+                        Some(p)
+                    }
+                    Ok(None) => {
+                        warn!("Topaz profile {} not found on server", profile_id);
+                        None
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch Topaz profile {}: {}", profile_id, e);
+                        None
+                    }
+                }
             } else {
                 None
             };

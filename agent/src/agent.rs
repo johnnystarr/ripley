@@ -474,6 +474,25 @@ impl AgentClient {
             Ok(None)
         }
     }
+    
+    /// Get Topaz profile by ID from server
+    pub async fn get_topaz_profile(&self, profile_id: i64) -> Result<Option<crate::topaz::TopazProfile>> {
+        let url = format!("{}/api/topaz-profiles/{}", self.config.server_url, profile_id);
+        let response = self.http_client
+            .get(&url)
+            .send()
+            .await?;
+        
+        if response.status().is_success() {
+            let profile: crate::topaz::TopazProfile = response.json().await?;
+            Ok(Some(profile))
+        } else if response.status().as_u16() == 404 {
+            Ok(None)
+        } else {
+            let error_text = response.text().await?;
+            Err(anyhow::anyhow!("Failed to get Topaz profile: {}", error_text))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
