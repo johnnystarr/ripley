@@ -116,9 +116,9 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Hook into rip completion workflow to queue upscaling job
 - [x] Create upscaling job when DVD/BluRay rip completes
 - [x] Associate upscaling job with show and profile
-- [ ] Add file transfer preparation (prepare file for agent download)
-- [ ] Implement job status tracking (queued, assigned, processing, completed, failed)
-- [ ] Add job result reporting (output file path, processing time, etc.)
+- [x] Add file transfer preparation (prepare file for agent download)
+- [x] Implement job status tracking (queued, assigned, processing, completed, failed)
+- [x] Add job result reporting (output file path, processing time, etc.)
 - [ ] Create job cleanup/garbage collection for old jobs
 - [ ] Add job retry logic for failed upscaling jobs
 - [ ] Integrate with existing rename workflow (wait for upscaling before renaming)
@@ -135,12 +135,12 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Add agent action buttons (force disconnect, restart, etc.)
 - [x] Create agent connection status indicators
 - [x] Add real-time WebSocket updates for agent status
-- [ ] Create Topaz profile management UI (list, create, edit, delete)
-- [ ] Add profile-to-show association UI
-- [ ] Create upscaling job queue view
-- [ ] Display job status and progress
-- [ ] Add job history view
-- [ ] Create job detail view (logs, settings, output)
+- [x] Create Topaz profile management UI (list, create, edit, delete)
+- [x] Add profile-to-show association UI
+- [x] Create upscaling job queue view
+- [x] Display job status and progress
+- [x] Add job history view
+- [x] Create job detail view (logs, settings, output)
 
 ### Frontend - Monitor Tab Integration
 

@@ -61,6 +61,7 @@ export default function Agents() {
   const [addingShowToProfile, setAddingShowToProfile] = useState(null);
   const [editingOutputLocation, setEditingOutputLocation] = useState(null);
   const [outputLocationValue, setOutputLocationValue] = useState('');
+  const [expandedJob, setExpandedJob] = useState(null);
 
   // Fetch data on mount
   useEffect(() => {
@@ -798,43 +799,197 @@ export default function Agents() {
               <p className="text-slate-400">Upscaling jobs will appear here when created</p>
             </div>
           ) : (
-            jobs.map((job) => (
-              <div
-                key={job.job_id}
-                className="bg-slate-800 rounded-lg p-5 border border-slate-700"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-slate-100 mb-1">{job.job_id}</h3>
-                    <p className="text-slate-400 text-sm">{job.input_file_path}</p>
-                    {job.agent_id && (
-                      <p className="text-slate-500 text-xs mt-1">Agent: {job.agent_id}</p>
+            jobs.map((job) => {
+              const isExpanded = expandedJob === job.job_id;
+              const associatedProfile = job.topaz_profile_id 
+                ? profiles.find(p => p.id === job.topaz_profile_id)
+                : null;
+              const associatedShow = job.show_id
+                ? shows.find(s => s.id === job.show_id)
+                : null;
+              
+              return (
+                <div
+                  key={job.job_id}
+                  className="bg-slate-800 rounded-lg border border-slate-700"
+                >
+                  <div className="p-5">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="font-semibold text-slate-100">{job.job_id}</h3>
+                          <span className={`px-2 py-1 text-xs rounded ${
+                            job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
+                            job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                            job.status === 'processing' ? 'bg-cyan-500/20 text-cyan-400' :
+                            job.status === 'assigned' ? 'bg-yellow-500/20 text-yellow-400' :
+                            'bg-slate-700/50 text-slate-400'
+                          }`}>
+                            {job.status}
+                          </span>
+                        </div>
+                        <p className="text-slate-400 text-sm font-mono text-xs break-all">{job.input_file_path}</p>
+                        {job.agent_id && (
+                          <p className="text-slate-500 text-xs mt-1">Agent: <span className="font-mono">{job.agent_id}</span></p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setExpandedJob(isExpanded ? null : job.job_id)}
+                        className="text-slate-400 hover:text-slate-300 transition-colors"
+                      >
+                        <FontAwesomeIcon icon={isExpanded ? faChevronUp : faChevronDown} />
+                      </button>
+                    </div>
+                    {job.status === 'processing' || job.status === 'assigned' ? (
+                      <div className="mb-3">
+                        <div className="flex justify-between text-xs text-slate-400 mb-1">
+                          <span>Progress: {Math.round(job.progress)}%</span>
+                        </div>
+                        <div className="w-full bg-slate-900/50 rounded-full h-2">
+                          <div
+                            className="bg-cyan-500 h-2 rounded-full transition-all"
+                            style={{ width: `${Math.min(job.progress, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {isExpanded && (
+                      <div className="mt-4 pt-4 border-t border-slate-700 space-y-4">
+                        {/* Job Details */}
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-300 mb-2">Job Details</h4>
+                          <div className="bg-slate-900/50 rounded p-3 text-xs space-y-2">
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Job ID:</span>
+                              <span className="text-slate-200 font-mono">{job.job_id}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Status:</span>
+                              <span className="text-slate-200 capitalize">{job.status}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-slate-400">Priority:</span>
+                              <span className="text-slate-200">{job.priority || 0}</span>
+                            </div>
+                            {job.processing_time_seconds && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Processing Time:</span>
+                                <span className="text-slate-200">
+                                  {Math.floor(job.processing_time_seconds / 60)}m {job.processing_time_seconds % 60}s
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Timeline */}
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-300 mb-2">Timeline</h4>
+                          <div className="bg-slate-900/50 rounded p-3 text-xs space-y-2">
+                            {job.created_at && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Created:</span>
+                                <span className="text-slate-200">{new Date(job.created_at).toLocaleString()}</span>
+                              </div>
+                            )}
+                            {job.assigned_at && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Assigned:</span>
+                                <span className="text-slate-200">{new Date(job.assigned_at).toLocaleString()}</span>
+                              </div>
+                            )}
+                            {job.started_at && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Started:</span>
+                                <span className="text-slate-200">{new Date(job.started_at).toLocaleString()}</span>
+                              </div>
+                            )}
+                            {job.completed_at && (
+                              <div className="flex justify-between">
+                                <span className="text-slate-400">Completed:</span>
+                                <span className="text-slate-200">{new Date(job.completed_at).toLocaleString()}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Files */}
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-300 mb-2">Files</h4>
+                          <div className="bg-slate-900/50 rounded p-3 text-xs space-y-2">
+                            <div>
+                              <span className="text-slate-400 block mb-1">Input:</span>
+                              <span className="text-slate-200 font-mono break-all">{job.input_file_path}</span>
+                            </div>
+                            {job.output_file_path && (
+                              <div>
+                                <span className="text-slate-400 block mb-1">Output:</span>
+                                <span className="text-slate-200 font-mono break-all text-green-400">{job.output_file_path}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Associations */}
+                        {(associatedProfile || associatedShow) && (
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-2">Associations</h4>
+                            <div className="bg-slate-900/50 rounded p-3 text-xs space-y-2">
+                              {associatedShow && (
+                                <div className="flex justify-between">
+                                  <span className="text-slate-400">Show:</span>
+                                  <span className="text-slate-200">{associatedShow.name}</span>
+                                </div>
+                              )}
+                              {associatedProfile && (
+                                <div className="flex justify-between">
+                                  <span className="text-slate-400">Topaz Profile:</span>
+                                  <span className="text-slate-200">{associatedProfile.name}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Error Message */}
+                        {job.error_message && (
+                          <div>
+                            <h4 className="text-sm font-semibold text-red-400 mb-2">Error</h4>
+                            <div className="bg-red-900/20 border border-red-500/30 rounded p-3 text-xs">
+                              <p className="text-red-300 break-all">{job.error_message}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Progress for active jobs */}
+                        {(job.status === 'processing' || job.status === 'assigned') && (
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-2">Progress</h4>
+                            <div className="bg-slate-900/50 rounded p-3">
+                              <div className="flex justify-between text-xs text-slate-400 mb-2">
+                                <span>{Math.round(job.progress)}%</span>
+                                {job.started_at && (
+                                  <span>
+                                    Started: {formatRelativeTime(job.started_at)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="w-full bg-slate-800 rounded-full h-3">
+                                <div
+                                  className="bg-cyan-500 h-3 rounded-full transition-all"
+                                  style={{ width: `${Math.min(job.progress, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <span className={`px-2 py-1 text-xs rounded ${
-                    job.status === 'completed' ? 'bg-green-500/20 text-green-400' :
-                    job.status === 'failed' ? 'bg-red-500/20 text-red-400' :
-                    job.status === 'processing' ? 'bg-cyan-500/20 text-cyan-400' :
-                    'bg-slate-700/50 text-slate-400'
-                  }`}>
-                    {job.status}
-                  </span>
                 </div>
-                {job.status === 'processing' || job.status === 'assigned' ? (
-                  <div>
-                    <div className="flex justify-between text-xs text-slate-400 mb-1">
-                      <span>{Math.round(job.progress)}%</span>
-                    </div>
-                    <div className="w-full bg-slate-900/50 rounded-full h-2">
-                      <div
-                        className="bg-cyan-500 h-2 rounded-full transition-all"
-                        style={{ width: `${Math.min(job.progress, 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
