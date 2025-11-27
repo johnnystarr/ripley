@@ -209,6 +209,48 @@ impl Database {
         )?;
 
         debug!("Database schema initialized");
+        
+        // Seed initial shows if the table is empty
+        self.seed_initial_shows()?;
+        
+        Ok(())
+    }
+
+    /// Seed initial shows if the table is empty
+    fn seed_initial_shows(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Check if shows table is empty
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM shows",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        if count == 0 {
+            let initial_shows = vec![
+                "Foster's Home For Imaginary Friends",
+                "Power Puff Girls",
+                "Johnny Bravo",
+                "Pinky And The Brain",
+                "Batman Begins",
+                "Batman The Animated Series",
+                "King Of The Hill",
+            ];
+            
+            let now = Utc::now().to_rfc3339();
+            let show_count = initial_shows.len();
+            
+            for show_name in initial_shows {
+                conn.execute(
+                    "INSERT INTO shows (name, created_at) VALUES (?1, ?2)",
+                    params![show_name, now],
+                )?;
+            }
+            
+            info!("Seeded {} initial shows", show_count);
+        }
+        
         Ok(())
     }
 
