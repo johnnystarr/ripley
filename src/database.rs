@@ -211,14 +211,13 @@ impl Database {
         debug!("Database schema initialized");
         
         // Seed initial shows if the table is empty
-        self.seed_initial_shows()?;
+        Self::seed_initial_shows(&conn)?;
         
         Ok(())
     }
 
     /// Seed initial shows if the table is empty
-    fn seed_initial_shows(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+    fn seed_initial_shows(conn: &Connection) -> Result<()> {
         
         // Check if shows table is empty
         let count: i64 = conn.query_row(

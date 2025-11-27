@@ -84,6 +84,11 @@ async fn main() -> Result<()> {
             .await?;
         }
         Some(Command::Serve { port, host, dev }) => {
+            // Initialize tracing for server mode
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::INFO)
+                .init();
+            
             eprintln!("\x1b[35m🌐 Ripley REST API Server\x1b[0m");
             eprintln!("\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
             
