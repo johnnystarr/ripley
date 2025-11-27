@@ -108,6 +108,60 @@ pub struct Show {
     pub created_at: DateTime<Utc>,
 }
 
+/// Rip history entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RipHistory {
+    pub id: Option<i64>,
+    pub timestamp: DateTime<Utc>,
+    pub drive: String,
+    pub disc: Option<String>,
+    pub title: Option<String>,
+    pub disc_type: Option<String>,
+    pub status: RipStatus,
+    pub duration_seconds: Option<i64>,
+    pub file_size_bytes: Option<i64>,
+    pub output_path: Option<String>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RipStatus {
+    Success,
+    Failed,
+    Cancelled,
+}
+
+impl RipStatus {
+    fn to_string(&self) -> &str {
+        match self {
+            RipStatus::Success => "success",
+            RipStatus::Failed => "failed",
+            RipStatus::Cancelled => "cancelled",
+        }
+    }
+
+    fn from_string(s: &str) -> Self {
+        match s {
+            "success" => RipStatus::Success,
+            "failed" => RipStatus::Failed,
+            "cancelled" => RipStatus::Cancelled,
+            _ => RipStatus::Failed,
+        }
+    }
+}
+
+/// Drive statistics entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriveStats {
+    pub drive: String,
+    pub rips_completed: i64,
+    pub rips_failed: i64,
+    pub total_bytes_ripped: i64,
+    pub avg_speed_mbps: f64,
+    pub last_used: Option<DateTime<Utc>>,
+}
+
 /// Database manager for logs and issues
 pub struct Database {
     conn: Mutex<Connection>,
@@ -197,6 +251,39 @@ impl Database {
             [],
         )?;
 
+        // Create rip history table for tracking completed rips
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS rip_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                drive TEXT NOT NULL,
+                disc TEXT,
+                title TEXT,
+                disc_type TEXT,
+                status TEXT NOT NULL,
+                duration_seconds INTEGER,
+                file_size_bytes INTEGER,
+                output_path TEXT,
+                error_message TEXT
+            )",
+            [],
+        )?;
+
+        // Create drive statistics table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS drive_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                drive TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                rips_completed INTEGER DEFAULT 0,
+                rips_failed INTEGER DEFAULT 0,
+                total_bytes_ripped INTEGER DEFAULT 0,
+                avg_speed_mbps REAL DEFAULT 0.0,
+                last_used TEXT
+            )",
+            [],
+        )?;
+
         // Create indexes
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC)",
@@ -205,6 +292,21 @@ impl Database {
 
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_issues_resolved ON issues(resolved)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rip_history_timestamp ON rip_history(timestamp DESC)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rip_history_status ON rip_history(status)",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_drive_stats_drive ON drive_stats(drive)",
             [],
         )?;
 
@@ -579,6 +681,141 @@ impl Database {
         conn.execute("DELETE FROM shows WHERE id = ?1", [id])?;
 
         Ok(())
+    }
+
+    /// Add a rip history entry
+    pub fn add_rip_history(&self, entry: &RipHistory) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "INSERT INTO rip_history (timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                entry.timestamp.to_rfc3339(),
+                entry.drive,
+                entry.disc,
+                entry.title,
+                entry.disc_type,
+                entry.status.to_string(),
+                entry.duration_seconds,
+                entry.file_size_bytes,
+                entry.output_path,
+                entry.error_message,
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get statistics summary
+    pub fn get_statistics(&self) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Total rips
+        let total_rips: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM rip_history",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        // Successful rips
+        let successful_rips: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM rip_history WHERE status = 'success'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        // Failed rips
+        let failed_rips: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM rip_history WHERE status = 'failed'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        // Total storage used
+        let total_storage: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(file_size_bytes), 0) FROM rip_history WHERE status = 'success'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        // Success rate
+        let success_rate = if total_rips > 0 {
+            (successful_rips as f64 / total_rips as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        Ok(serde_json::json!({
+            "total_rips": total_rips,
+            "successful_rips": successful_rips,
+            "failed_rips": failed_rips,
+            "success_rate": success_rate,
+            "total_storage_bytes": total_storage,
+        }))
+    }
+
+    /// Get drive statistics
+    pub fn get_drive_statistics(&self) -> Result<Vec<DriveStats>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT 
+                drive,
+                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+                COALESCE(SUM(CASE WHEN status = 'success' THEN file_size_bytes ELSE 0 END), 0) as total_bytes,
+                MAX(timestamp) as last_used
+             FROM rip_history
+             GROUP BY drive"
+        )?;
+
+        let stats = stmt.query_map([], |row| {
+            Ok(DriveStats {
+                drive: row.get(0)?,
+                rips_completed: row.get(1)?,
+                rips_failed: row.get(2)?,
+                total_bytes_ripped: row.get(3)?,
+                avg_speed_mbps: 0.0, // Calculate this later if we track speed
+                last_used: row.get::<_, Option<String>>(4)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(stats)
+    }
+
+    /// Get recent rip history
+    pub fn get_rip_history(&self, limit: i64) -> Result<Vec<RipHistory>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message
+             FROM rip_history
+             ORDER BY timestamp DESC
+             LIMIT ?1"
+        )?;
+
+        let history = stmt.query_map([limit], |row| {
+            Ok(RipHistory {
+                id: Some(row.get(0)?),
+                timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                drive: row.get(2)?,
+                disc: row.get(3)?,
+                title: row.get(4)?,
+                disc_type: row.get(5)?,
+                status: RipStatus::from_string(&row.get::<_, String>(6)?),
+                duration_seconds: row.get(7)?,
+                file_size_bytes: row.get(8)?,
+                output_path: row.get(9)?,
+                error_message: row.get(10)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(history)
     }
 }
 

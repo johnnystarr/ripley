@@ -289,6 +289,9 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/shows/:id", put(update_show))
         .route("/shows/:id", delete(delete_show))
         .route("/shows/:id/select", post(select_show))
+        .route("/statistics", get(get_statistics))
+        .route("/statistics/drives", get(get_drive_stats))
+        .route("/rip-history", get(get_rip_history_handler))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -784,6 +787,45 @@ async fn select_show(
         }),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to select show: {}", e),
+        }),
+    }
+}
+
+/// Get overall statistics
+async fn get_statistics(State(state): State<ApiState>) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_statistics() {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get statistics: {}", e),
+        }),
+    }
+}
+
+/// Get drive statistics
+async fn get_drive_stats(State(state): State<ApiState>) -> Result<Json<Vec<crate::database::DriveStats>>, ErrorResponse> {
+    match state.db.get_drive_statistics() {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get drive statistics: {}", e),
+        }),
+    }
+}
+
+/// Get rip history
+#[derive(Debug, Deserialize)]
+struct RipHistoryQuery {
+    limit: Option<i64>,
+}
+
+async fn get_rip_history_handler(
+    State(state): State<ApiState>,
+    axum::extract::Query(query): axum::extract::Query<RipHistoryQuery>,
+) -> Result<Json<Vec<crate::database::RipHistory>>, ErrorResponse> {
+    let limit = query.limit.unwrap_or(50);
+    match state.db.get_rip_history(limit) {
+        Ok(history) => Ok(Json(history)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get rip history: {}", e),
         }),
     }
 }

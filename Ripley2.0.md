@@ -8,7 +8,7 @@
 
 ### Dashboard Improvements
 - [ ] Show disc title/name when available (not just disc type)
-- [ ] Add statistics cards (total rips, success rate, storage used)
+- [x] Add statistics cards (total rips, success rate, storage used)
 - [ ] Auto-scroll logs to bottom when new entries arrive
 - [ ] Add log level filtering on Dashboard (like Logs page)
 - [ ] Add clear logs button
@@ -74,8 +74,8 @@
 ## Backend Enhancements
 
 ### Database Enhancements
-- [ ] Add rip history table (completed rips with metadata)
-- [ ] Add drive statistics table (usage, errors, performance)
+- [x] Add rip history table (completed rips with metadata)
+- [x] Add drive statistics table (usage, errors, performance)
 - [ ] Add user preferences table
 - [ ] Add database migrations system
 - [ ] Add database backup/restore functionality

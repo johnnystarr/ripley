@@ -179,6 +179,21 @@ class ApiClient {
     });
   }
 
+  // Get statistics
+  async getStatistics() {
+    return this.request('/statistics');
+  }
+
+  // Get drive statistics
+  async getDriveStatistics() {
+    return this.request('/statistics/drives');
+  }
+
+  // Get rip history
+  async getRipHistory(limit = 50) {
+    return this.request(`/rip-history?limit=${limit}`);
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {

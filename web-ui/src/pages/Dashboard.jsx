@@ -26,6 +26,7 @@ export default function Dashboard() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [shows, setShows] = useState([]);
   const [selectedShowId, setSelectedShowId] = useState(null);
+  const [statistics, setStatistics] = useState(null);
 
   // Fetch drives and logs on mount
   useEffect(() => {
@@ -34,6 +35,7 @@ export default function Dashboard() {
     fetchActiveIssues();
     fetchLastTitle();
     fetchShows();
+    fetchStatistics();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -155,6 +157,15 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchStatistics = useCallback(async () => {
+    try {
+      const data = await api.getStatistics();
+      setStatistics(data);
+    } catch (err) {
+      console.error('Failed to fetch statistics:', err);
+    }
+  }, []);
+
   const handleShowSelect = useCallback(async (showId) => {
     try {
       await api.selectShow(showId);
@@ -216,6 +227,14 @@ export default function Dashboard() {
     return faExclamationTriangle;
   }, []);
 
+  const formatBytes = useCallback((bytes) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }, []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -236,6 +255,63 @@ export default function Dashboard() {
       </div>
 
       <h1 className="text-3xl font-bold text-slate-100">Dashboard</h1>
+
+      {/* Statistics Cards */}
+      {statistics && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-sm">Total Rips</p>
+                <p className="text-3xl font-bold text-slate-100 mt-1">{statistics.total_rips}</p>
+              </div>
+              <div className="bg-cyan-500/10 p-3 rounded-lg">
+                <FontAwesomeIcon icon={faCompactDisc} className="text-cyan-400 text-2xl" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-sm">Success Rate</p>
+                <p className="text-3xl font-bold text-green-400 mt-1">
+                  {statistics.success_rate.toFixed(1)}%
+                </p>
+              </div>
+              <div className="bg-green-500/10 p-3 rounded-lg">
+                <FontAwesomeIcon icon={faCircleCheck} className="text-green-400 text-2xl" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-sm">Failed Rips</p>
+                <p className="text-3xl font-bold text-red-400 mt-1">{statistics.failed_rips}</p>
+              </div>
+              <div className="bg-red-500/10 p-3 rounded-lg">
+                <FontAwesomeIcon icon={faCircleXmark} className="text-red-400 text-2xl" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-slate-400 text-sm">Storage Used</p>
+                <p className="text-3xl font-bold text-slate-100 mt-1">
+                  {formatBytes(statistics.total_storage_bytes)}
+                </p>
+              </div>
+              <div className="bg-slate-700 p-3 rounded-lg">
+                <FontAwesomeIcon icon={faHdd} className="text-slate-400 text-2xl" />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Show Selection */}
       <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
