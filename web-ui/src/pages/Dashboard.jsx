@@ -420,7 +420,24 @@ export default function Dashboard() {
       { name: 'Cancelled', value: statusCounts.cancelled, color: '#94a3b8' },
     ].filter(item => item.value > 0);
 
-    return { daily, statusPie };
+    // Storage usage over time (cumulative)
+    const storageGrowth = [];
+    let cumulativeStorage = 0;
+    const sortedHistory = [...ripHistory].sort((a, b) => 
+      new Date(a.timestamp) - new Date(b.timestamp)
+    );
+    
+    sortedHistory.forEach(rip => {
+      if (rip.status === 'success' && rip.file_size_bytes) {
+        cumulativeStorage += rip.file_size_bytes;
+        storageGrowth.push({
+          date: new Date(rip.timestamp).toLocaleDateString(),
+          storage_gb: (cumulativeStorage / (1024 ** 3)).toFixed(2),
+        });
+      }
+    });
+
+    return { daily, statusPie, storageGrowth };
   }, [ripHistory]);
 
   if (loading) {
@@ -568,6 +585,31 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Storage Growth Chart */}
+      {chartData.storageGrowth && chartData.storageGrowth.length > 0 && (
+        <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+          <h2 className="text-lg font-semibold text-slate-100 mb-4">Storage Growth Over Time</h2>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={chartData.storageGrowth}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+              <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} label={{ value: 'GB', angle: -90, position: 'insideLeft', fill: '#94a3b8' }} />
+              <Tooltip 
+                contentStyle={{ 
+                  backgroundColor: '#1e293b', 
+                  border: '1px solid #334155',
+                  borderRadius: '8px',
+                  color: '#f1f5f9'
+                }}
+                formatter={(value) => `${value} GB`}
+              />
+              <Legend />
+              <Line type="monotone" dataKey="storage_gb" stroke="#22d3ee" strokeWidth={2} name="Storage (GB)" dot={{ fill: '#22d3ee' }} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       )}
 

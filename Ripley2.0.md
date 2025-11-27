@@ -26,15 +26,15 @@
 - [x] Add validation feedback for API keys (visual indicators)
 - [x] Add "Test Connection" buttons for TMDB/OpenAI APIs
 - [x] Group settings into collapsible sections (API Keys, Ripping, Metadata, etc.)
-- [ ] Add tooltips/help text explaining each setting
+- [x] Add tooltips/help text explaining each setting
 - [ ] Add "Reset to Defaults" button
 - [ ] Show config file location
 - [ ] Add config export/import feature
 
 ### Navigation & Layout
 - [ ] Add breadcrumbs navigation
-- [ ] Improve mobile responsiveness (sidebar toggle)
-- [ ] Add global search (search across logs, shows, issues)
+- [x] Improve mobile responsiveness (sidebar toggle, responsive layouts)
+- [x] Add global search (search across logs, shows, issues) with Cmd/Ctrl+K shortcut
 - [ ] Add user preferences (logs per page, polling interval, etc.)
 
 ### Real-time Features
@@ -47,8 +47,9 @@
 - [ ] Show ETA for active rips
 
 ### Data Visualization
-- [ ] Add charts for rip history (successful vs failed over time)
-- [ ] Show storage usage statistics with charts
+- [x] Add charts for rip history (successful vs failed over time)
+- [x] Show status distribution pie chart
+- [x] Show storage usage statistics with charts (cumulative growth)
 - [ ] Display ripping speed/performance metrics
 - [ ] Add drive usage heatmap (which drives used most)
 - [ ] Show episode matching accuracy statistics
@@ -83,7 +84,7 @@
 
 ### Ripping Features
 - [x] Add rip history logging (saves to database on completion)
-- [ ] Add support for multiple simultaneous rips (multi-drive)
+- [x] Add support for multiple simultaneous rips (multi-drive backend)
 - [ ] Add rip queue management
 - [ ] Add priority system for rip queue
 - [ ] Add automatic retry logic with backoff

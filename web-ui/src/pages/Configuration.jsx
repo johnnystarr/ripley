@@ -19,6 +19,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 import Dropdown from '../components/Dropdown';
 import CollapsibleSection from '../components/CollapsibleSection';
+import Tooltip from '../components/Tooltip';
 
 export default function Configuration() {
   const [config, setConfig] = useState(null);
@@ -181,9 +182,10 @@ export default function Configuration() {
         <div className="space-y-4 mt-4">
           {/* OpenAI API Key */}
           <div>
-            <label className="block text-slate-400 text-sm mb-2">
+            <label className="block text-slate-400 text-sm mb-2 flex items-center gap-2">
               OpenAI API Key
               <span className="text-slate-500 ml-2">(for speech matching)</span>
+              <Tooltip text="Used to transcribe audio tracks for automatic episode title matching via Whisper API" />
             </label>
             <div className="flex gap-2">
               <div className="relative flex-1">
@@ -233,9 +235,10 @@ export default function Configuration() {
 
           {/* TMDB API Key */}
           <div>
-            <label className="block text-slate-400 text-sm mb-2">
+            <label className="block text-slate-400 text-sm mb-2 flex items-center gap-2">
               TMDB API Key
               <span className="text-slate-500 ml-2">(for movie metadata)</span>
+              <Tooltip text="Used to fetch movie and TV show metadata from The Movie Database for accurate file naming" />
             </label>
             <div className="flex gap-2">
               <div className="relative flex-1">
@@ -290,7 +293,10 @@ export default function Configuration() {
         <div className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <div>
-              <label className="text-slate-100 font-medium">Enable Notifications</label>
+              <div className="flex items-center gap-2">
+                <label className="text-slate-100 font-medium">Enable Notifications</label>
+                <Tooltip text="Send system notifications when rip operations complete or fail" />
+              </div>
               <p className="text-slate-400 text-sm mt-1">Send push notifications for rip events</p>
             </div>
             <button
@@ -308,7 +314,10 @@ export default function Configuration() {
           </div>
 
           <div>
-            <label className="block text-slate-400 text-sm mb-2">Notification Topic</label>
+            <label className="block text-slate-400 text-sm mb-2 flex items-center gap-2">
+              Notification Topic
+              <Tooltip text="Topic name for push notification service routing" />
+            </label>
             <input
               type="text"
               value={config.notifications.topic}
@@ -325,7 +334,10 @@ export default function Configuration() {
         <div className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <div>
-              <label className="text-slate-100 font-medium">Enable Rsync</label>
+              <div className="flex items-center gap-2">
+                <label className="text-slate-100 font-medium">Enable Rsync Backup</label>
+                <Tooltip text="Automatically backup ripped files to a remote destination using rsync" />
+              </div>
               <p className="text-slate-400 text-sm mt-1">Automatically backup ripped files</p>
             </div>
             <button
@@ -343,7 +355,10 @@ export default function Configuration() {
           </div>
 
           <div>
-            <label className="block text-slate-400 text-sm mb-2">Destination Path</label>
+            <label className="block text-slate-400 text-sm mb-2 flex items-center gap-2">
+              Rsync Destination
+              <Tooltip text="Destination path for rsync backup (e.g., user@host:/path/to/backup)" />
+            </label>
             <input
               type="text"
               value={config.rsync.destination}

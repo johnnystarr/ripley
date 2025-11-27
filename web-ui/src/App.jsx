@@ -9,6 +9,7 @@ import {
   faCircle,
   faTv,
   faExclamationTriangle,
+  faSearch,
 } from '@fortawesome/free-solid-svg-icons';
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
@@ -22,11 +23,13 @@ import Configuration from './pages/Configuration';
 import Logs from './pages/Logs';
 import Shows from './pages/Shows';
 import Issues from './pages/Issues';
+import GlobalSearch from './components/GlobalSearch';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 1024); // Default closed on mobile
   const [wsConnected, setWsConnected] = useState(false);
   const [ripProgress, setRipProgress] = useState(null); // { disc: string, progress: number }
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // Handle responsive sidebar
   useEffect(() => {
@@ -46,6 +49,19 @@ function App() {
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('closeSidebar', handleCloseSidebar);
     };
+  }, []);
+
+  // Global search keyboard shortcut (Cmd/Ctrl+K)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   useEffect(() => {
@@ -131,6 +147,7 @@ function App() {
           },
         }}
       />
+      <GlobalSearch isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
       <div className="flex h-screen bg-slate-900">
         {/* Sidebar */}
         <Sidebar isOpen={sidebarOpen} wsConnected={wsConnected} />
@@ -141,6 +158,7 @@ function App() {
           <Header 
             toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
             wsConnected={wsConnected}
+            onSearchOpen={() => setSearchOpen(true)}
           />
 
           {/* Page content */}
@@ -237,7 +255,7 @@ function Sidebar({ isOpen, wsConnected }) {
   );
 }
 
-function Header({ toggleSidebar, wsConnected }) {
+function Header({ toggleSidebar, wsConnected, onSearchOpen }) {
   return (
     <header className="bg-slate-800 border-b border-slate-700 px-6 py-4">
       <div className="flex items-center justify-between">
@@ -249,6 +267,14 @@ function Header({ toggleSidebar, wsConnected }) {
         </button>
 
         <div className="flex items-center space-x-4">
+          <button
+            onClick={onSearchOpen}
+            className="hidden sm:flex items-center px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-400 hover:text-slate-300 hover:border-slate-600 transition-colors"
+          >
+            <FontAwesomeIcon icon={faSearch} className="mr-2" />
+            <span className="text-sm">Search</span>
+            <kbd className="ml-2 px-2 py-0.5 bg-slate-800 rounded text-xs">⌘K</kbd>
+          </button>
           <div className="flex items-center">
             <div className={`w-2 h-2 rounded-full mr-2 ${
               wsConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'
