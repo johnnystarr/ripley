@@ -96,8 +96,21 @@ impl AgentClient {
             }
             Ok(())
         } else {
-            let error_text = response.text().await?;
-            Err(anyhow::anyhow!("Registration failed: {}", error_text))
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            
+            // Provide clearer error messages
+            let error_msg = if status.as_u16() == 404 {
+                format!("Server endpoint not found. Check if server is running at {}", self.config.server_url)
+            } else if status.is_client_error() {
+                format!("Client error ({}): {}", status, error_text)
+            } else if status.is_server_error() {
+                format!("Server error ({}): {}", status, error_text)
+            } else {
+                format!("Connection failed ({}): {}", status, error_text)
+            };
+            
+            Err(anyhow::anyhow!("{}", error_msg))
         }
     }
     

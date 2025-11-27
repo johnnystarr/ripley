@@ -54,8 +54,8 @@ export default function Agents() {
   const [expandedProfile, setExpandedProfile] = useState(null);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [editingProfile, setEditingProfile] = useState(null);
-  const [editingProfileData, setEditingProfileData] = useState({ name: '', description: '', settings_json: {} });
-  const [newProfile, setNewProfile] = useState({ name: '', description: '', settings_json: {} });
+  const [editingProfileData, setEditingProfileData] = useState({ name: '', command: '' });
+  const [newProfile, setNewProfile] = useState({ name: '', command: '' });
   const [shows, setShows] = useState([]);
   const [profileShowAssociations, setProfileShowAssociations] = useState({}); // profile_id -> [show_ids]
   const [addingShowToProfile, setAddingShowToProfile] = useState(null);
@@ -192,7 +192,7 @@ export default function Agents() {
       await api.createTopazProfile(newProfile);
       toast.success('Profile created');
       setIsCreatingProfile(false);
-      setNewProfile({ name: '', description: '', settings_json: {} });
+      setNewProfile({ name: '', command: '' });
       fetchProfiles();
     } catch (err) {
       toast.error('Failed to create profile: ' + err.message);
@@ -217,8 +217,7 @@ export default function Agents() {
     setEditingProfile(profile.id);
     setEditingProfileData({
       name: profile.name,
-      description: profile.description || '',
-      settings_json: profile.settings_json,
+      command: profile.command || '',
     });
   }, []);
 
@@ -226,8 +225,7 @@ export default function Agents() {
     try {
       await api.updateTopazProfile(id, {
         name: editingProfileData.name,
-        description: editingProfileData.description || null,
-        settings_json: editingProfileData.settings_json,
+        command: editingProfileData.command || '',
       });
       toast.success('Profile updated');
       setEditingProfile(null);
@@ -597,14 +595,17 @@ export default function Agents() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-300 mb-2">Description</label>
+                  <label className="block text-sm font-medium text-slate-300 mb-2">Command/Script *</label>
                   <textarea
-                    value={newProfile.description}
-                    onChange={(e) => setNewProfile({ ...newProfile, description: e.target.value })}
-                    className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-                    rows="3"
-                    placeholder="Profile description..."
+                    value={newProfile.command}
+                    onChange={(e) => setNewProfile({ ...newProfile, command: e.target.value })}
+                    className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 font-mono text-sm"
+                    rows="4"
+                    placeholder="Command to run on agent (use {input} and {output} placeholders)"
                   />
+                  <p className="text-xs text-slate-500 mt-1">
+                    Use {"{input}"} for input file path and {"{output}"} for output file path. This command will be executed on the remote agent.
+                  </p>
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -617,7 +618,7 @@ export default function Agents() {
                   <button
                     onClick={() => {
                       setIsCreatingProfile(false);
-                      setNewProfile({ name: '', description: '', settings_json: {} });
+                      setNewProfile({ name: '', command: '' });
                     }}
                     className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
                   >
@@ -661,13 +662,17 @@ export default function Agents() {
                             />
                           </div>
                           <div>
-                            <label className="block text-sm font-medium text-slate-300 mb-1">Description</label>
+                            <label className="block text-sm font-medium text-slate-300 mb-1">Command/Script *</label>
                             <textarea
-                              value={editingProfileData.description}
-                              onChange={(e) => setEditingProfileData({ ...editingProfileData, description: e.target.value })}
-                              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-                              rows="2"
+                              value={editingProfileData.command}
+                              onChange={(e) => setEditingProfileData({ ...editingProfileData, command: e.target.value })}
+                              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 font-mono text-sm"
+                              rows="4"
+                              placeholder="Command to run on agent (use {input} and {output} placeholders)"
                             />
+                            <p className="text-xs text-slate-500 mt-1">
+                              Use {"{input}"} for input file path and {"{output}"} for output file path
+                            </p>
                           </div>
                           <div className="flex gap-2">
                             <button
@@ -680,7 +685,7 @@ export default function Agents() {
                             <button
                               onClick={() => {
                                 setEditingProfile(null);
-                                setEditingProfileData({ name: '', description: '', settings_json: {} });
+                                setEditingProfileData({ name: '', command: '' });
                               }}
                               className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors text-sm"
                             >
@@ -692,8 +697,10 @@ export default function Agents() {
                       ) : (
                         <>
                           <h3 className="font-semibold text-lg text-slate-100 mb-1">{profile.name}</h3>
-                          {profile.description && (
-                            <p className="text-slate-400 text-sm mb-2">{profile.description}</p>
+                          {profile.command && (
+                            <div className="bg-slate-900 rounded p-2 mb-2">
+                              <p className="text-slate-300 text-xs font-mono break-all">{profile.command}</p>
+                            </div>
                           )}
                           <p className="text-slate-500 text-xs">
                             Created: {new Date(profile.created_at).toLocaleDateString()}

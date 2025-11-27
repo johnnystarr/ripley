@@ -69,7 +69,18 @@ impl TuiApp {
             status: "Disconnected - Configure connection".to_string(),
             instructions: vec![],
             connection_state: ConnectionState::Disconnected,
-            server_url_input: config.server_url.clone(),
+            server_url_input: {
+                // Extract IP from existing URL if present (remove http:// and :3000)
+                let url = config.server_url.clone();
+                if url.starts_with("http://") {
+                    url.strip_prefix("http://")
+                        .and_then(|s| s.strip_suffix(":3000"))
+                        .unwrap_or_else(|| url.strip_prefix("http://").unwrap_or(&url))
+                        .to_string()
+                } else {
+                    url
+                }
+            },
             agent_name_input: config.agent_name.clone(),
             editing_field: if config.server_url.is_empty() {
                 EditingField::ServerUrl
@@ -99,7 +110,7 @@ impl TuiApp {
         
         // Validate both fields
         if self.server_url_input.trim().is_empty() {
-            self.connection_state = ConnectionState::Failed("Server URL cannot be empty".to_string());
+            self.connection_state = ConnectionState::Failed("Server IP or hostname cannot be empty".to_string());
             self.connection_in_progress = false;
             return;
         }
@@ -112,8 +123,12 @@ impl TuiApp {
         
         self.connection_in_progress = true;
         
+        // Format URL: http://<IP or hostname>:3000
+        let server_address = self.server_url_input.trim();
+        let formatted_url = format!("http://{}:3000", server_address);
+        
         // Update config with both values
-        self.config.server_url = self.server_url_input.trim().to_string();
+        self.config.server_url = formatted_url.clone();
         self.config.agent_name = self.agent_name_input.trim().to_string();
         if let Err(e) = self.config.save() {
             self.add_log(format!("Failed to save config: {}", e));
@@ -136,8 +151,8 @@ impl TuiApp {
                         self.add_log("Registration successful".to_string());
                         if let Some(agent_id) = agent_client.agent_id() {
                             self.add_log(format!("Agent ID: {}", agent_id));
-                            self.status = format!("Connected as {}", agent_id);
                         }
+                        self.status = format!("Connected as {}", self.config.agent_name);
                         
                         // Create job worker
                         match JobWorker::new(Arc::clone(&agent_client), None) {
@@ -189,10 +204,34 @@ impl TuiApp {
                 }
             }
             Err(e) => {
-                self.connection_state = ConnectionState::Failed(format!("Failed to create agent client: {}", e));
+                let error_msg = format!("{}", e);
+                // Clean up error messages - remove confusing "build" references
+                // The "build error" often comes from reqwest when it can't build the HTTP client
+                // but the actual issue is usually connection-related
+                let clean_error = if error_msg.contains("build") {
+                    // Likely a reqwest/connection error, provide clearer message
+                    if error_msg.contains("timeout") {
+                        format!("Connection timeout - check if server is running at {}", self.config.server_url)
+                    } else if error_msg.contains("dns") || error_msg.contains("resolve") {
+                        format!("Cannot resolve server address - check IP address: {}", self.config.server_url)
+                    } else if error_msg.contains("connection refused") || error_msg.contains("refused") {
+                        format!("Connection refused - check if server is running at {}", self.config.server_url)
+                    } else if error_msg.contains("error sending request") {
+                        format!("Cannot connect to server at {} - check if server is running", self.config.server_url)
+                    } else {
+                        // Replace "build error" with more user-friendly message
+                        format!("Cannot connect to server at {} - {}", self.config.server_url, 
+                            error_msg.replace("build error", "connection error")
+                                .replace("error building request", "connection error"))
+                    }
+                } else {
+                    error_msg
+                };
+                
+                self.connection_state = ConnectionState::Failed(clean_error.clone());
                 self.connection_in_progress = false;
-                self.add_log(format!("Client creation error: {}", e));
-                self.status = format!("Connection failed: {}", e);
+                self.add_log(format!("Connection error: {}", clean_error));
+                self.status = format!("Connection failed: {}", clean_error);
             }
         }
     }
@@ -214,11 +253,7 @@ impl TuiApp {
                     self.status = "Connecting...".to_string();
                 }
                 ConnectionState::Connected => {
-                    if let Some(ref client) = self.agent_client {
-                        if let Some(agent_id) = client.agent_id() {
-                            self.status = format!("Connected as {}", agent_id);
-                        }
-                    }
+                    self.status = format!("Connected as {}", self.config.agent_name);
                 }
                 ConnectionState::Failed(ref error) => {
                     self.status = format!("Connection failed: {}", error);
@@ -347,11 +382,13 @@ impl TuiApp {
                                 if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
                                     match self.editing_field {
                                         EditingField::ServerUrl => {
-                                            // Move to agent name if URL is entered
+                                            // Move to agent name if IP is entered
                                             if !self.server_url_input.trim().is_empty() {
-                                                self.config.server_url = self.server_url_input.trim().to_string();
+                                                let server_address = self.server_url_input.trim();
+                                                let formatted_url = format!("http://{}:3000", server_address);
+                                                self.config.server_url = formatted_url.clone();
                                                 self.editing_field = EditingField::AgentName;
-                                                self.add_log(format!("Server URL set: {}", self.config.server_url));
+                                                self.add_log(format!("Server address set: {} (connecting to {})", server_address, formatted_url));
                                             }
                                         }
                                         EditingField::AgentName => {
@@ -365,22 +402,32 @@ impl TuiApp {
                                                 }
                                                 
                                                 // Validate both fields are set
-                                                if !self.config.server_url.trim().is_empty() && !self.config.agent_name.trim().is_empty() {
+                                                if !self.server_url_input.trim().is_empty() && !self.config.agent_name.trim().is_empty() {
+                                                    // Format URL before connecting
+                                                    let server_address = self.server_url_input.trim();
+                                                    let formatted_url = format!("http://{}:3000", server_address);
+                                                    self.config.server_url = formatted_url.clone();
+                                                    
                                                     self.editing_field = EditingField::None;
                                                     self.connection_state = ConnectionState::Connecting;
                                                     self.status = "Connecting...".to_string();
-                                                    self.add_log(format!("Connecting to: {} as {}", self.config.server_url, self.config.agent_name));
+                                                    self.add_log(format!("Connecting to: {} as {}", formatted_url, self.config.agent_name));
                                                 } else {
-                                                    self.add_log("Please enter both server URL and agent name".to_string());
+                                                    self.add_log("Please enter both server IP/hostname and agent name".to_string());
                                                 }
                                             }
                                         }
                                         EditingField::None => {
                                             // Try to connect if both fields are set
-                                            if !self.config.server_url.trim().is_empty() && !self.config.agent_name.trim().is_empty() {
+                                            if !self.server_url_input.trim().is_empty() && !self.config.agent_name.trim().is_empty() {
+                                                // Format URL before connecting
+                                                let server_address = self.server_url_input.trim();
+                                                let formatted_url = format!("http://{}:3000", server_address);
+                                                self.config.server_url = formatted_url.clone();
+                                                
                                                 self.connection_state = ConnectionState::Connecting;
                                                 self.status = "Connecting...".to_string();
-                                                self.add_log(format!("Connecting to: {} as {}", self.config.server_url, self.config.agent_name));
+                                                self.add_log(format!("Connecting to: {} as {}", formatted_url, self.config.agent_name));
                                             }
                                         }
                                     }
@@ -397,8 +444,8 @@ impl TuiApp {
                                 if matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
                                     match self.editing_field {
                                         EditingField::ServerUrl => {
-                                            // Only allow IP address characters (digits, dots)
-                                            if c.is_ascii_digit() || c == '.' {
+                                            // Allow IP address and hostname characters (alphanumeric, dots, dashes)
+                                            if c.is_alphanumeric() || c == '.' || c == '-' {
                                                 self.server_url_input.push(c);
                                             }
                                         }
@@ -545,15 +592,15 @@ impl TuiApp {
             // Server IP input
             let editing_url = editing_field == EditingField::ServerUrl;
             let display_url = if server_url_input.is_empty() {
-                "192.168.1.100".to_string()
+                "192.168.1.100"
             } else {
-                server_url_input.clone()
+                server_url_input
             };
             let url_prompt = Paragraph::new(vec![
                 Line::from(vec![
-                    Span::styled("Server IP Address: ", Style::default().fg(Color::Cyan)),
+                    Span::styled("Server IP or Hostname: ", Style::default().fg(Color::Cyan)),
                     Span::styled(
-                        &display_url,
+                        display_url,
                         Style::default()
                             .fg(if editing_url { Color::Yellow } else { Color::White })
                             .add_modifier(if editing_url { Modifier::BOLD | Modifier::UNDERLINED } else { Modifier::empty() }),
@@ -567,7 +614,7 @@ impl TuiApp {
                 Line::from(vec![
                     Span::styled("Will connect to: http://", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        if server_url_input.is_empty() { "192.168.1.100" } else { server_url_input },
+                        display_url,
                         Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(":3000", Style::default().fg(Color::DarkGray)),
@@ -575,7 +622,7 @@ impl TuiApp {
             ])
             .block(Block::default()
                 .borders(Borders::ALL)
-                .title(if editing_url { "Server IP (Press Tab for Agent Name)" } else { "Server IP" }))
+                .title(if editing_url { "Server IP/Hostname (Press Tab for Agent Name)" } else { "Server IP/Hostname" }))
             .wrap(Wrap { trim: true });
             f.render_widget(url_prompt, inner_chunks[0]);
             
