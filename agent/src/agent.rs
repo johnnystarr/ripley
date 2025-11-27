@@ -140,5 +140,171 @@ impl AgentClient {
     pub fn agent_id(&self) -> Option<String> {
         self.agent_id.lock().unwrap().clone()
     }
+    
+    /// Get next available upscaling job
+    pub async fn get_next_upscaling_job(&self) -> Result<Option<UpscalingJob>> {
+        let url = format!("{}/api/upscaling-jobs/next", self.config.server_url);
+        let response = self.http_client
+            .get(&url)
+            .send()
+            .await?;
+        
+        if response.status().is_success() {
+            let job: Option<UpscalingJob> = response.json().await?;
+            Ok(job)
+        } else if response.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(None)
+        } else {
+            Err(anyhow::anyhow!("Failed to get next upscaling job: {}", response.status()))
+        }
+    }
+    
+    /// Download file from server
+    pub async fn download_file(&self, file_path: &str, dest_path: &std::path::Path) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        
+        // URL encode the file path
+        let encoded_path = urlencoding::encode(file_path);
+        let url = format!("{}/api/agents/download/{}", self.config.server_url, encoded_path);
+        
+        let response = self.http_client
+            .get(&url)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("Download failed: {}", response.status()));
+        }
+        
+        // Create parent directory if needed
+        if let Some(parent) = dest_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        
+        // Save file
+        let mut file = tokio::fs::File::create(dest_path).await?;
+        let bytes = response.bytes().await?;
+        file.write_all(&bytes).await?;
+        
+        Ok(())
+    }
+    
+    /// Upload file to server
+    pub async fn upload_file(&self, file_path: &std::path::Path, agent_id: Option<&str>, job_id: Option<&str>) -> Result<()> {
+        let agent_id_owned = if let Some(aid) = agent_id {
+            aid.to_string()
+        } else {
+            self.agent_id.lock().unwrap().as_deref().map(|s| s.to_string()).unwrap_or_default()
+        };
+        
+        let url = format!("{}/api/agents/upload", self.config.server_url);
+        
+        let filename = file_path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid file path"))?;
+        
+        // Read file into memory
+        let file_data = tokio::fs::read(file_path).await?;
+        
+        let mut form = reqwest::multipart::Form::new()
+            .text("agent_id", agent_id_owned);
+        
+        if let Some(jid) = job_id {
+            form = form.text("job_id", jid.to_string());
+        }
+        
+        let file_part = reqwest::multipart::Part::bytes(file_data)
+            .file_name(filename.to_string())
+            .mime_str("application/octet-stream")?;
+        
+        form = form.part("file", file_part);
+        
+        let response = self.http_client
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Upload failed: {}", error_text));
+        }
+        
+        Ok(())
+    }
+    
+    /// Update upscaling job status
+    pub async fn update_job_status(&self, job_id: &str, status: &str, progress: Option<f32>, error: Option<&str>) -> Result<()> {
+        let url = format!("{}/api/upscaling-jobs/{}/status", self.config.server_url, job_id);
+        
+        let mut body = serde_json::Map::new();
+        body.insert("status".to_string(), serde_json::Value::String(status.to_string()));
+        
+        if let Some(p) = progress {
+            body.insert("progress".to_string(), serde_json::Value::Number(
+                serde_json::Number::from_f64(p as f64).unwrap_or_else(|| serde_json::Number::from(0))
+            ));
+        }
+        
+        if let Some(e) = error {
+            body.insert("error_message".to_string(), serde_json::Value::String(e.to_string()));
+        }
+        
+        let response = self.http_client
+            .put(&url)
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Failed to update job status: {}", error_text));
+        }
+        
+        Ok(())
+    }
+    
+    /// Update upscaling job output path
+    pub async fn update_job_output(&self, job_id: &str, output_path: &str) -> Result<()> {
+        let url = format!("{}/api/upscaling-jobs/{}/output", self.config.server_url, job_id);
+        
+        let body = serde_json::json!({
+            "output_file_path": output_path,
+        });
+        
+        let response = self.http_client
+            .put(&url)
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Failed to update job output: {}", error_text));
+        }
+        
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpscalingJob {
+    pub id: Option<i64>,
+    pub job_id: String,
+    pub input_file_path: String,
+    pub output_file_path: Option<String>,
+    pub show_id: Option<i64>,
+    pub topaz_profile_id: Option<i64>,
+    pub status: String,
+    pub priority: i32,
+    pub agent_id: Option<String>,
+    pub instruction_id: Option<i64>,
+    pub created_at: String,
+    pub assigned_at: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub progress: f32,
+    pub error_message: Option<String>,
+    pub processing_time_seconds: Option<i64>,
 }
 

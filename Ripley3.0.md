@@ -162,21 +162,21 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Create agent registration on startup
 - [x] Implement heartbeat mechanism (send every 30 seconds)
 - [x] Create instruction polling loop (check for new instructions)
-- [ ] Implement file download from server
-- [ ] Implement file upload to server (for completed jobs)
-- [ ] Create Topaz Video command wrapper/execution
-- [ ] Add Topaz profile loading and application
-- [ ] Implement upscaling job execution
-- [ ] Create progress reporting (send updates to server)
-- [ ] Add job result reporting (success/failure, output path)
+- [x] Implement file download from server
+- [x] Implement file upload to server (for completed jobs)
+- [x] Create Topaz Video command wrapper/execution
+- [x] Add Topaz profile loading and application
+- [x] Implement upscaling job execution
+- [x] Create progress reporting (send updates to server)
+- [x] Add job result reporting (success/failure, output path)
 - [ ] Implement error handling and retry logic
-- [ ] Create TUI dashboard showing:
-  - [ ] Agent status (connected/disconnected)
-  - [ ] Current job status
-  - [ ] Queue position
-  - [ ] Job progress
+- [x] Create TUI dashboard showing:
+  - [x] Agent status (connected/disconnected)
+  - [x] Current job status
+  - [x] Queue position
+  - [x] Job progress
   - [ ] Recent job history
-  - [ ] Connection status to server
+  - [x] Connection status to server
 - [ ] Add TUI controls (pause, resume, disconnect)
 - [ ] Implement graceful shutdown
 - [ ] Add logging to file
@@ -184,12 +184,12 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### Agent - Topaz Integration
 
-- [ ] Detect Topaz Video installation path
-- [ ] Verify Topaz Video executable exists
-- [ ] Get Topaz Video version information
-- [ ] Implement Topaz profile parsing (JSON/YAML)
-- [ ] Create Topaz command builder
-- [ ] Execute Topaz upscaling commands
+- [x] Detect Topaz Video installation path
+- [x] Verify Topaz Video executable exists
+- [x] Get Topaz Video version information
+- [x] Implement Topaz profile parsing (JSON/YAML)
+- [x] Create Topaz command builder
+- [x] Execute Topaz upscaling commands
 - [ ] Parse Topaz output for progress
 - [ ] Handle Topaz errors and failures
 - [ ] Support multiple Topaz Video versions
