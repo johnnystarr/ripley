@@ -24,6 +24,7 @@ import Shows from './pages/Shows';
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
+  const [ripProgress, setRipProgress] = useState(null); // { disc: string, progress: number }
 
   useEffect(() => {
     // Request notification permission on mount
@@ -37,6 +38,14 @@ function App() {
       setWsConnected(connected);
     });
 
+    // Listen for rip progress to update tab title
+    const unsubscribeProgress = wsManager.on('RipProgress', (data) => {
+      setRipProgress({
+        disc: data.disc || 'Ripping',
+        progress: Math.round((data.progress || 0) * 100),
+      });
+    });
+
     // Listen for rip completion events
     const unsubscribeRipComplete = wsManager.on('RipCompleted', (data) => {
       showRipNotification({
@@ -44,6 +53,7 @@ function App() {
         status: 'success',
         message: `Successfully ripped to ${data.output_path || 'output directory'}`,
       });
+      setRipProgress(null); // Clear progress
     });
 
     // Listen for rip error events
@@ -53,15 +63,26 @@ function App() {
         status: 'failed',
         message: data.error || 'Rip operation failed',
       });
+      setRipProgress(null); // Clear progress
     });
 
     return () => {
       unsubscribeConnection();
+      unsubscribeProgress();
       unsubscribeRipComplete();
       unsubscribeRipError();
       wsManager.disconnect();
     };
   }, []);
+
+  // Update document title with rip progress
+  useEffect(() => {
+    if (ripProgress) {
+      document.title = `(${ripProgress.progress}%) ${ripProgress.disc} - Ripley`;
+    } else {
+      document.title = 'Ripley - DVD/Blu-ray Ripper';
+    }
+  }, [ripProgress]);
 
   return (
     <Router>

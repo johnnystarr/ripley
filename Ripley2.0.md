@@ -40,7 +40,7 @@
 ### Real-time Features
 - [x] Add browser/desktop notifications for completed rips
 - [ ] Add configurable sound notifications
-- [ ] Show active rip progress in browser tab title
+- [x] Show active rip progress in browser tab title
 - [ ] Add pause/resume for rip operations
 - [ ] Add cancel/abort operation button
 - [ ] Real-time bandwidth/speed monitoring
