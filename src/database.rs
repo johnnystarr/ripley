@@ -60,6 +60,8 @@ pub struct Issue {
     pub disc: Option<String>,
     pub resolved: bool,
     pub resolved_at: Option<DateTime<Utc>>,
+    pub assigned_to: Option<String>,
+    pub resolution_notes: Option<String>,
 }
 
 /// Issue note/comment for tracking resolution progress
@@ -257,7 +259,9 @@ impl Database {
                 drive TEXT,
                 disc TEXT,
                 resolved INTEGER NOT NULL DEFAULT 0,
-                resolved_at TEXT
+                resolved_at TEXT,
+                assigned_to TEXT,
+                resolution_notes TEXT
             )",
             [],
         )?;
@@ -556,8 +560,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         conn.execute(
-            "INSERT INTO issues (timestamp, issue_type, title, description, drive, disc, resolved, resolved_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO issues (timestamp, issue_type, title, description, drive, disc, resolved, resolved_at, assigned_to, resolution_notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 issue.timestamp.to_rfc3339(),
                 issue.issue_type.to_string(),
@@ -567,6 +571,8 @@ impl Database {
                 issue.disc,
                 issue.resolved as i32,
                 issue.resolved_at.as_ref().map(|dt| dt.to_rfc3339()),
+                issue.assigned_to,
+                issue.resolution_notes,
             ],
         )?;
 
@@ -577,7 +583,7 @@ impl Database {
     pub fn get_active_issues(&self) -> Result<Vec<Issue>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, issue_type, title, description, drive, disc, resolved, resolved_at
+            "SELECT id, timestamp, issue_type, title, description, drive, disc, resolved, resolved_at, assigned_to, resolution_notes
              FROM issues
              WHERE resolved = 0
              ORDER BY timestamp DESC"
@@ -597,6 +603,8 @@ impl Database {
                 resolved: row.get::<_, i32>(7)? != 0,
                 resolved_at: row.get::<_, Option<String>>(8)?
                     .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                assigned_to: row.get(9)?,
+                resolution_notes: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -608,7 +616,7 @@ impl Database {
     pub fn get_all_issues(&self, limit: usize) -> Result<Vec<Issue>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, timestamp, issue_type, title, description, drive, disc, resolved, resolved_at
+            "SELECT id, timestamp, issue_type, title, description, drive, disc, resolved, resolved_at, assigned_to, resolution_notes
              FROM issues
              ORDER BY timestamp DESC
              LIMIT ?1"
@@ -628,6 +636,8 @@ impl Database {
                 resolved: row.get::<_, i32>(7)? != 0,
                 resolved_at: row.get::<_, Option<String>>(8)?
                     .map(|s| DateTime::parse_from_rfc3339(&s).unwrap().with_timezone(&Utc)),
+                assigned_to: row.get(9)?,
+                resolution_notes: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -642,6 +652,30 @@ impl Database {
         conn.execute(
             "UPDATE issues SET resolved = 1, resolved_at = ?1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Update issue assignment
+    pub fn assign_issue(&self, id: i64, assigned_to: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE issues SET assigned_to = ?1 WHERE id = ?2",
+            params![assigned_to, id],
+        )?;
+
+        Ok(())
+    }
+
+    /// Update issue resolution notes
+    pub fn update_resolution_notes(&self, id: i64, notes: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE issues SET resolution_notes = ?1 WHERE id = ?2",
+            params![notes, id],
         )?;
 
         Ok(())

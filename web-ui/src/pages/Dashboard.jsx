@@ -34,6 +34,8 @@ export default function Dashboard() {
   const [logLevelFilter, setLogLevelFilter] = useState('all');
   const [ripStartTimes, setRipStartTimes] = useState({}); // Track start times by drive
   const [elapsedTimes, setElapsedTimes] = useState({}); // Track elapsed time by drive
+  const [ripSpeeds, setRipSpeeds] = useState({}); // Track current speed by drive (MB/s)
+  const [lastProgressUpdate, setLastProgressUpdate] = useState({}); // Track last progress update time
   const [failedRips, setFailedRips] = useState([]);
   const [showFailedRips, setShowFailedRips] = useState(false);
   const [ripHistory, setRipHistory] = useState([]);
@@ -135,12 +137,38 @@ export default function Dashboard() {
           d.device === drive ? { ...d, progress, status: message } : d
         ));
         
+        const now = Date.now();
+        
         // Start tracking time when rip begins (first progress update)
         setRipStartTimes(prev => {
           if (!prev[drive] && progress > 0) {
-            return { ...prev, [drive]: Date.now() };
+            return { ...prev, [drive]: now };
           }
           return prev;
+        });
+        
+        // Calculate real-time speed based on progress change
+        setLastProgressUpdate(prev => {
+          const last = prev[drive];
+          if (last && progress > last.progress) {
+            const timeDiff = (now - last.time) / 1000; // seconds
+            const progressDiff = progress - last.progress;
+            
+            // Estimate speed based on typical DVD size (4.7 GB) and progress
+            const estimatedTotalMB = 4700;
+            const mbProcessed = estimatedTotalMB * progressDiff;
+            const speedMBps = timeDiff > 0 ? mbProcessed / timeDiff : 0;
+            
+            setRipSpeeds(speeds => ({
+              ...speeds,
+              [drive]: Math.max(0, Math.min(speedMBps, 100)) // Cap at reasonable max
+            }));
+          }
+          
+          return {
+            ...prev,
+            [drive]: { progress, time: now }
+          };
         });
       }),
       wsManager.on('RipCompleted', ({ disc, drive }) => {
@@ -156,6 +184,16 @@ export default function Dashboard() {
           return updated;
         });
         setElapsedTimes(prev => {
+          const updated = { ...prev };
+          delete updated[drive];
+          return updated;
+        });
+        setRipSpeeds(prev => {
+          const updated = { ...prev };
+          delete updated[drive];
+          return updated;
+        });
+        setLastProgressUpdate(prev => {
           const updated = { ...prev };
           delete updated[drive];
           return updated;
@@ -176,6 +214,16 @@ export default function Dashboard() {
             return updated;
           });
           setElapsedTimes(prev => {
+            const updated = { ...prev };
+            delete updated[drive];
+            return updated;
+          });
+          setRipSpeeds(prev => {
+            const updated = { ...prev };
+            delete updated[drive];
+            return updated;
+          });
+          setLastProgressUpdate(prev => {
             const updated = { ...prev };
             delete updated[drive];
             return updated;
@@ -927,10 +975,29 @@ export default function Dashboard() {
                         />
                       </div>
                       {elapsedTimes[drive.device] !== undefined && (
-                        <div className="flex justify-between text-xs mt-2">
-                          <span className="text-slate-400">Elapsed:</span>
-                          <span className="text-cyan-400 font-mono">{formatElapsedTime(elapsedTimes[drive.device])}</span>
-                        </div>
+                        <>
+                          <div className="flex justify-between text-xs mt-2">
+                            <span className="text-slate-400">Elapsed:</span>
+                            <span className="text-cyan-400 font-mono">{formatElapsedTime(elapsedTimes[drive.device])}</span>
+                          </div>
+                          {drive.progress > 0.01 && (
+                            <div className="flex justify-between text-xs mt-1">
+                              <span className="text-slate-400">ETA:</span>
+                              <span className="text-green-400 font-mono">
+                                {formatElapsedTime(Math.round((elapsedTimes[drive.device] / drive.progress) * (1 - drive.progress)))}
+                              </span>
+                            </div>
+                          )}
+                          {ripSpeeds[drive.device] && ripSpeeds[drive.device] > 0 && (
+                            <div className="flex justify-between text-xs mt-1">
+                              <span className="text-slate-400">Speed:</span>
+                              <span className="text-cyan-400 font-mono flex items-center">
+                                <FontAwesomeIcon icon={faBolt} className="mr-1 text-[10px]" />
+                                {ripSpeeds[drive.device].toFixed(1)} MB/s
+                              </span>
+                            </div>
+                          )}
+                        </>
                       )}
                       {drive.status && (
                         <p className="text-xs text-slate-400 mt-1">{drive.status}</p>
