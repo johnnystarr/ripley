@@ -5,6 +5,7 @@ use tracing::{error, info, warn};
 use crate::config::AgentConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AgentRegistration {
     pub agent_id: String,
     pub name: String,
@@ -35,10 +36,15 @@ impl AgentClient {
             .build()?;
         
         Ok(Self {
-            config,
+            config: config.clone(),
             http_client,
             agent_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
         })
+    }
+    
+    #[allow(dead_code)]
+    pub fn update_server_url(&mut self, server_url: String) {
+        self.config.server_url = server_url;
     }
     
     pub async fn register(&self) -> Result<()> {

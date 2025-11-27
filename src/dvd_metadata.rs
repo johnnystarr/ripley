@@ -32,6 +32,7 @@ pub struct Episode {
 }
 
 /// Get DVD/Blu-ray disc ID using multiple identification methods
+#[allow(dead_code)]
 pub async fn get_dvd_id(device: &str) -> Result<String> {
     use sha1::{Sha1, Digest};
     use base64::Engine;

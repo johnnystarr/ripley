@@ -50,6 +50,7 @@ impl TopazVideo {
     }
     
     /// Get Topaz version
+    #[allow(dead_code)]
     pub async fn get_version(&self) -> Result<String> {
         // Topaz Video AI doesn't have a --version flag typically
         // We'll try to get version from the executable metadata or use a default
@@ -120,6 +121,7 @@ impl TopazVideo {
     }
     
     /// Get executable path
+    #[allow(dead_code)]
     pub fn executable_path(&self) -> &Path {
         &self.executable_path
     }

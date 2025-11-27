@@ -170,17 +170,22 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Create progress reporting (send updates to server)
 - [x] Add job result reporting (success/failure, output path)
 - [ ] Implement error handling and retry logic
-- [x] Create TUI dashboard showing:
-  - [x] Agent status (connected/disconnected)
-  - [x] Current job status
-  - [x] Queue position
-  - [x] Job progress
-  - [ ] Recent job history
-  - [x] Connection status to server
-- [ ] Add TUI controls (pause, resume, disconnect)
-- [ ] Implement graceful shutdown
-- [ ] Add logging to file
-- [ ] Create Windows installer/build script
+        - [x] Create TUI dashboard showing:
+          - [x] Agent status (connected/disconnected)
+          - [x] Current job status
+          - [x] Queue position
+          - [x] Job progress
+          - [ ] Recent job history
+          - [x] Connection status to server
+        - [x] Add server URL input field in TUI (no localhost assumption)
+        - [x] Implement real-time connection status display with color coding
+        - [x] Add connection log showing step-by-step connection progress
+        - [x] Create folder structure for agent output (processing/, upscaled/, encoded/)
+        - [x] Implement configurable output location managed from web UI
+        - [ ] Add TUI controls (pause, resume, disconnect)
+        - [ ] Implement graceful shutdown
+        - [ ] Add logging to file
+        - [ ] Create Windows installer/build script
 
 ### Agent - Topaz Integration
 
@@ -292,7 +297,12 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ## Completed This Session
 
-- [ ] Created Ripley3.0.md roadmap with comprehensive checkboxes
-- [ ] Organized features into logical sub-tasks
-- [ ] Added testing checkboxes for each feature
+- [x] Created Ripley3.0.md roadmap with comprehensive checkboxes
+- [x] Organized features into logical sub-tasks
+- [x] Added testing checkboxes for each feature
+- [x] Implemented agent folder structure with configurable output location
+- [x] Added server URL input field to agent TUI (no localhost assumption)
+- [x] Implemented real-time connection status display with connection logs
+- [x] Fixed all compilation errors and critical warnings
+- [x] Built all binaries successfully (ripley and ripley-agent)
 

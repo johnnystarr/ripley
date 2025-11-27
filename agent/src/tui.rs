@@ -1,11 +1,11 @@
 use anyhow::Result;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
-    Frame, Terminal,
+    Terminal,
 };
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -22,17 +22,30 @@ use std::sync::Arc;
 use std::path::Path;
 
 pub struct TuiApp {
-    agent_client: Arc<AgentClient>,
+    agent_client: Option<Arc<AgentClient>>,
     config: AgentConfig,
-    job_worker: Arc<JobWorker>,
+    job_worker: Option<Arc<JobWorker>>,
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     should_quit: bool,
     status: String,
     instructions: Vec<String>,
+    connection_state: ConnectionState,
+    server_url_input: String,
+    editing_server_url: bool,
+    connection_logs: Vec<String>,
+    connection_in_progress: bool,
+}
+
+#[derive(Clone)]
+enum ConnectionState {
+    Disconnected,
+    Connecting,
+    Connected,
+    Failed(String),
 }
 
 impl TuiApp {
-    pub fn new(agent_client: Arc<AgentClient>, config: AgentConfig, job_worker: Arc<JobWorker>) -> Result<Self> {
+    pub fn new(config: AgentConfig) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -40,174 +53,198 @@ impl TuiApp {
         let terminal = Terminal::new(backend)?;
         
         Ok(Self {
-            agent_client,
-            config,
-            job_worker,
+            agent_client: None,
+            config: config.clone(),
+            job_worker: None,
             terminal,
             should_quit: false,
-            status: "Initializing...".to_string(),
+            status: "Disconnected - Enter server URL".to_string(),
             instructions: vec![],
+            connection_state: ConnectionState::Disconnected,
+            server_url_input: config.server_url.clone(),
+            editing_server_url: true,
+            connection_logs: vec![],
+            connection_in_progress: false,
         })
     }
     
-    pub async fn run(&mut self) -> Result<()> {
-        // Start background heartbeat task
-        {
-            let client = self.agent_client.clone();
-            let interval = self.config.heartbeat_interval_seconds;
-            tokio::spawn(async move {
-                let mut interval = time::interval(Duration::from_secs(interval));
-                loop {
-                    interval.tick().await;
-                    if let Err(e) = client.heartbeat().await {
-                        tracing::warn!("Heartbeat failed: {}", e);
-                    }
-                }
-            });
+    fn add_log(&mut self, message: String) {
+        self.connection_logs.push(message);
+        if self.connection_logs.len() > 50 {
+            self.connection_logs.remove(0);
+        }
+    }
+    
+    async fn connect_to_server(&mut self) {
+        // Prevent multiple simultaneous connection attempts
+        if self.connection_in_progress {
+            return;
         }
         
+        if self.server_url_input.trim().is_empty() {
+            self.connection_state = ConnectionState::Failed("Server URL cannot be empty".to_string());
+            self.connection_in_progress = false;
+            return;
+        }
+        
+        self.connection_in_progress = true;
+        
+        // Update config with new server URL
+        self.config.server_url = self.server_url_input.trim().to_string();
+        if let Err(e) = self.config.save() {
+            self.add_log(format!("Failed to save config: {}", e));
+        }
+        
+        self.connection_state = ConnectionState::Connecting;
+        self.status = "Connecting to server...".to_string();
+        self.add_log(format!("Connecting to: {}", self.config.server_url));
+        
+        // Create agent client
+        match AgentClient::new(self.config.clone()) {
+            Ok(client) => {
+                let agent_client = Arc::new(client);
+                self.add_log("Agent client created".to_string());
+                
+                // Try to register
+                self.add_log("Registering agent...".to_string());
+                match agent_client.register().await {
+                    Ok(_) => {
+                        self.add_log("Registration successful".to_string());
+                        if let Some(agent_id) = agent_client.agent_id() {
+                            self.add_log(format!("Agent ID: {}", agent_id));
+                            self.status = format!("Connected as {}", agent_id);
+                        }
+                        
+                        // Create job worker
+                        match JobWorker::new(Arc::clone(&agent_client), None) {
+                            Ok(worker) => {
+                                let job_worker = Arc::new(worker);
+                                self.add_log("Job worker initialized".to_string());
+                                
+                                // Start job worker
+                                let job_worker_clone = Arc::clone(&job_worker);
+                                tokio::spawn(async move {
+                                    if let Err(e) = job_worker_clone.run().await {
+                                        tracing::error!("Job worker failed: {}", e);
+                                    }
+                                });
+                                
+                                // Start heartbeat
+                                let client_clone = Arc::clone(&agent_client);
+                                let interval = self.config.heartbeat_interval_seconds;
+                                tokio::spawn(async move {
+                                    let mut interval = time::interval(Duration::from_secs(interval));
+                                    loop {
+                                        interval.tick().await;
+                                        if let Err(e) = client_clone.heartbeat().await {
+                                            tracing::warn!("Heartbeat failed: {}", e);
+                                        }
+                                    }
+                                });
+                                
+                                self.agent_client = Some(agent_client);
+                                self.job_worker = Some(job_worker);
+                                self.connection_state = ConnectionState::Connected;
+                                self.editing_server_url = false;
+                                self.connection_in_progress = false;
+                                self.add_log("Connection established".to_string());
+                            }
+                            Err(e) => {
+                                self.connection_state = ConnectionState::Failed(format!("Failed to create job worker: {}", e));
+                                self.connection_in_progress = false;
+                                self.add_log(format!("Job worker error: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.connection_state = ConnectionState::Failed(format!("Registration failed: {}", e));
+                        self.connection_in_progress = false;
+                        self.add_log(format!("Registration error: {}", e));
+                        self.status = format!("Connection failed: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                self.connection_state = ConnectionState::Failed(format!("Failed to create agent client: {}", e));
+                self.connection_in_progress = false;
+                self.add_log(format!("Client creation error: {}", e));
+                self.status = format!("Connection failed: {}", e);
+            }
+        }
+    }
+    
+    pub async fn run(&mut self) -> Result<()> {
         // Main event loop
         loop {
-            // Update status and instructions before drawing
-            if let Some(agent_id) = self.agent_client.agent_id() {
-                self.status = format!("Connected as {}", agent_id);
-            } else {
-                self.status = "Not registered".to_string();
+            // Handle connection if in connecting state
+            if matches!(self.connection_state, ConnectionState::Connecting) {
+                self.connect_to_server().await;
             }
             
-            // Get current job
-            let current_job = {
-                let current_job_arc = self.job_worker.current_job();
+            // Update status based on connection state
+            match &self.connection_state {
+                ConnectionState::Disconnected => {
+                    self.status = "Disconnected - Enter server URL and press Enter to connect".to_string();
+                }
+                ConnectionState::Connecting => {
+                    self.status = "Connecting...".to_string();
+                }
+                ConnectionState::Connected => {
+                    if let Some(ref client) = self.agent_client {
+                        if let Some(agent_id) = client.agent_id() {
+                            self.status = format!("Connected as {}", agent_id);
+                        }
+                    }
+                }
+                ConnectionState::Failed(ref error) => {
+                    self.status = format!("Connection failed: {}", error);
+                }
+            }
+            
+            // Update instructions if connected
+            if let Some(ref client) = self.agent_client {
+                match client.get_instructions().await {
+                    Ok(instructions) => {
+                        self.instructions = instructions.iter()
+                            .map(|i| format!("[{}] {} - {}", i.id, i.instruction_type, i.status))
+                            .collect();
+                    }
+                    Err(_e) => {
+                        // Don't spam error messages
+                    }
+                }
+            }
+            
+            // Get current job if connected
+            let current_job = if let Some(ref worker) = self.job_worker {
+                let current_job_arc = worker.current_job();
                 let job_guard = current_job_arc.lock().await;
                 job_guard.clone()
+            } else {
+                None
             };
             
-            // Poll for instructions
-            match self.agent_client.get_instructions().await {
-                Ok(instructions) => {
-                    self.instructions = instructions.iter()
-                        .map(|i| format!("[{}] {} - {}", i.id, i.instruction_type, i.status))
-                        .collect();
-                }
-                Err(e) => {
-                    self.status = format!("Error: {}", e);
-                }
-            }
+            // Draw UI - prepare data for drawing
+            let status_str = self.status.clone();
+            let instructions_clone = self.instructions.clone();
+            let connection_state_clone = self.connection_state.clone();
+            let server_url_input_clone = self.server_url_input.clone();
+            let editing_url = self.editing_server_url;
+            let logs_clone = self.connection_logs.clone();
+            let current_job_clone = current_job.clone();
             
-            // Draw UI
             self.terminal.draw(|f| {
-                let status = &self.status;
-                let instructions: Vec<ListItem> = self.instructions.iter()
-                    .map(|i| ListItem::new(i.as_str()))
-                    .collect();
-                
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(3),  // Status header
-                        Constraint::Length(8),  // Current job info
-                        Constraint::Min(0),     // Instructions
-                    ])
-                    .split(f.size());
-                
-                // Header
-                let header = Paragraph::new(vec![
-                    Line::from(vec![
-                        Span::styled(
-                            "Ripley Agent",
-                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" - "),
-                        Span::raw(status),
-                    ]),
-                ])
-                .block(Block::default().borders(Borders::ALL).title("Status"))
-                .alignment(Alignment::Left);
-                f.render_widget(header, chunks[0]);
-                
-                // Current job panel
-                if let Some(ref job) = current_job {
-                    let progress = job.progress;
-                    let status_color = match job.status.as_str() {
-                        "processing" => Color::Yellow,
-                        "completed" => Color::Green,
-                        "failed" => Color::Red,
-                        _ => Color::White,
-                    };
-                    
-                    // Store formatted strings in variables to avoid temporary value issues
-                    let progress_text = format!("{:.1}%", progress);
-                    let input_filename = Path::new(&job.input_file_path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(&job.input_file_path)
-                        .to_string();
-                    
-                    let job_info = vec![
-                        Line::from(vec![
-                            Span::styled("Job ID: ", Style::default().fg(Color::Cyan)),
-                            Span::raw(&job.job_id),
-                        ]),
-                        Line::from(vec![
-                            Span::styled("Status: ", Style::default().fg(Color::Cyan)),
-                            Span::styled(&job.status, Style::default().fg(status_color)),
-                        ]),
-                        Line::from(vec![
-                            Span::styled("Progress: ", Style::default().fg(Color::Cyan)),
-                            Span::raw(&progress_text),
-                        ]),
-                        Line::from(vec![
-                            Span::styled("Input: ", Style::default().fg(Color::Cyan)),
-                            Span::raw(&input_filename),
-                        ]),
-                    ];
-                    
-                    let inner_chunks = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(4),
-                            Constraint::Length(1),
-                        ])
-                        .split(chunks[1]);
-                    
-                    let info_block = Paragraph::new(job_info)
-                        .block(Block::default().borders(Borders::NONE))
-                        .wrap(Wrap { trim: true });
-                    f.render_widget(info_block, inner_chunks[0]);
-                    
-                    // Progress bar
-                    let progress_label = format!("{:.1}%", progress);
-                    let progress_gauge = Gauge::default()
-                        .block(Block::default().borders(Borders::NONE))
-                        .gauge_style(Style::default().fg(Color::Green))
-                        .percent((progress as u16).min(100))
-                        .label(&progress_label);
-                    f.render_widget(progress_gauge, inner_chunks[1]);
-                    
-                    // Draw border around the whole job panel
-                    let job_block = Block::default()
-                        .borders(Borders::ALL)
-                        .title("Current Job");
-                    f.render_widget(job_block, chunks[1]);
-                } else {
-                    let no_job = Paragraph::new(vec![
-                        Line::from(vec![
-                            Span::styled("No active job", Style::default().fg(Color::DarkGray)),
-                        ]),
-                        Line::from(vec![
-                            Span::raw("Waiting for upscaling jobs..."),
-                        ]),
-                    ])
-                    .block(Block::default().borders(Borders::ALL).title("Current Job"))
-                    .alignment(Alignment::Center);
-                    f.render_widget(no_job, chunks[1]);
-                }
-                
-                // Instructions list
-                let list = List::new(instructions)
-                    .block(Block::default().borders(Borders::ALL).title("Instructions"))
-                    .style(Style::default().fg(Color::White));
-                f.render_widget(list, chunks[2]);
+                Self::draw_ui(
+                    f,
+                    &status_str,
+                    &instructions_clone,
+                    &connection_state_clone,
+                    &server_url_input_clone,
+                    editing_url,
+                    &logs_clone,
+                    &current_job_clone,
+                    self.agent_client.as_ref().map(|_c| None::<String>),
+                );
             })?;
             
             if crossterm::event::poll(Duration::from_millis(100))? {
@@ -215,7 +252,42 @@ impl TuiApp {
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {
-                                self.should_quit = true;
+                                if !self.editing_server_url || matches!(self.connection_state, ConnectionState::Connected) {
+                                    self.should_quit = true;
+                                } else {
+                                    // Cancel editing
+                                    self.editing_server_url = false;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if self.editing_server_url && matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    // Start connection process
+                                    if !self.server_url_input.trim().is_empty() {
+                                        // Update config
+                                        self.config.server_url = self.server_url_input.trim().to_string();
+                                        if let Err(e) = self.config.save() {
+                                            self.add_log(format!("Failed to save config: {}", e));
+                                        }
+                                        self.connection_state = ConnectionState::Connecting;
+                                        self.status = "Connecting...".to_string();
+                                        self.add_log(format!("Connecting to: {}", self.config.server_url));
+                                    }
+                                }
+                            }
+                            KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                                if self.editing_server_url {
+                                    self.server_url_input.clear();
+                                }
+                            }
+                            KeyCode::Char(c) => {
+                                if self.editing_server_url && matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    self.server_url_input.push(c);
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                if self.editing_server_url && matches!(self.connection_state, ConnectionState::Disconnected | ConnectionState::Failed(_)) {
+                                    self.server_url_input.pop();
+                                }
                             }
                             _ => {}
                         }
@@ -240,5 +312,173 @@ impl TuiApp {
         Ok(())
     }
     
+    fn draw_ui(
+        f: &mut ratatui::Frame,
+        status: &str,
+        instructions: &[String],
+        connection_state: &ConnectionState,
+        server_url_input: &str,
+        editing_server_url: bool,
+        connection_logs: &[String],
+        current_job: &Option<crate::agent::UpscalingJob>,
+        _agent_id: Option<Option<String>>,
+    ) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),  // Status header
+                Constraint::Length(8),  // Connection/Job info
+                Constraint::Min(0),     // Instructions/Logs
+            ])
+            .split(f.area());
+        
+        // Header
+        let status_color = match connection_state {
+            ConnectionState::Connected => Color::Green,
+            ConnectionState::Connecting => Color::Yellow,
+            ConnectionState::Failed(_) => Color::Red,
+            ConnectionState::Disconnected => Color::Gray,
+        };
+        
+        let header = Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    "Ripley Agent",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" - "),
+                Span::styled(status, Style::default().fg(status_color)),
+            ]),
+        ])
+        .block(Block::default().borders(Borders::ALL).title("Status"))
+        .alignment(Alignment::Left);
+        f.render_widget(header, chunks[0]);
+        
+        // Connection panel or Job panel
+        if matches!(connection_state, ConnectionState::Disconnected | ConnectionState::Connecting | ConnectionState::Failed(_)) {
+            // Show connection UI
+            let inner_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Min(0),
+                ])
+                .split(chunks[1]);
+            
+            // Server URL input
+            let url_prompt = Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("Server URL: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        server_url_input,
+                        Style::default().fg(Color::White).add_modifier(if editing_server_url { Modifier::BOLD } else { Modifier::empty() }),
+                    ),
+                    if editing_server_url {
+                        Span::styled("_", Style::default().fg(Color::Yellow))
+                    } else {
+                        Span::raw("")
+                    },
+                ]),
+                Line::from(vec![
+                    Span::styled("Press Enter to connect", Style::default().fg(Color::DarkGray)),
+                ]),
+            ])
+            .block(Block::default().borders(Borders::ALL).title("Connection"))
+            .wrap(Wrap { trim: true });
+            f.render_widget(url_prompt, inner_chunks[0]);
+            
+            // Connection logs
+            let log_items: Vec<ListItem> = connection_logs.iter()
+                .map(|log| ListItem::new(log.as_str()))
+                .collect();
+            let log_list = List::new(log_items)
+                .block(Block::default().borders(Borders::ALL).title("Connection Log"))
+                .style(Style::default().fg(Color::White));
+            f.render_widget(log_list, inner_chunks[2]);
+        } else if let Some(ref job) = current_job {
+            // Show job info
+            let progress = job.progress;
+            let status_color = match job.status.as_str() {
+                "processing" => Color::Yellow,
+                "completed" => Color::Green,
+                "failed" => Color::Red,
+                _ => Color::White,
+            };
+            
+            let progress_text = format!("{:.1}%", progress);
+            let input_filename = Path::new(&job.input_file_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&job.input_file_path)
+                .to_string();
+            
+            let job_info = vec![
+                Line::from(vec![
+                    Span::styled("Job ID: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(&job.job_id),
+                ]),
+                Line::from(vec![
+                    Span::styled("Status: ", Style::default().fg(Color::Cyan)),
+                    Span::styled(&job.status, Style::default().fg(status_color)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Progress: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(&progress_text),
+                ]),
+                Line::from(vec![
+                    Span::styled("Input: ", Style::default().fg(Color::Cyan)),
+                    Span::raw(&input_filename),
+                ]),
+            ];
+            
+            let inner_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(4),
+                    Constraint::Length(1),
+                ])
+                .split(chunks[1]);
+            
+            let info_block = Paragraph::new(job_info)
+                .block(Block::default().borders(Borders::NONE))
+                .wrap(Wrap { trim: true });
+            f.render_widget(info_block, inner_chunks[0]);
+            
+            let progress_label = format!("{:.1}%", progress);
+            let progress_gauge = Gauge::default()
+                .block(Block::default().borders(Borders::NONE))
+                .gauge_style(Style::default().fg(Color::Green))
+                .percent((progress as u16).min(100))
+                .label(&progress_label);
+            f.render_widget(progress_gauge, inner_chunks[1]);
+            
+            let job_block = Block::default()
+                .borders(Borders::ALL)
+                .title("Current Job");
+            f.render_widget(job_block, chunks[1]);
+        } else {
+            // No job
+            let no_job = Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("No active job", Style::default().fg(Color::DarkGray)),
+                ]),
+                Line::from(vec![
+                    Span::raw("Waiting for upscaling jobs..."),
+                ]),
+            ])
+            .block(Block::default().borders(Borders::ALL).title("Current Job"))
+            .alignment(Alignment::Center);
+            f.render_widget(no_job, chunks[1]);
+        }
+        
+        // Instructions list
+        let instruction_items: Vec<ListItem> = instructions.iter()
+            .map(|i| ListItem::new(i.as_str()))
+            .collect();
+        let list = List::new(instruction_items)
+            .block(Block::default().borders(Borders::ALL).title("Instructions"))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(list, chunks[2]);
+    }
 }
-

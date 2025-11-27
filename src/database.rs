@@ -199,6 +199,7 @@ pub struct DriveStats {
 /// Rip queue entry for managing pending rip operations
 /// Episode match result for tracking accuracy statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct EpisodeMatchResult {
     pub id: Option<i64>,
     pub timestamp: DateTime<Utc>,
@@ -1045,6 +1046,7 @@ impl Database {
     }
 
     /// Record an episode match result for statistics tracking
+    #[allow(dead_code)]
     pub fn record_episode_match(&self, match_result: &EpisodeMatchResult) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         
@@ -1394,7 +1396,7 @@ impl Database {
         // Get pending instructions that are either:
         // 1. Not assigned to any agent, OR
         // 2. Assigned to this specific agent
-        let sql = if let Some(id) = agent_id {
+        let sql = if agent_id.is_some() {
             "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at
              FROM agent_instructions
              WHERE status = 'pending' AND (assigned_to_agent_id IS NULL OR assigned_to_agent_id = ?1)
@@ -1527,6 +1529,7 @@ impl Database {
     }
 
     /// Mark agents as offline if they haven't sent heartbeat in X minutes
+    #[allow(dead_code)]
     pub fn cleanup_stale_agents(&self, minutes_threshold: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let threshold = chrono::Utc::now() - chrono::Duration::minutes(minutes_threshold);
@@ -2703,6 +2706,7 @@ impl Database {
     }
 
     /// Get next pending queue entry (highest priority first, then oldest)
+    #[allow(dead_code)]
     pub fn get_next_queue_entry(&self, drive: Option<&str>) -> Result<Option<RipQueueEntry>> {
         let conn = self.conn.lock().unwrap();
         
@@ -2825,6 +2829,7 @@ impl Database {
     }
 
     /// Remove queue entry (for cancellation)
+    #[allow(dead_code)]
     pub fn remove_queue_entry(&self, id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM rip_queue WHERE id = ?1", params![id])?;

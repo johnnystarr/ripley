@@ -14,7 +14,9 @@ pub struct RipProgress {
     pub track_name: String,
     pub percentage: f32,
     pub status: RipStatus,
+    #[allow(dead_code)]
     pub speed_mbps: Option<f32>, // Ripping speed in MB/s
+    #[allow(dead_code)]
     pub bytes_processed: Option<u64>, // Total bytes processed so far
 }
 

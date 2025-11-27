@@ -1714,6 +1714,7 @@ async fn restore_database_handler(
 }
 
 /// Process rip queue - checks for available drives and starts queued rips
+#[allow(dead_code)]
 async fn process_queue(state: ApiState) {
     let status = state.rip_status.read().await;
     let active_drives: std::collections::HashSet<String> = status.active_rips.keys().cloned().collect();

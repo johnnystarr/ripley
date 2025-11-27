@@ -98,7 +98,7 @@ impl JobWorker {
     async fn process_job(
         agent_client: Arc<AgentClient>,
         topaz: Option<TopazVideo>,
-        work_dir: PathBuf,
+        _work_dir: PathBuf,
         job: UpscalingJob,
         current_job: Arc<Mutex<Option<UpscalingJob>>>,
     ) -> Result<()> {
@@ -146,7 +146,7 @@ impl JobWorker {
         let local_output_path = upscaled_dir.join(&output_file_name);
         
         // Load Topaz profile if specified
-        let profile: Option<TopazProfile> = if let Some(profile_id) = job.topaz_profile_id {
+            let profile: Option<TopazProfile> = if let Some(_profile_id) = job.topaz_profile_id {
             // TODO: Fetch profile from server
             // For now, we'll skip profile loading
             None
