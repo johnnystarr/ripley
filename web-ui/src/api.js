@@ -304,7 +304,18 @@ class ApiClient {
   // Agent endpoints
   async getAgents() {
     return this.request('/agents');
-  }
+  },
+  
+  async getAgentOutputLocation(agentId) {
+    return this.request(`/agents/${agentId}/output-location`);
+  },
+  
+  async updateAgentOutputLocation(agentId, outputLocation) {
+    return this.request(`/agents/${agentId}/output-location`, {
+      method: 'PUT',
+      body: JSON.stringify({ output_location: outputLocation }),
+    });
+  },
 
   // Topaz Profile endpoints
   async getTopazProfiles() {

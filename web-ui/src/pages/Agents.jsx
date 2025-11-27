@@ -57,6 +57,8 @@ export default function Agents() {
   const [shows, setShows] = useState([]);
   const [profileShowAssociations, setProfileShowAssociations] = useState({}); // profile_id -> [show_ids]
   const [addingShowToProfile, setAddingShowToProfile] = useState(null);
+  const [editingOutputLocation, setEditingOutputLocation] = useState(null);
+  const [outputLocationValue, setOutputLocationValue] = useState('');
 
   // Fetch data on mount
   useEffect(() => {
@@ -243,6 +245,28 @@ export default function Agents() {
     }
   }, [fetchProfiles]);
 
+  const handleEditOutputLocation = useCallback(async (agentId, currentLocation) => {
+    setEditingOutputLocation(agentId);
+    setOutputLocationValue(currentLocation || '');
+  }, []);
+
+  const handleSaveOutputLocation = useCallback(async (agentId) => {
+    try {
+      await api.updateAgentOutputLocation(agentId, outputLocationValue);
+      toast.success('Output location updated');
+      setEditingOutputLocation(null);
+      setOutputLocationValue('');
+      fetchAgents();
+    } catch (err) {
+      toast.error('Failed to update output location: ' + err.message);
+    }
+  }, [outputLocationValue, fetchAgents]);
+
+  const handleCancelEditOutputLocation = useCallback(() => {
+    setEditingOutputLocation(null);
+    setOutputLocationValue('');
+  }, []);
+
   const activeJobs = jobs.filter(job => job.status === 'processing' || job.status === 'assigned');
   const onlineAgents = agents.filter(agent => agent.status === 'online');
   const busyAgents = agents.filter(agent => agent.status === 'busy');
@@ -348,6 +372,47 @@ export default function Agents() {
                           {agent.topaz_version && (
                             <div>Topaz Video AI: <span className="text-cyan-400">{agent.topaz_version}</span></div>
                           )}
+                          <div className="flex items-center gap-2 mt-2">
+                            <span>Output Location:</span>
+                            {editingOutputLocation === agent.agent_id ? (
+                              <div className="flex items-center gap-2 flex-1 max-w-md">
+                                <input
+                                  type="text"
+                                  value={outputLocationValue}
+                                  onChange={(e) => setOutputLocationValue(e.target.value)}
+                                  placeholder="e.g., /path/to/output or C:\Videos\Ripley"
+                                  className="flex-1 px-2 py-1 text-xs bg-slate-900 border border-slate-600 rounded text-slate-100 focus:outline-none focus:border-cyan-500"
+                                />
+                                <button
+                                  onClick={() => handleSaveOutputLocation(agent.agent_id)}
+                                  className="px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-700 text-white rounded"
+                                  title="Save"
+                                >
+                                  <FontAwesomeIcon icon={faSave} />
+                                </button>
+                                <button
+                                  onClick={handleCancelEditOutputLocation}
+                                  className="px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 rounded"
+                                  title="Cancel"
+                                >
+                                  <FontAwesomeIcon icon={faTimes} />
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <span className="text-slate-400 font-mono text-xs">
+                                  {agent.output_location || 'Not set (default: ~/ripley_output)'}
+                                </span>
+                                <button
+                                  onClick={() => handleEditOutputLocation(agent.agent_id, agent.output_location)}
+                                  className="ml-2 text-cyan-400 hover:text-cyan-300 text-xs"
+                                  title="Edit output location"
+                                >
+                                  <FontAwesomeIcon icon={faEdit} />
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">

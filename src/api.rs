@@ -499,6 +499,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/agents/register", post(register_agent))
         .route("/agents/:agent_id/heartbeat", post(agent_heartbeat))
         .route("/agents/:agent_id/instructions", get(get_agent_instructions))
+        .route("/agents/:agent_id/output-location", get(get_agent_output_location))
+        .route("/agents/:agent_id/output-location", put(update_agent_output_location))
         .route("/agents/instructions", post(create_instruction))
         .route("/agents/instructions/:id/assign", post(assign_instruction))
         .route("/agents/instructions/:id/start", post(start_instruction))
@@ -2096,6 +2098,47 @@ async fn get_agent_instructions(
         }
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to get instructions: {}", e),
+        }),
+    }
+}
+
+/// Get agent output location
+async fn get_agent_output_location(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_agent_by_id(&agent_id) {
+        Ok(Some(agent)) => Ok(Json(serde_json::json!({
+            "output_location": agent.output_location
+        }))),
+        Ok(None) => Err(ErrorResponse {
+            error: format!("Agent not found: {}", agent_id),
+        }),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get agent: {}", e),
+        }),
+    }
+}
+
+/// Update agent output location
+#[derive(Debug, Deserialize)]
+struct UpdateAgentOutputLocationRequest {
+    output_location: String,
+}
+
+async fn update_agent_output_location(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+    Json(request): Json<UpdateAgentOutputLocationRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_agent_output_location(&agent_id, &request.output_location) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "agent_id": agent_id,
+            "output_location": request.output_location
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update output location: {}", e),
         }),
     }
 }

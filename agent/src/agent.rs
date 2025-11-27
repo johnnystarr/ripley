@@ -285,6 +285,30 @@ impl AgentClient {
         
         Ok(())
     }
+    
+    /// Get agent output location from server
+    pub async fn get_output_location(&self) -> Result<Option<String>> {
+        let agent_id = self.agent_id.lock().unwrap().clone();
+        if let Some(ref agent_id) = agent_id {
+            let url = format!("{}/api/agents/{}/output-location", self.config.server_url, agent_id);
+            let response = self.http_client
+                .get(&url)
+                .send()
+                .await?;
+            
+            if response.status().is_success() {
+                let result: serde_json::Value = response.json().await?;
+                let output_location = result.get("output_location")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                Ok(output_location)
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

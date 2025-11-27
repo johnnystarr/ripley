@@ -109,20 +109,41 @@ impl JobWorker {
         // Update job status to processing
         agent_client.update_job_status(&job_id, "processing", Some(0.0), None).await?;
         
-        // Download input file
+        // Get output location from server (or use default)
+        let output_location = agent_client.get_output_location().await?
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .map(|h| h.join("ripley_output"))
+                    .unwrap_or_else(|| PathBuf::from("ripley_output"))
+                    .to_string_lossy()
+                    .to_string()
+            });
+        
+        let output_base = PathBuf::from(&output_location);
+        
+        // Create folder structure: processing/, upscaled/, encoded/
+        let processing_dir = output_base.join("processing");
+        let upscaled_dir = output_base.join("upscaled");
+        let encoded_dir = output_base.join("encoded");
+        
+        tokio::fs::create_dir_all(&processing_dir).await?;
+        tokio::fs::create_dir_all(&upscaled_dir).await?;
+        tokio::fs::create_dir_all(&encoded_dir).await?;
+        
+        // Download input file to processing folder
         let input_file_name = Path::new(&job.input_file_path)
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| anyhow::anyhow!("Invalid input file path"))?;
         
-        let local_input_path = work_dir.join(&format!("input_{}_{}", job_id, input_file_name));
+        let local_input_path = processing_dir.join(&format!("input_{}_{}", job_id, input_file_name));
         
         info!("Downloading input file: {} -> {:?}", job.input_file_path, local_input_path);
         agent_client.download_file(&job.input_file_path, &local_input_path).await?;
         
-        // Determine output path
-        let output_file_name = format!("output_{}_{}", job_id, input_file_name);
-        let local_output_path = work_dir.join(&output_file_name);
+        // Determine output path in upscaled folder
+        let output_file_name = format!("upscaled_{}_{}", job_id, input_file_name);
+        let local_output_path = upscaled_dir.join(&output_file_name);
         
         // Load Topaz profile if specified
         let profile: Option<TopazProfile> = if let Some(profile_id) = job.topaz_profile_id {
@@ -174,9 +195,9 @@ impl JobWorker {
         
         info!("Job {} completed successfully", job_id);
         
-        // Clean up local files
-        let _ = tokio::fs::remove_file(&local_input_path).await;
-        let _ = tokio::fs::remove_file(&local_output_path).await;
+        // Don't clean up files - keep them in processing/ and upscaled/ folders
+        // Files can be manually cleaned up later if needed
+        // The processing folder can be cleaned periodically
         
         // Clear current job
         *current_job.lock().await = None;

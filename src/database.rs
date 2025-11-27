@@ -239,6 +239,7 @@ pub struct AgentInfo {
     pub last_seen: String,
     pub capabilities: Option<String>,
     pub topaz_version: Option<String>,
+    pub output_location: Option<String>,
     pub created_at: String,
 }
 
@@ -1017,6 +1018,29 @@ impl Database {
             )?;
         }
 
+        // Migration 8: Add output_location to agents table
+        if current_version < 8 {
+            info!("Applying migration 8: add_agent_output_location");
+            
+            let column_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='output_location'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if column_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN output_location TEXT",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![8, "add_agent_output_location", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -1293,7 +1317,7 @@ impl Database {
     pub fn get_agents(&self) -> Result<Vec<AgentInfo>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, created_at
+            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at
              FROM agents
              ORDER BY last_seen DESC"
         )?;
@@ -1309,7 +1333,8 @@ impl Database {
                 last_seen: row.get(6)?,
                 capabilities: row.get(7)?,
                 topaz_version: row.get(8)?,
-                created_at: row.get(9)?,
+                output_location: row.get(9)?,
+                created_at: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1322,7 +1347,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         let mut stmt = conn.prepare(
-            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, created_at
+            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at
              FROM agents
              WHERE agent_id = ?1"
         )?;
@@ -1338,7 +1363,8 @@ impl Database {
                 last_seen: row.get(6)?,
                 capabilities: row.get(7)?,
                 topaz_version: row.get(8)?,
-                created_at: row.get(9)?,
+                output_location: row.get(9)?,
+                created_at: row.get(10)?,
             })
         }) {
             Ok(agent) => Some(agent),
@@ -1347,6 +1373,18 @@ impl Database {
         };
 
         Ok(agent)
+    }
+
+    /// Update agent output location
+    pub fn update_agent_output_location(&self, agent_id: &str, output_location: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE agents SET output_location = ?1 WHERE agent_id = ?2",
+            params![output_location, agent_id],
+        )?;
+        
+        Ok(())
     }
 
     /// Get pending instructions for an agent (or any available agent)
