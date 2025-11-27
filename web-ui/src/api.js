@@ -301,6 +301,65 @@ class ApiClient {
     return this.request('/monitor/drives');
   }
 
+  // Agent endpoints
+  async getAgents() {
+    return this.request('/agents');
+  }
+
+  // Topaz Profile endpoints
+  async getTopazProfiles() {
+    return this.request('/topaz-profiles');
+  }
+
+  async createTopazProfile(profile) {
+    return this.request('/topaz-profiles', {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    });
+  }
+
+  async updateTopazProfile(id, profile) {
+    return this.request(`/topaz-profiles/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    });
+  }
+
+  async deleteTopazProfile(id) {
+    return this.request(`/topaz-profiles/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getProfilesForShow(showId) {
+    return this.request(`/shows/${showId}/topaz-profiles`);
+  }
+
+  async getShowsForProfile(profileId) {
+    // Note: This endpoint doesn't exist yet, but we can derive it from profiles
+    // For now, we'll need to check each show's profiles
+    // TODO: Add endpoint if needed
+    return [];
+  }
+
+  async associateProfileWithShow(profileId, showId) {
+    return this.request(`/topaz-profiles/${profileId}/shows/${showId}`, {
+      method: 'POST',
+    });
+  }
+
+  async removeProfileFromShow(profileId, showId) {
+    return this.request(`/topaz-profiles/${profileId}/shows/${showId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Upscaling Job endpoints
+  async getUpscalingJobs(status) {
+    const params = status ? `?status=${status}` : '';
+    return this.request(`/upscaling-jobs${params}`);
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {

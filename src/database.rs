@@ -227,6 +227,89 @@ pub struct RipQueueEntry {
     pub started_at: Option<DateTime<Utc>>,
 }
 
+/// Agent information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInfo {
+    pub id: i64,
+    pub agent_id: String,
+    pub name: String,
+    pub platform: String,
+    pub ip_address: Option<String>,
+    pub status: String,
+    pub last_seen: String,
+    pub capabilities: Option<String>,
+    pub topaz_version: Option<String>,
+    pub created_at: String,
+}
+
+/// Topaz Video AI profile
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopazProfile {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: Option<String>,
+    pub settings_json: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Upscaling job entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpscalingJob {
+    pub id: Option<i64>,
+    pub job_id: String,
+    pub input_file_path: String,
+    pub output_file_path: Option<String>,
+    pub show_id: Option<i64>,
+    pub topaz_profile_id: Option<i64>,
+    pub status: JobStatus,
+    pub priority: i32,
+    pub agent_id: Option<String>,
+    pub instruction_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub assigned_at: Option<DateTime<Utc>>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub progress: f32,
+    pub error_message: Option<String>,
+    pub processing_time_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    Queued,
+    Assigned,
+    Processing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl JobStatus {
+    pub fn to_string(&self) -> &str {
+        match self {
+            JobStatus::Queued => "queued",
+            JobStatus::Assigned => "assigned",
+            JobStatus::Processing => "processing",
+            JobStatus::Completed => "completed",
+            JobStatus::Failed => "failed",
+            JobStatus::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn from_string(s: &str) -> Self {
+        match s {
+            "assigned" => JobStatus::Assigned,
+            "processing" => JobStatus::Processing,
+            "completed" => JobStatus::Completed,
+            "failed" => JobStatus::Failed,
+            "cancelled" => JobStatus::Cancelled,
+            _ => JobStatus::Queued,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum QueueStatus {
@@ -731,6 +814,209 @@ impl Database {
             )?;
         }
 
+        // Migration 7: Add agent infrastructure tables
+        if current_version < 7 {
+            info!("Applying migration 7: add_agent_infrastructure");
+            
+            // Create agents table
+            let agents_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agents'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if agents_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE agents (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_id TEXT NOT NULL UNIQUE,
+                        name TEXT NOT NULL,
+                        platform TEXT NOT NULL,
+                        ip_address TEXT,
+                        status TEXT NOT NULL DEFAULT 'offline',
+                        last_seen TEXT NOT NULL,
+                        capabilities TEXT,
+                        topaz_version TEXT,
+                        api_key TEXT,
+                        created_at TEXT NOT NULL
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status)",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen DESC)",
+                    [],
+                )?;
+            }
+            
+            // Create agent_instructions table (instruction queue)
+            let instructions_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_instructions'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if instructions_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE agent_instructions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        instruction_type TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        assigned_to_agent_id TEXT,
+                        created_at TEXT NOT NULL,
+                        assigned_at TEXT,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        error_message TEXT,
+                        FOREIGN KEY (assigned_to_agent_id) REFERENCES agents(agent_id) ON DELETE SET NULL
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_agent_instructions_status ON agent_instructions(status, created_at ASC)",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_agent_instructions_agent ON agent_instructions(assigned_to_agent_id)",
+                    [],
+                )?;
+            }
+            
+            // Create upscaling_jobs table
+            let jobs_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='upscaling_jobs'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if jobs_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE upscaling_jobs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id TEXT NOT NULL UNIQUE,
+                        input_file_path TEXT NOT NULL,
+                        output_file_path TEXT,
+                        show_id INTEGER,
+                        topaz_profile_id INTEGER,
+                        status TEXT NOT NULL DEFAULT 'queued',
+                        priority INTEGER NOT NULL DEFAULT 0,
+                        agent_id TEXT,
+                        instruction_id INTEGER,
+                        created_at TEXT NOT NULL,
+                        assigned_at TEXT,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        progress REAL DEFAULT 0.0,
+                        error_message TEXT,
+                        processing_time_seconds INTEGER,
+                        FOREIGN KEY (show_id) REFERENCES shows(id) ON DELETE SET NULL,
+                        FOREIGN KEY (topaz_profile_id) REFERENCES topaz_profiles(id) ON DELETE SET NULL,
+                        FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE SET NULL,
+                        FOREIGN KEY (instruction_id) REFERENCES agent_instructions(id) ON DELETE SET NULL
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_upscaling_jobs_status ON upscaling_jobs(status, priority DESC, created_at ASC)",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_upscaling_jobs_show ON upscaling_jobs(show_id)",
+                    [],
+                )?;
+            }
+            
+            // Create topaz_profiles table
+            let profiles_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='topaz_profiles'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if profiles_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE topaz_profiles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE,
+                        description TEXT,
+                        settings_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )",
+                    [],
+                )?;
+            }
+            
+            // Create show_topaz_profiles table (many-to-many association)
+            let show_profiles_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='show_topaz_profiles'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if show_profiles_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE show_topaz_profiles (
+                        show_id INTEGER NOT NULL,
+                        topaz_profile_id INTEGER NOT NULL,
+                        PRIMARY KEY (show_id, topaz_profile_id),
+                        FOREIGN KEY (show_id) REFERENCES shows(id) ON DELETE CASCADE,
+                        FOREIGN KEY (topaz_profile_id) REFERENCES topaz_profiles(id) ON DELETE CASCADE
+                    )",
+                    [],
+                )?;
+            }
+            
+            // Create agent_file_transfers table (for tracking file uploads/downloads)
+            let transfers_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_file_transfers'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if transfers_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE agent_file_transfers (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        transfer_id TEXT NOT NULL UNIQUE,
+                        file_path TEXT NOT NULL,
+                        transfer_type TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        agent_id TEXT,
+                        job_id TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        size_bytes INTEGER,
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        error_message TEXT,
+                        FOREIGN KEY (agent_id) REFERENCES agents(agent_id) ON DELETE SET NULL
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_file_transfers_status ON agent_file_transfers(status)",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![7, "add_agent_infrastructure", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -929,6 +1215,703 @@ impl Database {
         
         // Reopen connection (will happen on next access)
         Ok(())
+    }
+
+    // Agent methods
+
+    /// Register or update an agent
+    pub fn register_agent(
+        &self,
+        agent_id: &str,
+        name: &str,
+        platform: &str,
+        ip_address: Option<&str>,
+        capabilities: Option<&str>,
+        topaz_version: Option<&str>,
+        api_key: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Check if agent exists
+        let exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM agents WHERE agent_id = ?1",
+            params![agent_id],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        )?;
+
+        if exists {
+            // Update existing agent
+            conn.execute(
+                "UPDATE agents SET name = ?1, platform = ?2, ip_address = ?3, status = 'online', 
+                 last_seen = ?4, capabilities = ?5, topaz_version = ?6, api_key = ?7
+                 WHERE agent_id = ?8",
+                params![
+                    name,
+                    platform,
+                    ip_address,
+                    now,
+                    capabilities,
+                    topaz_version,
+                    api_key,
+                    agent_id
+                ],
+            )?;
+        } else {
+            // Insert new agent
+            conn.execute(
+                "INSERT INTO agents (agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, api_key, created_at)
+                 VALUES (?1, ?2, ?3, ?4, 'online', ?5, ?6, ?7, ?8, ?9)",
+                params![agent_id, name, platform, ip_address, now, capabilities, topaz_version, api_key, now],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Update agent heartbeat (last_seen timestamp)
+    pub fn update_agent_heartbeat(&self, agent_id: &str, status: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if let Some(status_str) = status {
+            conn.execute(
+                "UPDATE agents SET last_seen = ?1, status = ?2 WHERE agent_id = ?3",
+                params![now, status_str, agent_id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE agents SET last_seen = ?1, status = 'online' WHERE agent_id = ?2",
+                params![now, agent_id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Get all agents
+    pub fn get_agents(&self) -> Result<Vec<AgentInfo>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, created_at
+             FROM agents
+             ORDER BY last_seen DESC"
+        )?;
+
+        let agents = stmt.query_map([], |row| {
+            Ok(AgentInfo {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                name: row.get(2)?,
+                platform: row.get(3)?,
+                ip_address: row.get(4)?,
+                status: row.get(5)?,
+                last_seen: row.get(6)?,
+                capabilities: row.get(7)?,
+                topaz_version: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(agents)
+    }
+
+    /// Get agent by agent_id
+    pub fn get_agent_by_id(&self, agent_id: &str) -> Result<Option<AgentInfo>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, created_at
+             FROM agents
+             WHERE agent_id = ?1"
+        )?;
+
+        let agent = match stmt.query_row(params![agent_id], |row| {
+            Ok(AgentInfo {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                name: row.get(2)?,
+                platform: row.get(3)?,
+                ip_address: row.get(4)?,
+                status: row.get(5)?,
+                last_seen: row.get(6)?,
+                capabilities: row.get(7)?,
+                topaz_version: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        }) {
+            Ok(agent) => Some(agent),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(anyhow::anyhow!("Database error: {}", e)),
+        };
+
+        Ok(agent)
+    }
+
+    /// Get pending instructions for an agent (or any available agent)
+    pub fn get_pending_instructions(&self, agent_id: Option<&str>) -> Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Get pending instructions that are either:
+        // 1. Not assigned to any agent, OR
+        // 2. Assigned to this specific agent
+        let sql = if let Some(id) = agent_id {
+            "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at
+             FROM agent_instructions
+             WHERE status = 'pending' AND (assigned_to_agent_id IS NULL OR assigned_to_agent_id = ?1)
+             ORDER BY created_at ASC
+             LIMIT 1"
+        } else {
+            "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at
+             FROM agent_instructions
+             WHERE status = 'pending' AND assigned_to_agent_id IS NULL
+             ORDER BY created_at ASC
+             LIMIT 1"
+        };
+        
+        let mut stmt = conn.prepare(sql)?;
+        
+        let instructions = if let Some(id) = agent_id {
+            stmt.query_map(params![id], |row| {
+                let payload_str: String = row.get(2)?;
+                let payload: serde_json::Value = serde_json::from_str(&payload_str)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "instruction_type": row.get::<_, String>(1)?,
+                    "payload": payload,
+                    "status": row.get::<_, String>(3)?,
+                    "assigned_to_agent_id": row.get::<_, Option<String>>(4)?,
+                    "created_at": row.get::<_, String>(5)?,
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map([], |row| {
+                let payload_str: String = row.get(2)?;
+                let payload: serde_json::Value = serde_json::from_str(&payload_str)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                
+                Ok(serde_json::json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "instruction_type": row.get::<_, String>(1)?,
+                    "payload": payload,
+                    "status": row.get::<_, String>(3)?,
+                    "assigned_to_agent_id": row.get::<_, Option<String>>(4)?,
+                    "created_at": row.get::<_, String>(5)?,
+                }))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        
+        Ok(instructions)
+    }
+
+    /// Create a new instruction
+    pub fn create_instruction(
+        &self,
+        instruction_type: &str,
+        payload: &serde_json::Value,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let payload_str = serde_json::to_string(payload)?;
+        
+        conn.execute(
+            "INSERT INTO agent_instructions (instruction_type, payload, status, created_at)
+             VALUES (?1, ?2, 'pending', ?3)",
+            params![instruction_type, payload_str, now],
+        )?;
+        
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Assign an instruction to an agent
+    pub fn assign_instruction_to_agent(&self, instruction_id: i64, agent_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE agent_instructions 
+             SET assigned_to_agent_id = ?1, assigned_at = ?2, status = 'assigned'
+             WHERE id = ?3 AND status = 'pending'",
+            params![agent_id, now, instruction_id],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Mark instruction as started
+    pub fn start_instruction(&self, instruction_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE agent_instructions 
+             SET status = 'processing', started_at = ?1
+             WHERE id = ?2",
+            params![now, instruction_id],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Mark instruction as completed
+    pub fn complete_instruction(&self, instruction_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE agent_instructions 
+             SET status = 'completed', completed_at = ?1
+             WHERE id = ?2",
+            params![now, instruction_id],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Mark instruction as failed
+    pub fn fail_instruction(&self, instruction_id: i64, error_message: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE agent_instructions 
+             SET status = 'failed', completed_at = ?1, error_message = ?2
+             WHERE id = ?3",
+            params![now, error_message, instruction_id],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Mark agents as offline if they haven't sent heartbeat in X minutes
+    pub fn cleanup_stale_agents(&self, minutes_threshold: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let threshold = chrono::Utc::now() - chrono::Duration::minutes(minutes_threshold);
+        
+        let count = conn.execute(
+            "UPDATE agents SET status = 'offline' WHERE status = 'online' AND last_seen < ?1",
+            params![threshold.to_rfc3339()],
+        )?;
+
+        Ok(count)
+    }
+
+    // Topaz Profile methods
+
+    /// Create a new Topaz profile
+    pub fn create_topaz_profile(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        settings_json: &serde_json::Value,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let settings_str = serde_json::to_string(settings_json)?;
+        
+        conn.execute(
+            "INSERT INTO topaz_profiles (name, description, settings_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![name, description, settings_str, now, now],
+        )?;
+        
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get all Topaz profiles
+    pub fn get_topaz_profiles(&self) -> Result<Vec<TopazProfile>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, settings_json, created_at, updated_at
+             FROM topaz_profiles
+             ORDER BY name ASC"
+        )?;
+
+        let profiles = stmt.query_map([], |row| {
+            let settings_str: String = row.get(3)?;
+            let settings: serde_json::Value = serde_json::from_str(&settings_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            
+            Ok(TopazProfile {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                description: row.get(2)?,
+                settings_json: settings,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(profiles)
+    }
+
+    /// Get a Topaz profile by ID
+    pub fn get_topaz_profile(&self, id: i64) -> Result<Option<TopazProfile>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, settings_json, created_at, updated_at
+             FROM topaz_profiles
+             WHERE id = ?1"
+        )?;
+
+        let profile = match stmt.query_row(params![id], |row| {
+            let settings_str: String = row.get(3)?;
+            let settings: serde_json::Value = serde_json::from_str(&settings_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            
+            Ok(TopazProfile {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                description: row.get(2)?,
+                settings_json: settings,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        }) {
+            Ok(profile) => Some(profile),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(anyhow::anyhow!("Database error: {}", e)),
+        };
+
+        Ok(profile)
+    }
+
+    /// Update a Topaz profile
+    pub fn update_topaz_profile(
+        &self,
+        id: i64,
+        name: Option<&str>,
+        description: Option<&str>,
+        settings_json: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        // Build update query dynamically based on what's provided
+        let mut updates = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(n) = name {
+            updates.push("name = ?");
+            params.push(Box::new(n.to_string()));
+        }
+        if let Some(d) = description {
+            updates.push("description = ?");
+            params.push(Box::new(d));
+        }
+        if let Some(s) = settings_json {
+            updates.push("settings_json = ?");
+            params.push(Box::new(serde_json::to_string(s)?));
+        }
+        updates.push("updated_at = ?");
+        params.push(Box::new(now.clone()));
+
+        params.push(Box::new(id));
+
+        let sql = format!("UPDATE topaz_profiles SET {} WHERE id = ?", updates.join(", "));
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        conn.execute(&sql, &param_refs[..])?;
+
+        Ok(())
+    }
+
+    /// Delete a Topaz profile
+    pub fn delete_topaz_profile(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM topaz_profiles WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Associate a Topaz profile with a show
+    pub fn associate_profile_with_show(&self, show_id: i64, profile_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO show_topaz_profiles (show_id, topaz_profile_id)
+             VALUES (?1, ?2)",
+            params![show_id, profile_id],
+        )?;
+        Ok(())
+    }
+
+    /// Remove association between a Topaz profile and a show
+    pub fn remove_profile_from_show(&self, show_id: i64, profile_id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM show_topaz_profiles WHERE show_id = ?1 AND topaz_profile_id = ?2",
+            params![show_id, profile_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get Topaz profiles associated with a show
+    pub fn get_profiles_for_show(&self, show_id: i64) -> Result<Vec<TopazProfile>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.name, p.description, p.settings_json, p.created_at, p.updated_at
+             FROM topaz_profiles p
+             INNER JOIN show_topaz_profiles stp ON p.id = stp.topaz_profile_id
+             WHERE stp.show_id = ?1
+             ORDER BY p.name ASC"
+        )?;
+
+        let profiles = stmt.query_map(params![show_id], |row| {
+            let settings_str: String = row.get(3)?;
+            let settings: serde_json::Value = serde_json::from_str(&settings_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            
+            Ok(TopazProfile {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                description: row.get(2)?,
+                settings_json: settings,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(5)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(profiles)
+    }
+
+    // Upscaling Job methods
+
+    /// Create a new upscaling job
+    pub fn create_upscaling_job(
+        &self,
+        job_id: &str,
+        input_file_path: &str,
+        show_id: Option<i64>,
+        topaz_profile_id: Option<i64>,
+        priority: i32,
+    ) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "INSERT INTO upscaling_jobs (job_id, input_file_path, show_id, topaz_profile_id, status, priority, created_at, progress)
+             VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, 0.0)",
+            params![job_id, input_file_path, show_id, topaz_profile_id, priority, now],
+        )?;
+        
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get next available upscaling job for assignment
+    pub fn get_next_upscaling_job(&self) -> Result<Option<UpscalingJob>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let mut stmt = conn.prepare(
+            "SELECT id, job_id, input_file_path, output_file_path, show_id, topaz_profile_id, status, priority, 
+                    agent_id, instruction_id, created_at, assigned_at, started_at, completed_at, progress, 
+                    error_message, processing_time_seconds
+             FROM upscaling_jobs
+             WHERE status = 'queued'
+             ORDER BY priority DESC, created_at ASC
+             LIMIT 1"
+        )?;
+
+        let job = match stmt.query_row([], |row| {
+            Ok(UpscalingJob {
+                id: Some(row.get(0)?),
+                job_id: row.get(1)?,
+                input_file_path: row.get(2)?,
+                output_file_path: row.get(3)?,
+                show_id: row.get(4)?,
+                topaz_profile_id: row.get(5)?,
+                status: JobStatus::from_string(&row.get::<_, String>(6)?),
+                priority: row.get(7)?,
+                agent_id: row.get(8)?,
+                instruction_id: row.get(9)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                assigned_at: row.get::<_, Option<String>>(11)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+                started_at: row.get::<_, Option<String>>(12)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+                completed_at: row.get::<_, Option<String>>(13)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
+                progress: row.get(14)?,
+                error_message: row.get(15)?,
+                processing_time_seconds: row.get(16)?,
+            })
+        }) {
+            Ok(job) => Some(job),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(anyhow::anyhow!("Database error: {}", e)),
+        };
+
+        Ok(job)
+    }
+
+    /// Assign an upscaling job to an agent
+    pub fn assign_upscaling_job(&self, job_id: &str, agent_id: &str, instruction_id: Option<i64>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE upscaling_jobs 
+             SET status = 'assigned', agent_id = ?1, instruction_id = ?2, assigned_at = ?3
+             WHERE job_id = ?4 AND status = 'queued'",
+            params![agent_id, instruction_id, now, job_id],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Update upscaling job status
+    pub fn update_upscaling_job_status(
+        &self,
+        job_id: &str,
+        status: JobStatus,
+        progress: Option<f32>,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        if status == JobStatus::Processing {
+            // Update started_at if transitioning to processing
+            conn.execute(
+                "UPDATE upscaling_jobs 
+                 SET status = ?1, started_at = COALESCE(started_at, ?2), progress = COALESCE(?3, progress)
+                 WHERE job_id = ?4",
+                params![status.to_string(), now, progress, job_id],
+            )?;
+        } else if status == JobStatus::Completed || status == JobStatus::Failed {
+            // Calculate processing time if completing
+            let processing_time: Option<i64> = conn.query_row(
+                "SELECT CASE 
+                    WHEN started_at IS NOT NULL 
+                    THEN CAST((julianday(?) - julianday(started_at)) * 86400 AS INTEGER)
+                    ELSE NULL
+                 END
+                 FROM upscaling_jobs
+                 WHERE job_id = ?2",
+                params![now, job_id],
+                |row| row.get(0),
+            ).ok().flatten();
+
+            conn.execute(
+                "UPDATE upscaling_jobs 
+                 SET status = ?1, completed_at = ?2, progress = COALESCE(?3, progress), 
+                     error_message = ?4, processing_time_seconds = ?5
+                 WHERE job_id = ?6",
+                params![status.to_string(), now, progress, error_message, processing_time, job_id],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE upscaling_jobs 
+                 SET status = ?1, progress = COALESCE(?2, progress)
+                 WHERE job_id = ?3",
+                params![status.to_string(), progress, job_id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Update upscaling job output path
+    pub fn update_upscaling_job_output(&self, job_id: &str, output_file_path: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE upscaling_jobs 
+             SET output_file_path = ?1
+             WHERE job_id = ?2",
+            params![output_file_path, job_id],
+        )?;
+        
+        Ok(())
+    }
+
+    /// Get all upscaling jobs
+    pub fn get_upscaling_jobs(&self, status_filter: Option<JobStatus>) -> Result<Vec<UpscalingJob>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(ref status) = status_filter {
+            (
+                "SELECT id, job_id, input_file_path, output_file_path, show_id, topaz_profile_id, status, priority, 
+                        agent_id, instruction_id, created_at, assigned_at, started_at, completed_at, progress, 
+                        error_message, processing_time_seconds
+                 FROM upscaling_jobs
+                 WHERE status = ?
+                 ORDER BY priority DESC, created_at DESC".to_string(),
+                vec![Box::new(status.to_string())],
+            )
+        } else {
+            (
+                "SELECT id, job_id, input_file_path, output_file_path, show_id, topaz_profile_id, status, priority, 
+                        agent_id, instruction_id, created_at, assigned_at, started_at, completed_at, progress, 
+                        error_message, processing_time_seconds
+                 FROM upscaling_jobs
+                 ORDER BY priority DESC, created_at DESC".to_string(),
+                vec![],
+            )
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        
+        let jobs: Vec<UpscalingJob> = stmt.query_map(&param_refs[..], |row| {
+            self.row_to_upscaling_job(row)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(jobs)
+    }
+
+    /// Helper function to convert database row to UpscalingJob
+    fn row_to_upscaling_job(&self, row: &rusqlite::Row<'_>) -> Result<UpscalingJob, rusqlite::Error> {
+        Ok(UpscalingJob {
+            id: Some(row.get(0)?),
+            job_id: row.get(1)?,
+            input_file_path: row.get(2)?,
+            output_file_path: row.get(3)?,
+            show_id: row.get(4)?,
+            topaz_profile_id: row.get(5)?,
+            status: JobStatus::from_string(&row.get::<_, String>(6)?),
+            priority: row.get(7)?,
+            agent_id: row.get(8)?,
+            instruction_id: row.get(9)?,
+            created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(10)?)
+                .unwrap()
+                .with_timezone(&Utc),
+            assigned_at: row.get::<_, Option<String>>(11)?
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc)),
+            started_at: row.get::<_, Option<String>>(12)?
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc)),
+            completed_at: row.get::<_, Option<String>>(13)?
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|dt| dt.with_timezone(&Utc)),
+            progress: row.get(14)?,
+            error_message: row.get(15)?,
+            processing_time_seconds: row.get(16)?,
+        })
     }
 
     /// Get database file path

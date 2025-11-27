@@ -90,29 +90,32 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### Backend - Agent Infrastructure
 
-- [ ] Create `Agent` database table (id, name, platform, ip, status, last_seen, capabilities)
-- [ ] Create agent registration API endpoint `/api/agents/register`
-- [ ] Create agent heartbeat API endpoint `/api/agents/heartbeat`
-- [ ] Create agent status API endpoint `/api/agents`
-- [ ] Create agent instruction queue system in database
-- [ ] Create instruction API endpoint `/api/agents/:id/instructions`
-- [ ] Create instruction assignment endpoint (assign to next available agent)
-- [ ] Add file upload endpoint for agent file transfers `/api/agents/upload`
-- [ ] Add file download endpoint for agents `/api/agents/download/:file_id`
-- [ ] Create Topaz profile management endpoints (CRUD)
-- [ ] Create profile-to-show association system
-- [ ] Create upscaling job queue in database
-- [ ] Create job status update endpoint `/api/agents/jobs/:id/status`
-- [ ] Implement job assignment logic (next available agent)
+- [x] Create `Agent` database table (id, name, platform, ip, status, last_seen, capabilities)
+- [x] Create agent registration API endpoint `/api/agents/register`
+- [x] Create agent heartbeat API endpoint `/api/agents/heartbeat`
+- [x] Create agent status API endpoint `/api/agents`
+- [x] Create agent instruction queue system in database
+- [x] Create instruction API endpoint `/api/agents/:id/instructions` (with auto-assignment)
+- [x] Create instruction assignment endpoint (assign to next available agent)
+- [x] Create instruction creation endpoint `/api/agents/instructions`
+- [x] Create instruction lifecycle endpoints (start, complete, fail)
+- [x] Add file upload endpoint for agent file transfers `/api/agents/upload`
+- [x] Add file download endpoint for agents `/api/agents/download/:file_id`
+- [x] Create Topaz profile management endpoints (CRUD)
+- [x] Create profile-to-show association system
+- [x] Create upscaling job queue in database
+- [x] Create job status update endpoint `/api/upscaling-jobs/:job_id/status`
+- [x] Implement job assignment logic (next available agent)
+- [x] Create job creation and listing endpoints
 - [ ] Add agent capability detection (Topaz Video installed, version, etc.)
 - [ ] Create agent disconnection/cleanup logic
 - [ ] Add agent authentication/security (optional API key)
 
 ### Backend - Upscaling Workflow Integration
 
-- [ ] Hook into rip completion workflow to queue upscaling job
-- [ ] Create upscaling job when DVD/BluRay rip completes
-- [ ] Associate upscaling job with show and profile
+- [x] Hook into rip completion workflow to queue upscaling job
+- [x] Create upscaling job when DVD/BluRay rip completes
+- [x] Associate upscaling job with show and profile
 - [ ] Add file transfer preparation (prepare file for agent download)
 - [ ] Implement job status tracking (queued, assigned, processing, completed, failed)
 - [ ] Add job result reporting (output file path, processing time, etc.)
@@ -122,12 +125,12 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### Frontend - Agent Management UI
 
-- [ ] Create new `Agents.jsx` page component
-- [ ] Add "Agents" route to App.jsx navigation
-- [ ] Create agent list view showing all registered agents
-- [ ] Display agent status (online, offline, busy, idle)
-- [ ] Show agent capabilities (Topaz version, platform, etc.)
-- [ ] Display agent last seen timestamp
+- [x] Create new `Agents.jsx` page component
+- [x] Add "Agents" route to App.jsx navigation
+- [x] Create agent list view showing all registered agents
+- [x] Display agent status (online, offline, busy, idle)
+- [x] Show agent capabilities (Topaz version, platform, etc.)
+- [x] Display agent last seen timestamp
 - [ ] Create agent detail view (current job, queue, history)
 - [ ] Add agent action buttons (force disconnect, restart, etc.)
 - [ ] Create agent connection status indicators
@@ -141,24 +144,24 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### Frontend - Monitor Tab Integration
 
-- [ ] Add agent operation log window type to Monitor tab
-- [ ] Display agent operations (upscaling, etc.) alongside rip operations
-- [ ] Show agent operation progress and status
+- [x] Add agent operation log window type to Monitor tab
+- [x] Display agent operations (upscaling, etc.) alongside rip operations
+- [x] Show agent operation progress and status
 - [ ] Stream agent operation logs in real-time
 - [ ] Add agent operation filtering
 
 ### Windows Agent - Rust TUI Application
 
-- [ ] Create new Rust project `ripley-agent` in `agent/` directory
-- [ ] Set up Cargo.toml with Windows-specific dependencies
-- [ ] Add ratatui for TUI interface
-- [ ] Add tokio for async networking
-- [ ] Add reqwest for HTTP client
-- [ ] Create agent configuration system (server URL, agent name, API key)
-- [ ] Implement server connection logic
-- [ ] Create agent registration on startup
-- [ ] Implement heartbeat mechanism (send every 30 seconds)
-- [ ] Create instruction polling loop (check for new instructions)
+- [x] Create new Rust project `ripley-agent` in `agent/` directory
+- [x] Set up Cargo.toml with Windows-specific dependencies
+- [x] Add ratatui for TUI interface
+- [x] Add tokio for async networking
+- [x] Add reqwest for HTTP client
+- [x] Create agent configuration system (server URL, agent name, API key)
+- [x] Implement server connection logic
+- [x] Create agent registration on startup
+- [x] Implement heartbeat mechanism (send every 30 seconds)
+- [x] Create instruction polling loop (check for new instructions)
 - [ ] Implement file download from server
 - [ ] Implement file upload to server (for completed jobs)
 - [ ] Create Topaz Video command wrapper/execution

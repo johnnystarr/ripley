@@ -1,6 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
+        multipart::Multipart,
         State,
     },
     http,
@@ -19,7 +20,7 @@ use tracing::info;
 
 use crate::cli::RipArgs;
 use crate::config::Config;
-use crate::database::{Database, LogEntry, Issue, Show, RipQueueEntry, QueueStatus};
+use crate::database::{Database, LogEntry, Issue, Show, RipQueueEntry, QueueStatus, AgentInfo, TopazProfile, UpscalingJob, JobStatus};
 
 /// Start the REST API server
 pub async fn start_server(
@@ -493,6 +494,34 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/database/restore", post(restore_database_handler))
         .route("/monitor/operations", get(get_monitor_operations))
         .route("/monitor/drives", get(get_monitor_drives))
+        // Agent endpoints
+        .route("/agents", get(get_agents))
+        .route("/agents/register", post(register_agent))
+        .route("/agents/:agent_id/heartbeat", post(agent_heartbeat))
+        .route("/agents/:agent_id/instructions", get(get_agent_instructions))
+        .route("/agents/instructions", post(create_instruction))
+        .route("/agents/instructions/:id/assign", post(assign_instruction))
+        .route("/agents/instructions/:id/start", post(start_instruction))
+        .route("/agents/instructions/:id/complete", post(complete_instruction))
+        .route("/agents/instructions/:id/fail", post(fail_instruction))
+        .route("/agents/upload", post(upload_file))
+        .route("/agents/download/:file_id", get(download_file))
+        // Topaz Profile endpoints
+        .route("/topaz-profiles", get(get_topaz_profiles))
+        .route("/topaz-profiles", post(create_topaz_profile))
+        .route("/topaz-profiles/:id", get(get_topaz_profile))
+        .route("/topaz-profiles/:id", put(update_topaz_profile))
+        .route("/topaz-profiles/:id", delete(delete_topaz_profile))
+        .route("/topaz-profiles/:id/shows/:show_id", post(associate_profile_with_show))
+        .route("/topaz-profiles/:id/shows/:show_id", delete(remove_profile_from_show))
+        .route("/shows/:show_id/topaz-profiles", get(get_profiles_for_show))
+        // Upscaling Job endpoints
+        .route("/upscaling-jobs", get(get_upscaling_jobs))
+        .route("/upscaling-jobs", post(create_upscaling_job))
+        .route("/upscaling-jobs/next", get(get_next_upscaling_job))
+        .route("/upscaling-jobs/:job_id/assign", post(assign_upscaling_job))
+        .route("/upscaling-jobs/:job_id/status", put(update_upscaling_job_status))
+        .route("/upscaling-jobs/:job_id/output", put(update_upscaling_job_output))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -628,6 +657,8 @@ async fn start_rip(
     // Clone state for async task
     let state_clone = state.clone();
     let request_clone = request;
+    let output_path_clone = request_clone.output_path.clone();
+    let title_clone = request_clone.title.clone();
     let drive_clone = drive_id.clone();
     let operation_id_clone = operation_id.clone();
     
@@ -644,6 +675,13 @@ async fn start_rip(
             tracing::error!("Rip operation failed: {:?}", e);
             fail_operation(&state_clone, &operation_id_clone, format!("{}", e)).await;
         } else {
+            // Try to create upscaling job if this was a video rip
+            if let Some(ref output_path) = output_path_clone {
+                if let Err(e) = create_upscaling_job_for_rip(&state_clone, output_path, title_clone.as_deref()).await {
+                    tracing::warn!("Failed to create upscaling job after rip: {}", e);
+                }
+            }
+            
             complete_operation(&state_clone, &operation_id_clone, Some("Rip completed successfully".to_string())).await;
         }
         
@@ -1087,6 +1125,101 @@ async fn run_single_rip_attempt(
     }
     
     result
+}
+
+/// Create upscaling job(s) for ripped video files
+async fn create_upscaling_job_for_rip(
+    state: &ApiState,
+    output_path: &str,
+    title: Option<&str>,
+) -> anyhow::Result<()> {
+    use std::path::PathBuf;
+    use tokio::fs;
+    
+    let output_dir = PathBuf::from(output_path);
+    
+    // Check if directory exists and contains MKV files
+    if !output_dir.exists() || !output_dir.is_dir() {
+        return Ok(()); // Not a directory or doesn't exist - skip
+    }
+    
+    // Find all MKV files in the output directory
+    let mut entries = fs::read_dir(&output_dir).await?;
+    let mut mkv_files = Vec::new();
+    
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+            mkv_files.push(path);
+        }
+    }
+    
+    if mkv_files.is_empty() {
+        tracing::debug!("No MKV files found in {} - skipping upscaling job creation", output_path);
+        return Ok(()); // No video files to upscale
+    }
+    
+    // Get show ID from title or last selected show
+    let show_id = if let Some(title_str) = title {
+        // Try to find show by name
+        match state.db.get_shows() {
+            Ok(shows) => {
+                shows.iter()
+                    .find(|s| s.name == title_str)
+                    .and_then(|s| s.id)
+            }
+            Err(_) => None,
+        }
+    } else {
+        // Use last selected show
+        state.db.get_last_show_id().ok().flatten()
+    };
+    
+    // Get Topaz profile for the show
+    let profile_id = if let Some(sid) = show_id {
+        match state.db.get_profiles_for_show(sid) {
+            Ok(profiles) => profiles.first().and_then(|p| p.id),
+            Err(e) => {
+                tracing::debug!("Failed to get profiles for show {}: {}", sid, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+    
+    if profile_id.is_none() {
+        tracing::debug!("No Topaz profile found for show - skipping upscaling job creation");
+        return Ok(()); // No profile associated - skip upscaling
+    }
+    
+    // Create upscaling job for each MKV file
+    for mkv_file in mkv_files {
+        let file_path = mkv_file.to_string_lossy().to_string();
+        let job_id = format!("upscale_{}_{}", 
+            std::path::Path::new(&file_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown"),
+            chrono::Utc::now().timestamp());
+        
+        match state.db.create_upscaling_job(
+            &job_id,
+            &file_path,
+            show_id,
+            profile_id,
+            0, // Default priority
+        ) {
+            Ok(_) => {
+                tracing::info!("Created upscaling job {} for {}", job_id, file_path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create upscaling job for {}: {}", file_path, e);
+            }
+        }
+    }
+    
+    Ok(())
 }
 
 /// Get total size of a directory recursively
@@ -1650,6 +1783,8 @@ async fn process_queue(state: ApiState) {
     let drive_clone = drive_id.clone();
     let queue_id_clone = queue_id;
     let operation_id_clone = operation_id.clone();
+    let output_path_clone = request.output_path.clone();
+    let title_clone = request.title.clone();
     
     // Spawn rip operation
     tokio::spawn(async move {
@@ -1659,6 +1794,13 @@ async fn process_queue(state: ApiState) {
         if let Err(ref e) = result {
             fail_operation(&state_clone, &operation_id_clone, format!("{}", e)).await;
         } else {
+            // Try to create upscaling job if this was a video rip
+            if let Some(ref output_path) = output_path_clone {
+                if let Err(e) = create_upscaling_job_for_rip(&state_clone, output_path, title_clone.as_deref()).await {
+                    tracing::warn!("Failed to create upscaling job after queued rip: {}", e);
+                }
+            }
+            
             complete_operation(&state_clone, &operation_id_clone, Some("Queued rip completed successfully".to_string())).await;
         }
         
@@ -1743,9 +1885,76 @@ async fn get_rip_history_handler(
 }
 
 /// Get monitor operations (active operations)
+/// Get monitor operations (including upscaling jobs)
 async fn get_monitor_operations(State(state): State<ApiState>) -> Result<Json<Vec<Operation>>, ErrorResponse> {
     let operations = state.operations.read().await;
-    Ok(Json(operations.values().cloned().collect()))
+    let mut all_operations: Vec<Operation> = operations.values().cloned().collect();
+    
+    // Also include upscaling jobs as operations
+    match state.db.get_upscaling_jobs(None) {
+        Ok(jobs) => {
+            for job in jobs {
+                // Only show active or recent jobs
+                if job.status == crate::database::JobStatus::Processing 
+                   || job.status == crate::database::JobStatus::Assigned 
+                   || job.status == crate::database::JobStatus::Queued
+                   || job.status == crate::database::JobStatus::Completed 
+                   || job.status == crate::database::JobStatus::Failed {
+                    // Convert job to operation format
+                    let operation_id = format!("upscale_{}", job.job_id);
+                    
+                    // Check if we already have this operation
+                    if all_operations.iter().any(|op| op.operation_id == operation_id) {
+                        continue;
+                    }
+                    
+                    let status = match job.status {
+                        crate::database::JobStatus::Queued => OperationStatus::Queued,
+                        crate::database::JobStatus::Assigned => OperationStatus::Queued,
+                        crate::database::JobStatus::Processing => OperationStatus::Running,
+                        crate::database::JobStatus::Completed => OperationStatus::Completed,
+                        crate::database::JobStatus::Failed => OperationStatus::Failed,
+                        crate::database::JobStatus::Cancelled => OperationStatus::Failed,
+                    };
+                    
+                    let input_file = std::path::Path::new(&job.input_file_path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    
+                    let message = if let Some(profile_id) = job.topaz_profile_id {
+                        format!("Upscaling {} with profile {}", input_file, profile_id)
+                    } else {
+                        format!("Upscaling {}", input_file)
+                    };
+                    
+                    // Get started_at - use created_at if started_at is None
+                    let started_at = job.started_at
+                        .unwrap_or_else(|| job.created_at);
+                    
+                    let operation = Operation {
+                        operation_id: operation_id.clone(),
+                        operation_type: OperationType::Upscale,
+                        status,
+                        title: Some(format!("Upscale: {}", input_file)),
+                        message,
+                        progress: job.progress,
+                        drive: None,
+                        started_at,
+                        completed_at: job.completed_at,
+                        error: job.error_message,
+                    };
+                    
+                    all_operations.push(operation);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch upscaling jobs for monitor: {}", e);
+        }
+    }
+    
+    Ok(Json(all_operations))
 }
 
 /// Get monitor drives information
@@ -1779,6 +1988,664 @@ async fn update_preferences(
             error: format!("Failed to update preferences: {}", e),
         }),
     }
+}
+
+// Agent API endpoints
+
+/// Agent registration request
+#[derive(Debug, Deserialize)]
+struct AgentRegistrationRequest {
+    agent_id: String,
+    name: String,
+    platform: String,
+    capabilities: Option<String>,
+    topaz_version: Option<String>,
+    api_key: Option<String>,
+}
+
+/// Register a new agent or update existing agent
+async fn register_agent(
+    State(state): State<ApiState>,
+    Json(request): Json<AgentRegistrationRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    // Extract IP address from request (if available)
+    let ip_address: Option<&str> = None; // TODO: Extract from request headers
+    
+    match state.db.register_agent(
+        &request.agent_id,
+        &request.name,
+        &request.platform,
+        ip_address.as_deref(),
+        request.capabilities.as_deref(),
+        request.topaz_version.as_deref(),
+        request.api_key.as_deref(),
+    ) {
+        Ok(_) => {
+            info!("Agent registered: {} ({})", request.name, request.agent_id);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "agent_id": request.agent_id,
+                "message": "Agent registered successfully"
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to register agent: {}", e),
+        }),
+    }
+}
+
+/// Update agent heartbeat
+#[derive(Debug, Deserialize)]
+struct AgentHeartbeatRequest {
+    status: Option<String>,
+}
+
+async fn agent_heartbeat(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+    Json(request): Json<AgentHeartbeatRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_agent_heartbeat(&agent_id, request.status.as_deref()) {
+        Ok(_) => {
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "agent_id": agent_id
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update heartbeat: {}", e),
+        }),
+    }
+}
+
+/// Get list of all agents
+async fn get_agents(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<AgentInfo>>, ErrorResponse> {
+    match state.db.get_agents() {
+        Ok(agents) => Ok(Json(agents)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get agents: {}", e),
+        }),
+    }
+}
+
+/// Get pending instructions for an agent
+async fn get_agent_instructions(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, ErrorResponse> {
+    match state.db.get_pending_instructions(Some(&agent_id)) {
+        Ok(mut instructions) => {
+            // Auto-assign the first pending instruction to this agent if not already assigned
+            if let Some(instruction) = instructions.first_mut() {
+                if let Some(id_val) = instruction.get("id").and_then(|v| v.as_i64()) {
+                    if instruction.get("assigned_to_agent_id").is_none() {
+                        // Assign instruction to this agent
+                        if let Err(e) = state.db.assign_instruction_to_agent(id_val, &agent_id) {
+                            return Err(ErrorResponse {
+                                error: format!("Failed to assign instruction: {}", e),
+                            });
+                        }
+                        instruction["assigned_to_agent_id"] = serde_json::Value::String(agent_id.clone());
+                        instruction["status"] = serde_json::Value::String("assigned".to_string());
+                    }
+                }
+            }
+            Ok(Json(instructions))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get instructions: {}", e),
+        }),
+    }
+}
+
+/// Create a new instruction
+#[derive(Debug, Deserialize)]
+struct CreateInstructionRequest {
+    instruction_type: String,
+    payload: serde_json::Value,
+}
+
+async fn create_instruction(
+    State(state): State<ApiState>,
+    Json(request): Json<CreateInstructionRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.create_instruction(&request.instruction_type, &request.payload) {
+        Ok(id) => Ok(Json(serde_json::json!({
+            "success": true,
+            "instruction_id": id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to create instruction: {}", e),
+        }),
+    }
+}
+
+/// Assign an instruction to an agent
+#[derive(Debug, Deserialize)]
+struct AssignInstructionRequest {
+    agent_id: String,
+}
+
+async fn assign_instruction(
+    State(state): State<ApiState>,
+    axum::extract::Path(instruction_id): axum::extract::Path<i64>,
+    Json(request): Json<AssignInstructionRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.assign_instruction_to_agent(instruction_id, &request.agent_id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "instruction_id": instruction_id,
+            "agent_id": request.agent_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to assign instruction: {}", e),
+        }),
+    }
+}
+
+/// Mark instruction as started
+async fn start_instruction(
+    State(state): State<ApiState>,
+    axum::extract::Path(instruction_id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.start_instruction(instruction_id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "instruction_id": instruction_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to start instruction: {}", e),
+        }),
+    }
+}
+
+/// Mark instruction as completed
+async fn complete_instruction(
+    State(state): State<ApiState>,
+    axum::extract::Path(instruction_id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.complete_instruction(instruction_id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "instruction_id": instruction_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to complete instruction: {}", e),
+        }),
+    }
+}
+
+/// Mark instruction as failed
+#[derive(Debug, Deserialize)]
+struct FailInstructionRequest {
+    error_message: String,
+}
+
+async fn fail_instruction(
+    State(state): State<ApiState>,
+    axum::extract::Path(instruction_id): axum::extract::Path<i64>,
+    Json(request): Json<FailInstructionRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.fail_instruction(instruction_id, &request.error_message) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "instruction_id": instruction_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to fail instruction: {}", e),
+        }),
+    }
+}
+
+// Topaz Profile API endpoints
+
+/// Get all Topaz profiles
+async fn get_topaz_profiles(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<TopazProfile>>, ErrorResponse> {
+    match state.db.get_topaz_profiles() {
+        Ok(profiles) => Ok(Json(profiles)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get Topaz profiles: {}", e),
+        }),
+    }
+}
+
+/// Create a new Topaz profile
+#[derive(Debug, Deserialize)]
+struct CreateTopazProfileRequest {
+    name: String,
+    description: Option<String>,
+    settings_json: serde_json::Value,
+}
+
+async fn create_topaz_profile(
+    State(state): State<ApiState>,
+    Json(request): Json<CreateTopazProfileRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.create_topaz_profile(
+        &request.name,
+        request.description.as_deref(),
+        &request.settings_json,
+    ) {
+        Ok(id) => Ok(Json(serde_json::json!({
+            "success": true,
+            "profile_id": id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to create Topaz profile: {}", e),
+        }),
+    }
+}
+
+/// Get a Topaz profile by ID
+async fn get_topaz_profile(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<TopazProfile>, ErrorResponse> {
+    match state.db.get_topaz_profile(id) {
+        Ok(Some(profile)) => Ok(Json(profile)),
+        Ok(None) => Err(ErrorResponse {
+            error: "Topaz profile not found".to_string(),
+        }),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get Topaz profile: {}", e),
+        }),
+    }
+}
+
+/// Update a Topaz profile
+#[derive(Debug, Deserialize)]
+struct UpdateTopazProfileRequest {
+    name: Option<String>,
+    description: Option<String>,
+    settings_json: Option<serde_json::Value>,
+}
+
+async fn update_topaz_profile(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(request): Json<UpdateTopazProfileRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_topaz_profile(
+        id,
+        request.name.as_deref(),
+        request.description.as_deref(),
+        request.settings_json.as_ref(),
+    ) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "profile_id": id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update Topaz profile: {}", e),
+        }),
+    }
+}
+
+/// Delete a Topaz profile
+async fn delete_topaz_profile(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.delete_topaz_profile(id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "profile_id": id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to delete Topaz profile: {}", e),
+        }),
+    }
+}
+
+/// Associate a Topaz profile with a show
+async fn associate_profile_with_show(
+    State(state): State<ApiState>,
+    axum::extract::Path((profile_id, show_id)): axum::extract::Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.associate_profile_with_show(show_id, profile_id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "profile_id": profile_id,
+            "show_id": show_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to associate profile with show: {}", e),
+        }),
+    }
+}
+
+/// Remove association between a Topaz profile and a show
+async fn remove_profile_from_show(
+    State(state): State<ApiState>,
+    axum::extract::Path((profile_id, show_id)): axum::extract::Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.remove_profile_from_show(show_id, profile_id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "profile_id": profile_id,
+            "show_id": show_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to remove profile from show: {}", e),
+        }),
+    }
+}
+
+/// Get Topaz profiles associated with a show
+async fn get_profiles_for_show(
+    State(state): State<ApiState>,
+    axum::extract::Path(show_id): axum::extract::Path<i64>,
+) -> Result<Json<Vec<TopazProfile>>, ErrorResponse> {
+    match state.db.get_profiles_for_show(show_id) {
+        Ok(profiles) => Ok(Json(profiles)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get profiles for show: {}", e),
+        }),
+    }
+}
+
+// Upscaling Job API endpoints
+
+/// Get all upscaling jobs
+async fn get_upscaling_jobs(
+    State(state): State<ApiState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<UpscalingJob>>, ErrorResponse> {
+    let status_filter = params.get("status")
+        .and_then(|s| Some(JobStatus::from_string(s)));
+    
+    match state.db.get_upscaling_jobs(status_filter) {
+        Ok(jobs) => Ok(Json(jobs)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get upscaling jobs: {}", e),
+        }),
+    }
+}
+
+/// Create a new upscaling job
+#[derive(Debug, Deserialize)]
+struct CreateUpscalingJobRequest {
+    job_id: String,
+    input_file_path: String,
+    show_id: Option<i64>,
+    topaz_profile_id: Option<i64>,
+    priority: Option<i32>,
+}
+
+async fn create_upscaling_job(
+    State(state): State<ApiState>,
+    Json(request): Json<CreateUpscalingJobRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let priority = request.priority.unwrap_or(0);
+    
+    match state.db.create_upscaling_job(
+        &request.job_id,
+        &request.input_file_path,
+        request.show_id,
+        request.topaz_profile_id,
+        priority,
+    ) {
+        Ok(id) => Ok(Json(serde_json::json!({
+            "success": true,
+            "job_id": request.job_id,
+            "id": id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to create upscaling job: {}", e),
+        }),
+    }
+}
+
+/// Get next available upscaling job for assignment
+async fn get_next_upscaling_job(
+    State(state): State<ApiState>,
+) -> Result<Json<Option<UpscalingJob>>, ErrorResponse> {
+    match state.db.get_next_upscaling_job() {
+        Ok(job) => Ok(Json(job)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get next upscaling job: {}", e),
+        }),
+    }
+}
+
+/// Assign an upscaling job to an agent
+#[derive(Debug, Deserialize)]
+struct AssignUpscalingJobRequest {
+    agent_id: String,
+    instruction_id: Option<i64>,
+}
+
+async fn assign_upscaling_job(
+    State(state): State<ApiState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+    Json(request): Json<AssignUpscalingJobRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.assign_upscaling_job(&job_id, &request.agent_id, request.instruction_id) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "job_id": job_id,
+            "agent_id": request.agent_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to assign upscaling job: {}", e),
+        }),
+    }
+}
+
+/// Update upscaling job status
+#[derive(Debug, Deserialize)]
+struct UpdateUpscalingJobStatusRequest {
+    status: String,
+    progress: Option<f32>,
+    error_message: Option<String>,
+}
+
+async fn update_upscaling_job_status(
+    State(state): State<ApiState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+    Json(request): Json<UpdateUpscalingJobStatusRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let status = JobStatus::from_string(&request.status);
+    
+    match state.db.update_upscaling_job_status(
+        &job_id,
+        status,
+        request.progress,
+        request.error_message.as_deref(),
+    ) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "job_id": job_id
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update upscaling job status: {}", e),
+        }),
+    }
+}
+
+/// Update upscaling job output path
+#[derive(Debug, Deserialize)]
+struct UpdateUpscalingJobOutputRequest {
+    output_file_path: String,
+}
+
+async fn update_upscaling_job_output(
+    State(state): State<ApiState>,
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+    Json(request): Json<UpdateUpscalingJobOutputRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_upscaling_job_output(&job_id, &request.output_file_path) {
+        Ok(_) => Ok(Json(serde_json::json!({
+            "success": true,
+            "job_id": job_id,
+            "output_file_path": request.output_file_path
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update upscaling job output: {}", e),
+        }),
+    }
+}
+
+// File Transfer API endpoints
+
+/// Get agent file storage directory
+fn get_agent_storage_dir() -> PathBuf {
+    if let Some(home) = dirs::home_dir() {
+        home.join(".config").join("ripley").join("agent_files")
+    } else {
+        PathBuf::from("agent_files")
+    }
+}
+
+/// Upload file from agent (multipart form data)
+async fn upload_file(
+    State(state): State<ApiState>,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    use tokio::io::AsyncWriteExt;
+    
+    let storage_dir = get_agent_storage_dir();
+    tokio::fs::create_dir_all(&storage_dir).await
+        .map_err(|e| ErrorResponse {
+            error: format!("Failed to create storage directory: {}", e),
+        })?;
+    
+    let mut agent_id: Option<String> = None;
+    let mut job_id: Option<String> = None;
+    let mut file_path: Option<PathBuf> = None;
+    
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| ErrorResponse {
+            error: format!("Failed to read multipart field: {}", e),
+        })? {
+        let field_name = field.name();
+        
+        match field_name {
+            Some("agent_id") => {
+                let data = field.text().await
+                    .map_err(|e| ErrorResponse {
+                        error: format!("Failed to read agent_id: {}", e),
+                    })?;
+                agent_id = Some(data);
+            }
+            Some("job_id") => {
+                let data = field.text().await
+                    .map_err(|e| ErrorResponse {
+                        error: format!("Failed to read job_id: {}", e),
+                    })?;
+                job_id = Some(data);
+            }
+            Some("file") => {
+                let filename = field.file_name()
+                    .ok_or_else(|| ErrorResponse {
+                        error: "Missing filename in file field".to_string(),
+                    })?
+                    .to_string();
+                
+                let dest_path = storage_dir.join(&filename);
+                
+                // Ensure parent directory exists
+                if let Some(parent) = dest_path.parent() {
+                    tokio::fs::create_dir_all(parent).await
+                        .map_err(|e| ErrorResponse {
+                            error: format!("Failed to create directory: {}", e),
+                        })?;
+                }
+                
+                // Save file - write directly in chunks
+                let mut file = tokio::fs::File::create(&dest_path).await
+                    .map_err(|e| ErrorResponse {
+                        error: format!("Failed to create file: {}", e),
+                    })?;
+                
+                // Read field bytes directly
+                let bytes = field.bytes().await
+                    .map_err(|e| ErrorResponse {
+                        error: format!("Failed to read file data: {}", e),
+                    })?;
+                
+                file.write_all(&bytes).await
+                    .map_err(|e| ErrorResponse {
+                        error: format!("Failed to write file: {}", e),
+                    })?;
+                
+                file_path = Some(dest_path);
+            }
+            _ => {}
+        }
+    }
+    
+    let file_path_str = file_path.ok_or_else(|| ErrorResponse {
+        error: "No file provided".to_string(),
+    })?;
+    
+    // Update upscaling job with output path if job_id provided
+    if let Some(ref jid) = job_id {
+        if let Err(e) = state.db.update_upscaling_job_output(jid, file_path_str.to_string_lossy().as_ref()) {
+            tracing::warn!("Failed to update upscaling job output: {}", e);
+        }
+    }
+    
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "file_path": file_path_str.to_string_lossy(),
+        "agent_id": agent_id,
+        "job_id": job_id,
+    })))
+}
+
+/// Download file for agent processing
+async fn download_file(
+    State(_state): State<ApiState>,
+    axum::extract::Path(file_path): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, ErrorResponse> {
+    use axum::body::Body;
+    use axum::http::{header, StatusCode};
+    use tokio::fs;
+    
+    // Decode URL-encoded file path
+    let decoded_path = urlencoding::decode(&file_path)
+        .map_err(|_| ErrorResponse {
+            error: "Invalid file path encoding".to_string(),
+        })?;
+    
+    let path = PathBuf::from(decoded_path.as_ref());
+    
+    // Security: Ensure path is within allowed directories
+    if !path.exists() {
+        return Err(ErrorResponse {
+            error: "File not found".to_string(),
+        });
+    }
+    
+    // Read file
+    let file_contents = fs::read(&path).await
+        .map_err(|e| ErrorResponse {
+            error: format!("Failed to read file: {}", e),
+        })?;
+    
+    // Determine MIME type
+    let mime_type = mime_guess::from_path(&path)
+        .first_or_octet_stream();
+    
+    let filename = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+    
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime_type.as_ref())
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", filename))
+        .body(Body::from(file_contents))
+        .map_err(|e| ErrorResponse {
+            error: format!("Failed to build response: {}", e),
+        })?;
+    
+    Ok(response)
 }
 
 #[cfg(test)]

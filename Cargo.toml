@@ -16,7 +16,7 @@ crossterm = "0.28"
 tokio = { version = "1.40", features = ["full"] }
 
 # REST API
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
 include_dir = "0.7"

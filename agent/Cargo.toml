@@ -1,0 +1,38 @@
+[package]
+name = "ripley-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TUI
+ratatui = "0.28"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Configuration
+dirs = "5.0"
+toml = "0.8"
+
+# File operations
+walkdir = "2.5"
+
+# Command execution
+which = "6.0"
+

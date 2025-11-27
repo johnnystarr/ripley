@@ -12,6 +12,7 @@ import {
   faSearch,
   faUser,
   faChartLine,
+  faDesktop,
 } from '@fortawesome/free-solid-svg-icons';
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
@@ -27,6 +28,7 @@ import Shows from './pages/Shows';
 import Issues from './pages/Issues';
 import Preferences from './pages/Preferences';
 import Monitor from './pages/Monitor';
+import Agents from './pages/Agents';
 import GlobalSearch from './components/GlobalSearch';
 import Breadcrumbs from './components/Breadcrumbs';
 import { api } from './api';
@@ -182,6 +184,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
                 <Route path="/monitor" element={<ErrorBoundary><Monitor /></ErrorBoundary>} />
+                <Route path="/agents" element={<ErrorBoundary><Agents /></ErrorBoundary>} />
                 <Route path="/shows" element={<ErrorBoundary><Shows /></ErrorBoundary>} />
                 <Route path="/issues" element={<ErrorBoundary><Issues /></ErrorBoundary>} />
                 <Route path="/configuration" element={<ErrorBoundary><Configuration /></ErrorBoundary>} />
@@ -202,6 +205,7 @@ function Sidebar({ isOpen, wsConnected }) {
   const navItems = [
     { path: '/', icon: faHome, label: 'Dashboard' },
     { path: '/monitor', icon: faChartLine, label: 'Monitor' },
+    { path: '/agents', icon: faDesktop, label: 'GUI Agents' },
     { path: '/shows', icon: faTv, label: 'Shows' },
     { path: '/issues', icon: faExclamationTriangle, label: 'Issues' },
     { path: '/configuration', icon: faCog, label: 'Configuration' },
