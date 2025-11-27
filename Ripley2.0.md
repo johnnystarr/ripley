@@ -28,11 +28,11 @@
 - [x] Group settings into collapsible sections (API Keys, Ripping, Metadata, etc.)
 - [x] Add tooltips/help text explaining each setting
 - [x] Add "Reset to Defaults" button
-- [ ] Show config file location
+- [x] Show config file location
 - [x] Add config export/import feature
 
 ### Navigation & Layout
-- [ ] Add breadcrumbs navigation
+- [x] Add breadcrumbs navigation
 - [x] Improve mobile responsiveness (sidebar toggle, responsive layouts)
 - [x] Add global search (search across logs, shows, issues) with Cmd/Ctrl+K shortcut
 - [x] Add user preferences (logs per page, polling interval, etc.)

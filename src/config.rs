@@ -71,7 +71,7 @@ impl Default for Config {
 }
 
 /// Get the path to the config file (tries project root first, then ~/.config/ripley/config.yaml)
-fn get_config_path() -> PathBuf {
+pub fn get_config_path() -> PathBuf {
     // Try project root first
     let project_config = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.yaml");
     

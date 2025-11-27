@@ -59,10 +59,21 @@ export default function Configuration() {
   const [testingTMDB, setTestingTMDB] = useState(false);
   const [openAIValid, setOpenAIValid] = useState(null);
   const [tmdbValid, setTMDBValid] = useState(null);
+  const [configPath, setConfigPath] = useState(null);
 
   useEffect(() => {
     fetchConfig();
+    fetchConfigPath();
   }, []);
+
+  const fetchConfigPath = async () => {
+    try {
+      const data = await api.getConfigPath();
+      setConfigPath(data);
+    } catch (err) {
+      console.error('Failed to get config path:', err);
+    }
+  };
 
   const fetchConfig = async () => {
     try {
@@ -278,6 +289,25 @@ export default function Configuration() {
           </button>
         </div>
       </div>
+
+      {/* Config File Location */}
+      {configPath && (
+        <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-slate-400 mb-1">Configuration File</p>
+              <p className="font-mono text-xs text-slate-300">{configPath.path}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {configPath.exists ? (
+                <span className="px-2 py-1 bg-green-500/10 border border-green-500/30 text-green-400 text-xs rounded">Exists</span>
+              ) : (
+                <span className="px-2 py-1 bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs rounded">Not Found</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* API Keys Section */}
       <CollapsibleSection title="API Keys" icon={faKey} defaultOpen={true}>

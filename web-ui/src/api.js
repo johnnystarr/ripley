@@ -51,6 +51,11 @@ class ApiClient {
     });
   }
 
+  // Get config file path
+  async getConfigPath() {
+    return this.request('/config/path');
+  }
+
   // List optical drives
   async getDrives() {
     return this.request('/drives');

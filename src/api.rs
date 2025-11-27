@@ -273,6 +273,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/status", get(get_status))
         .route("/config", get(get_config))
         .route("/config", post(update_config))
+        .route("/config/path", get(get_config_path_handler))
         .route("/rip/start", post(start_rip))
         .route("/rip/stop", post(stop_rip))
         .route("/drives", get(list_drives))
@@ -328,6 +329,15 @@ async fn get_status(State(state): State<ApiState>) -> Json<RipStatus> {
 async fn get_config(State(state): State<ApiState>) -> Json<Config> {
     let config = state.config.read().await;
     Json(config.clone())
+}
+
+/// Get config file path
+async fn get_config_path_handler() -> Json<serde_json::Value> {
+    let path = crate::config::get_config_path();
+    Json(serde_json::json!({
+        "path": path.to_string_lossy().to_string(),
+        "exists": path.exists()
+    }))
 }
 
 /// Update configuration

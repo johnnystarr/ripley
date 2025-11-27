@@ -26,6 +26,7 @@ import Shows from './pages/Shows';
 import Issues from './pages/Issues';
 import Preferences from './pages/Preferences';
 import GlobalSearch from './components/GlobalSearch';
+import Breadcrumbs from './components/Breadcrumbs';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 1024); // Default closed on mobile
@@ -166,6 +167,7 @@ function App() {
           {/* Page content */}
           <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-900 p-6">
             <ErrorBoundary>
+              <Breadcrumbs />
               <Routes>
                 <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
                 <Route path="/shows" element={<ErrorBoundary><Shows /></ErrorBoundary>} />

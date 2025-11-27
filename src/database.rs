@@ -167,6 +167,7 @@ pub struct UserPreferences {
     pub logs_per_page: i64,
     pub polling_interval_ms: i64,
     pub theme: String,
+    pub sound_notifications: bool,
 }
 
 impl Default for UserPreferences {
@@ -175,6 +176,7 @@ impl Default for UserPreferences {
             logs_per_page: 100,
             polling_interval_ms: 3000,
             theme: "dark".to_string(),
+            sound_notifications: true,
         }
     }
 }
@@ -331,15 +333,16 @@ impl Database {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 logs_per_page INTEGER DEFAULT 100,
                 polling_interval_ms INTEGER DEFAULT 3000,
-                theme TEXT DEFAULT 'dark'
+                theme TEXT DEFAULT 'dark',
+                sound_notifications INTEGER DEFAULT 1
             )",
             [],
         )?;
 
         // Insert default preferences if table is empty
         conn.execute(
-            "INSERT OR IGNORE INTO user_preferences (id, logs_per_page, polling_interval_ms, theme)
-             VALUES (1, 100, 3000, 'dark')",
+            "INSERT OR IGNORE INTO user_preferences (id, logs_per_page, polling_interval_ms, theme, sound_notifications)
+             VALUES (1, 100, 3000, 'dark', 1)",
             [],
         )?;
 
@@ -832,13 +835,14 @@ impl Database {
     pub fn get_preferences(&self) -> Result<UserPreferences> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT logs_per_page, polling_interval_ms, theme FROM user_preferences WHERE id = 1",
+            "SELECT logs_per_page, polling_interval_ms, theme, sound_notifications FROM user_preferences WHERE id = 1",
             [],
             |row| {
                 Ok(UserPreferences {
                     logs_per_page: row.get(0)?,
                     polling_interval_ms: row.get(1)?,
                     theme: row.get(2)?,
+                    sound_notifications: row.get::<_, i64>(3)? != 0,
                 })
             },
         );
@@ -854,8 +858,8 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         conn.execute(
-            "UPDATE user_preferences SET logs_per_page = ?1, polling_interval_ms = ?2, theme = ?3 WHERE id = 1",
-            params![prefs.logs_per_page, prefs.polling_interval_ms, prefs.theme],
+            "UPDATE user_preferences SET logs_per_page = ?1, polling_interval_ms = ?2, theme = ?3, sound_notifications = ?4 WHERE id = 1",
+            params![prefs.logs_per_page, prefs.polling_interval_ms, prefs.theme, prefs.sound_notifications as i64],
         )?;
 
         Ok(())

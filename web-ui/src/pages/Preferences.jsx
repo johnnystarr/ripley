@@ -136,6 +136,31 @@ export default function Preferences() {
             </div>
           </div>
 
+          {/* Sound notifications */}
+          <div>
+            <label className="block text-slate-400 text-sm mb-2 flex items-center gap-2">
+              Sound notifications
+              <Tooltip text="Play a sound when rip operations complete successfully" />
+            </label>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => updatePreference('sound_notifications', !preferences.sound_notifications)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  preferences.sound_notifications ? 'bg-cyan-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    preferences.sound_notifications ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+              <span className="text-slate-300 text-sm">
+                {preferences.sound_notifications ? 'Enabled' : 'Disabled'}
+              </span>
+            </div>
+          </div>
+
           {/* Theme (future feature) */}
           <div>
             <label className="block text-slate-400 text-sm mb-2 flex items-center gap-2">
