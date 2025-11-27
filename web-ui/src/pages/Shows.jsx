@@ -168,12 +168,15 @@ export default function Shows() {
   }, [searchQuery, sortBy, itemsPerPage]);
 
   const handleSelectAll = useCallback(() => {
-    if (selectedShows.size === paginatedShows.length) {
+    if (selectedShows.size === paginatedShows.length && 
+        paginatedShows.every(s => selectedShows.has(s.id))) {
       setSelectedShows(new Set());
     } else {
-      setSelectedShows(new Set(paginatedShows.map(s => s.id)));
+      const newSelected = new Set(selectedShows);
+      paginatedShows.forEach(s => newSelected.add(s.id));
+      setSelectedShows(newSelected);
     }
-  }, [selectedShows.size, paginatedShows]);
+  }, [selectedShows, paginatedShows]);
 
   const handleBulkDelete = useCallback(async () => {
     if (selectedShows.size === 0) return;
@@ -293,6 +296,17 @@ export default function Shows() {
     
     return sorted;
   }, [shows, searchQuery, sortBy]);
+
+  // Calculate pagination
+  const totalPages = useMemo(() => {
+    return Math.ceil(filteredShows.length / itemsPerPage);
+  }, [filteredShows.length, itemsPerPage]);
+
+  const paginatedShows = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredShows.slice(startIndex, endIndex);
+  }, [filteredShows, currentPage, itemsPerPage]);
 
   if (loading) {
     return (
@@ -473,8 +487,8 @@ export default function Shows() {
                 onClick={handleSelectAll}
                 className="text-cyan-400 hover:text-cyan-300 transition-colors"
               >
-                <FontAwesomeIcon icon={selectedShows.size === paginatedShows.length ? faCheckSquare : faSquare} className="mr-2" />
-                {selectedShows.size === paginatedShows.length ? 'Deselect All' : 'Select All'}
+                <FontAwesomeIcon icon={paginatedShows.length > 0 && paginatedShows.every(s => selectedShows.has(s.id)) ? faCheckSquare : faSquare} className="mr-2" />
+                {paginatedShows.length > 0 && paginatedShows.every(s => selectedShows.has(s.id)) ? 'Deselect All' : 'Select All'}
               </button>
               <span className="text-slate-400 text-sm">
                 {selectedShows.size} selected

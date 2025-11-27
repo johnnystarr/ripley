@@ -65,6 +65,41 @@ export default function Issues() {
     }
   }, [fetchIssues]);
 
+  const calculateResolutionTime = useCallback((issue) => {
+    if (!issue.resolved_at) return null;
+    const startTime = new Date(issue.timestamp).getTime();
+    const endTime = new Date(issue.resolved_at).getTime();
+    const diffMs = endTime - startTime;
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    if (diffHours > 0) {
+      return `${diffHours}h ${diffMinutes}m`;
+    }
+    return `${diffMinutes}m`;
+  }, []);
+
+  // Filter and sort issues
+  const filteredIssues = useMemo(() => {
+    let filtered = issues;
+    
+    // Filter by status
+    switch (filter) {
+      case 'active':
+        filtered = filtered.filter(i => !i.resolved);
+        break;
+      case 'resolved':
+        filtered = filtered.filter(i => i.resolved);
+        break;
+    }
+    
+    // Filter by type
+    if (typeFilter !== 'all') {
+      filtered = filtered.filter(i => i.issue_type?.toLowerCase() === typeFilter);
+    }
+    
+    return filtered;
+  }, [issues, filter, typeFilter]);
+
   const handleExportIssues = useCallback(() => {
     const exportData = filteredIssues.map(issue => ({
       id: issue.id,
@@ -91,7 +126,7 @@ export default function Issues() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     toast.success('Issues exported');
-  }, [filteredIssues]);
+  }, [filteredIssues, calculateResolutionTime]);
 
   const fetchIssueNotes = useCallback(async (issueId) => {
     try {
@@ -180,19 +215,6 @@ export default function Issues() {
     setResolutionNotesValue('');
   }, []);
 
-  const calculateResolutionTime = useCallback((issue) => {
-    if (!issue.resolved_at) return null;
-    const startTime = new Date(issue.timestamp).getTime();
-    const endTime = new Date(issue.resolved_at).getTime();
-    const diffMs = endTime - startTime;
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    if (diffHours > 0) {
-      return `${diffHours}h ${diffMinutes}m`;
-    }
-    return `${diffMinutes}m`;
-  }, []);
-
   const toggleIssueLogs = useCallback(async (issue) => {
     if (expandedIssue === issue.id) {
       setExpandedIssue(null);
@@ -256,27 +278,6 @@ export default function Issues() {
     }
   }, []);
 
-  const filteredIssues = useMemo(() => {
-    let filtered = issues;
-    
-    // Filter by status
-    switch (filter) {
-      case 'active':
-        filtered = filtered.filter(i => !i.resolved);
-        break;
-      case 'resolved':
-        filtered = filtered.filter(i => i.resolved);
-        break;
-    }
-    
-    // Filter by type
-    if (typeFilter !== 'all') {
-      filtered = filtered.filter(i => i.issue_type?.toLowerCase() === typeFilter);
-    }
-    
-    return filtered;
-  }, [issues, filter, typeFilter]);
-  
   // Get unique issue types for filter badges
   const issueTypes = useMemo(() => {
     const types = new Set(issues.map(i => i.issue_type?.toLowerCase()).filter(Boolean));
