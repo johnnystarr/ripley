@@ -25,7 +25,7 @@ dev:
 	@echo "   API server: http://localhost:3000/api"
 	@echo "   Web UI: http://localhost:5173"
 	@echo ""
-	@bash -c 'set -m; trap "trap - SIGTERM && kill -- -$$$$" SIGINT SIGTERM EXIT; (cd web-ui && npm run dev) & cargo run -- serve --dev --port 3000'
+	@./scripts/dev.sh
 
 # Run tests
 test:
@@ -36,7 +36,7 @@ test:
 # Run Linux tests via Podman
 test-linux:
 	@echo "🐳 Running Linux tests via Podman..."
-	@./test-linux.sh
+	@./scripts/test-linux.sh
 
 # Run all tests (macOS and Linux)
 test-all: test test-linux
@@ -104,9 +104,9 @@ help:
 	@echo "  make build      - Build release binary (includes web UI)"
 	@echo "  make debug      - Build debug binary (includes web UI)"
 	@echo "  make dev        - Run development server with hot reload"
-	@echo "  make test       - Run macOS tests
-  make test-linux - Run Linux tests via Podman
-  make test-all   - Run all tests (macOS and Linux)"
+	@echo "  make test       - Run macOS tests"
+	@echo "  make test-linux - Run Linux tests via Podman"
+	@echo "  make test-all   - Run all tests (macOS and Linux)"
 	@echo "  make clean      - Remove build artifacts"
 	@echo "  make install    - Install to ~/.cargo/bin"
 	@echo "  make uninstall  - Remove installed binary"

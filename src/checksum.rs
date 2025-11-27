@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::info;
 
 /// Calculate SHA-256 checksum of a file

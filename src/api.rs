@@ -704,13 +704,6 @@ async fn run_rip_operation(
     let mut attempt = 1u32;
     let max_attempts = if retry_config.enabled { retry_config.max_attempts } else { 1 };
     
-    // Get title once at the start
-    let title = if request.title.is_some() {
-        request.title.clone()
-    } else {
-        state.db.get_last_title().ok().flatten()
-    };
-    
     while attempt <= max_attempts {
         if attempt > 1 {
             // Calculate exponential backoff delay
