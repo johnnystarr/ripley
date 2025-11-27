@@ -438,6 +438,8 @@ pub enum ApiEvent {
     OperationProgress { operation_id: String, progress: f32, message: String },
     OperationCompleted { operation_id: String },
     OperationFailed { operation_id: String, error: String },
+    AgentStatusChanged { agent_id: String, status: String, last_seen: String, operation_id: Option<String> },
+    UpscalingJobStatusChanged { job_id: String, status: String, progress: f32, error_message: Option<String>, operation_id: Option<String> },
 }
 
 /// Request body for starting a rip operation
@@ -520,6 +522,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/agents/:agent_id/instructions", get(get_agent_instructions))
         .route("/agents/:agent_id/output-location", get(get_agent_output_location))
         .route("/agents/:agent_id/output-location", put(update_agent_output_location))
+        .route("/agents/:agent_id/disconnect", post(disconnect_agent))
         .route("/agents/instructions", post(create_instruction))
         .route("/agents/instructions/:id/assign", post(assign_instruction))
         .route("/agents/instructions/:id/start", post(start_instruction))
@@ -2044,6 +2047,15 @@ async fn register_agent(
     ) {
         Ok(_) => {
             info!("Agent registered: {} ({})", request.name, request.agent_id);
+            
+            // Broadcast agent status change via WebSocket
+            let _ = state.event_tx.send(ApiEvent::AgentStatusChanged {
+                agent_id: request.agent_id.clone(),
+                status: "online".to_string(),
+                last_seen: chrono::Utc::now().to_rfc3339(),
+                operation_id: None,
+            });
+            
             Ok(Json(serde_json::json!({
                 "success": true,
                 "agent_id": request.agent_id,
@@ -2069,6 +2081,14 @@ async fn agent_heartbeat(
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
     match state.db.update_agent_heartbeat(&agent_id, request.status.as_deref()) {
         Ok(_) => {
+            // Broadcast agent heartbeat update via WebSocket
+            let _ = state.event_tx.send(ApiEvent::AgentStatusChanged {
+                agent_id: agent_id.clone(),
+                status: request.status.as_deref().unwrap_or("online").to_string(),
+                last_seen: chrono::Utc::now().to_rfc3339(),
+                operation_id: None,
+            });
+            
             Ok(Json(serde_json::json!({
                 "success": true,
                 "agent_id": agent_id
@@ -2159,6 +2179,33 @@ async fn update_agent_output_location(
         }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to update output location: {}", e),
+        }),
+    }
+}
+
+/// Disconnect an agent (mark as offline)
+async fn disconnect_agent(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.disconnect_agent(&agent_id) {
+        Ok(_) => {
+            // Broadcast agent status change via WebSocket
+            let _ = state.event_tx.send(ApiEvent::AgentStatusChanged {
+                agent_id: agent_id.clone(),
+                status: "offline".to_string(),
+                last_seen: chrono::Utc::now().to_rfc3339(),
+                operation_id: None,
+            });
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "agent_id": agent_id,
+                "message": "Agent disconnected"
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to disconnect agent: {}", e),
         }),
     }
 }

@@ -317,6 +317,12 @@ class ApiClient {
     });
   }
 
+  async disconnectAgent(agentId) {
+    return this.request(`/agents/${agentId}/disconnect`, {
+      method: 'POST',
+    });
+  }
+
   // Topaz Profile endpoints
   async getTopazProfiles() {
     return this.request('/topaz-profiles');

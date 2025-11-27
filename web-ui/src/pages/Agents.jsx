@@ -20,6 +20,8 @@ import {
   faCheck,
   faChevronDown,
   faChevronUp,
+  faPowerOff,
+  faHistory,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -86,8 +88,17 @@ export default function Agents() {
       ));
     });
 
+    const unsubscribeJobStatus = wsManager.on('UpscalingJobStatusChanged', (data) => {
+      setJobs(prev => prev.map(job => 
+        job.job_id === data.job_id
+          ? { ...job, status: data.status, progress: data.progress, error_message: data.error_message }
+          : job
+      ));
+    });
+
     return () => {
       unsubscribeAgentStatus();
+      unsubscribeJobStatus();
     };
   }, []);
 
@@ -267,6 +278,20 @@ export default function Agents() {
     setOutputLocationValue('');
   }, []);
 
+  const handleDisconnectAgent = useCallback(async (agentId) => {
+    if (!window.confirm('Are you sure you want to disconnect this agent? This will mark it as offline.')) {
+      return;
+    }
+
+    try {
+      await api.disconnectAgent(agentId);
+      toast.success('Agent disconnected');
+      fetchAgents();
+    } catch (err) {
+      toast.error('Failed to disconnect agent: ' + err.message);
+    }
+  }, [fetchAgents]);
+
   const activeJobs = jobs.filter(job => job.status === 'processing' || job.status === 'assigned');
   const onlineAgents = agents.filter(agent => agent.status === 'online');
   const busyAgents = agents.filter(agent => agent.status === 'busy');
@@ -337,7 +362,11 @@ export default function Agents() {
           ) : (
             agents.map((agent) => {
               const isExpanded = expandedAgent === agent.agent_id;
-              const agentJobs = jobs.filter(job => job.agent_id === agent.agent_id);
+              const allAgentJobs = jobs.filter(job => job.agent_id === agent.agent_id);
+              const activeJobs = allAgentJobs.filter(job => job.status === 'processing' || job.status === 'assigned');
+              const queuedJobs = allAgentJobs.filter(job => job.status === 'queued');
+              const completedJobs = allAgentJobs.filter(job => job.status === 'completed').slice(0, 10);
+              const failedJobs = allAgentJobs.filter(job => job.status === 'failed').slice(0, 10);
               
               return (
                 <div
@@ -420,6 +449,15 @@ export default function Agents() {
                           <FontAwesomeIcon icon={faClock} className="mr-1" />
                           {formatRelativeTime(agent.last_seen)}
                         </span>
+                        {agent.status === 'online' && (
+                          <button
+                            onClick={() => handleDisconnectAgent(agent.agent_id)}
+                            className="px-2 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                            title="Disconnect agent"
+                          >
+                            <FontAwesomeIcon icon={faPowerOff} />
+                          </button>
+                        )}
                         <button
                           onClick={() => setExpandedAgent(isExpanded ? null : agent.agent_id)}
                           className="text-slate-400 hover:text-slate-300 transition-colors"
@@ -430,26 +468,93 @@ export default function Agents() {
                     </div>
 
                     {isExpanded && (
-                      <div className="mt-4 pt-4 border-t border-slate-700">
-                        <h4 className="text-sm font-semibold text-slate-300 mb-2">Active Jobs</h4>
-                        {agentJobs.length === 0 ? (
-                          <p className="text-slate-500 text-sm">No active jobs</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {agentJobs.map((job) => (
-                              <div key={job.job_id} className="bg-slate-900/50 rounded p-2 text-xs">
-                                <div className="flex justify-between">
-                                  <span className="text-slate-300">{job.job_id}</span>
-                                  <span className="text-cyan-400">{Math.round(job.progress)}%</span>
+                      <div className="mt-4 pt-4 border-t border-slate-700 space-y-4">
+                        {/* Active Jobs */}
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-300 mb-2">Active Jobs</h4>
+                          {activeJobs.length === 0 ? (
+                            <p className="text-slate-500 text-sm">No active jobs</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {activeJobs.map((job) => (
+                                <div key={job.job_id} className="bg-slate-900/50 rounded p-2 text-xs">
+                                  <div className="flex justify-between mb-1">
+                                    <span className="text-slate-300 font-mono text-xs">{job.job_id.substring(0, 8)}...</span>
+                                    <span className="text-cyan-400 font-medium">{Math.round(job.progress)}%</span>
+                                  </div>
+                                  <div className="text-slate-400 text-xs mb-1 truncate">{job.input_file_path}</div>
+                                  <div className="w-full bg-slate-800 rounded-full h-1.5">
+                                    <div
+                                      className="bg-cyan-500 h-1.5 rounded-full transition-all"
+                                      style={{ width: `${Math.min(job.progress, 100)}%` }}
+                                    />
+                                  </div>
                                 </div>
-                                <div className="w-full bg-slate-800 rounded-full h-1 mt-1">
-                                  <div
-                                    className="bg-cyan-500 h-1 rounded-full transition-all"
-                                    style={{ width: `${Math.min(job.progress, 100)}%` }}
-                                  />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Queued Jobs */}
+                        {queuedJobs.length > 0 && (
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-2">Queued Jobs</h4>
+                            <div className="space-y-2">
+                              {queuedJobs.map((job) => (
+                                <div key={job.job_id} className="bg-slate-900/50 rounded p-2 text-xs">
+                                  <div className="flex justify-between mb-1">
+                                    <span className="text-slate-300 font-mono text-xs">{job.job_id.substring(0, 8)}...</span>
+                                    <span className="text-yellow-400 text-xs">Queued</span>
+                                  </div>
+                                  <div className="text-slate-400 text-xs truncate">{job.input_file_path}</div>
                                 </div>
-                              </div>
-                            ))}
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Job History */}
+                        {(completedJobs.length > 0 || failedJobs.length > 0) && (
+                          <div>
+                            <h4 className="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2">
+                              <FontAwesomeIcon icon={faHistory} />
+                              Recent Job History
+                            </h4>
+                            <div className="space-y-2 max-h-48 overflow-y-auto">
+                              {completedJobs.map((job) => (
+                                <div key={job.job_id} className="bg-slate-900/50 rounded p-2 text-xs">
+                                  <div className="flex justify-between mb-1">
+                                    <span className="text-slate-300 font-mono text-xs">{job.job_id.substring(0, 8)}...</span>
+                                    <span className="text-green-400 text-xs">Completed</span>
+                                  </div>
+                                  <div className="text-slate-400 text-xs truncate">{job.input_file_path}</div>
+                                  {job.completed_at && (
+                                    <div className="text-slate-500 text-xs mt-1">
+                                      {formatRelativeTime(job.completed_at)}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                              {failedJobs.map((job) => (
+                                <div key={job.job_id} className="bg-slate-900/50 rounded p-2 text-xs">
+                                  <div className="flex justify-between mb-1">
+                                    <span className="text-slate-300 font-mono text-xs">{job.job_id.substring(0, 8)}...</span>
+                                    <span className="text-red-400 text-xs">Failed</span>
+                                  </div>
+                                  <div className="text-slate-400 text-xs truncate">{job.input_file_path}</div>
+                                  {job.error_message && (
+                                    <div className="text-red-400 text-xs mt-1 truncate" title={job.error_message}>
+                                      {job.error_message}
+                                    </div>
+                                  )}
+                                  {job.completed_at && (
+                                    <div className="text-slate-500 text-xs mt-1">
+                                      {formatRelativeTime(job.completed_at)}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>

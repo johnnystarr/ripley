@@ -563,19 +563,19 @@ impl Database {
         // Migration 1: Add last_used_at to shows (if not exists)
         if current_version < 1 {
             info!("Applying migration 1: add_last_used_at_to_shows");
-            let column_exists: Result<i64, _> = conn.query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('shows') WHERE name='last_used_at'",
+        let column_exists: Result<i64, _> = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('shows') WHERE name='last_used_at'",
+            [],
+            |row| row.get(0),
+        );
+        
+        if column_exists.unwrap_or(0) == 0 {
+            conn.execute(
+                "ALTER TABLE shows ADD COLUMN last_used_at TEXT",
                 [],
-                |row| row.get(0),
-            );
-            
-            if column_exists.unwrap_or(0) == 0 {
-                conn.execute(
-                    "ALTER TABLE shows ADD COLUMN last_used_at TEXT",
-                    [],
-                )?;
-            }
-            
+            )?;
+        }
+
             conn.execute(
                 "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
                 params![1, "add_last_used_at_to_shows", chrono::Utc::now().to_rfc3339()],
@@ -1041,7 +1041,7 @@ impl Database {
                 params![8, "add_agent_output_location", chrono::Utc::now().to_rfc3339()],
             )?;
         }
-
+        
         Ok(())
     }
 
@@ -1539,6 +1539,19 @@ impl Database {
         )?;
 
         Ok(count)
+    }
+
+    /// Mark an agent as offline (force disconnect)
+    pub fn disconnect_agent(&self, agent_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "UPDATE agents SET status = 'offline', last_seen = ?1 WHERE agent_id = ?2",
+            params![now, agent_id],
+        )?;
+        
+        Ok(())
     }
 
     // Topaz Profile methods

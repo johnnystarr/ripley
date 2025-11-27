@@ -131,10 +131,10 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Display agent status (online, offline, busy, idle)
 - [x] Show agent capabilities (Topaz version, platform, etc.)
 - [x] Display agent last seen timestamp
-- [ ] Create agent detail view (current job, queue, history)
-- [ ] Add agent action buttons (force disconnect, restart, etc.)
-- [ ] Create agent connection status indicators
-- [ ] Add real-time WebSocket updates for agent status
+- [x] Create agent detail view (current job, queue, history)
+- [x] Add agent action buttons (force disconnect, restart, etc.)
+- [x] Create agent connection status indicators
+- [x] Add real-time WebSocket updates for agent status
 - [ ] Create Topaz profile management UI (list, create, edit, delete)
 - [ ] Add profile-to-show association UI
 - [ ] Create upscaling job queue view
