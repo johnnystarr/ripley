@@ -8,6 +8,7 @@ import {
   faBars,
   faCircle,
   faTv,
+  faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
@@ -20,6 +21,7 @@ import Dashboard from './pages/Dashboard';
 import Configuration from './pages/Configuration';
 import Logs from './pages/Logs';
 import Shows from './pages/Shows';
+import Issues from './pages/Issues';
 
 function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -127,6 +129,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
                 <Route path="/shows" element={<ErrorBoundary><Shows /></ErrorBoundary>} />
+                <Route path="/issues" element={<ErrorBoundary><Issues /></ErrorBoundary>} />
                 <Route path="/configuration" element={<ErrorBoundary><Configuration /></ErrorBoundary>} />
                 <Route path="/logs" element={<ErrorBoundary><Logs /></ErrorBoundary>} />
               </Routes>
@@ -144,6 +147,7 @@ function Sidebar({ isOpen, wsConnected }) {
   const navItems = [
     { path: '/', icon: faHome, label: 'Dashboard' },
     { path: '/shows', icon: faTv, label: 'Shows' },
+    { path: '/issues', icon: faExclamationTriangle, label: 'Issues' },
     { path: '/configuration', icon: faCog, label: 'Configuration' },
     { path: '/logs', icon: faFileAlt, label: 'Logs' },
   ];

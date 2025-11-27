@@ -42,7 +42,7 @@
 - [ ] Add configurable sound notifications
 - [x] Show active rip progress in browser tab title
 - [ ] Add pause/resume for rip operations
-- [ ] Add cancel/abort operation button
+- [x] Add cancel/abort operation button
 - [ ] Real-time bandwidth/speed monitoring
 - [ ] Show ETA for active rips
 
@@ -64,7 +64,7 @@
 - [ ] Contextual help based on error type
 
 ### Issues Page (New)
-- [ ] Create dedicated Issues page with filtering
+- [x] Create dedicated Issues page with filtering
 - [ ] Add issue categories and tags
 - [ ] Add notes/comments to issues
 - [ ] Show related logs for each issue

@@ -11,6 +11,7 @@ import {
   faEdit,
   faSave,
   faTimes,
+  faBan,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -291,6 +292,18 @@ export default function Dashboard() {
       fetchDrives();
     } catch (err) {
       toast.error('Failed to eject drive: ' + err.message);
+    }
+  }, []);
+
+  const handleStopRip = useCallback(async () => {
+    if (!window.confirm('Stop the current rip operation?')) {
+      return;
+    }
+    try {
+      await api.stopRip();
+      toast.success('Rip operation stopped');
+    } catch (err) {
+      toast.error('Failed to stop rip: ' + err.message);
     }
   }, []);
 
@@ -594,10 +607,17 @@ export default function Dashboard() {
                       {drive.status && (
                         <p className="text-xs text-slate-400 mt-1">{drive.status}</p>
                       )}
+                      <button
+                        onClick={handleStopRip}
+                        className="mt-3 w-full bg-red-600 hover:bg-red-700 text-white py-1.5 px-3 rounded text-sm transition-colors duration-200 flex items-center justify-center"
+                      >
+                        <FontAwesomeIcon icon={faBan} className="mr-2" />
+                        Cancel Rip
+                      </button>
                     </div>
                   )}
                   
-                  {drive.has_disc && (
+                  {drive.has_disc && !drive.progress && (
                     <button
                       onClick={() => handleEjectDrive(drive.device)}
                       className="mt-3 w-full bg-slate-700 hover:bg-slate-600 text-slate-200 py-1.5 px-3 rounded text-sm transition-colors duration-200 flex items-center justify-center"
