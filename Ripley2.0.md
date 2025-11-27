@@ -20,7 +20,7 @@
 - [x] Add import/export shows (JSON/CSV)
 - [x] Show last used date for each show
 - [x] Add sorting options (alphabetical, last used, date added)
-- [ ] Add pagination for large show lists
+- [x] Add pagination for large show lists
 
 ### Configuration Page Improvements
 - [x] Add validation feedback for API keys (visual indicators)

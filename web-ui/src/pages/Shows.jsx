@@ -14,6 +14,8 @@ import {
   faSquare,
   faFileExport,
   faFileImport,
+  faChevronLeft,
+  faChevronRight,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -51,6 +53,8 @@ export default function Shows() {
   const [sortBy, setSortBy] = useState('name-asc'); // name-asc, name-desc, date-asc, date-desc, last-used-asc, last-used-desc
   const [selectedShows, setSelectedShows] = useState(new Set());
   const [bulkMode, setBulkMode] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(25);
 
   useEffect(() => {
     fetchShows();
@@ -158,13 +162,18 @@ export default function Shows() {
     });
   }, []);
 
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sortBy, itemsPerPage]);
+
   const handleSelectAll = useCallback(() => {
-    if (selectedShows.size === filteredShows.length) {
+    if (selectedShows.size === paginatedShows.length) {
       setSelectedShows(new Set());
     } else {
-      setSelectedShows(new Set(filteredShows.map(s => s.id)));
+      setSelectedShows(new Set(paginatedShows.map(s => s.id)));
     }
-  }, [selectedShows.size, filteredShows]);
+  }, [selectedShows.size, paginatedShows]);
 
   const handleBulkDelete = useCallback(async () => {
     if (selectedShows.size === 0) return;
@@ -464,16 +473,16 @@ export default function Shows() {
                 onClick={handleSelectAll}
                 className="text-cyan-400 hover:text-cyan-300 transition-colors"
               >
-                <FontAwesomeIcon icon={selectedShows.size === filteredShows.length ? faCheckSquare : faSquare} className="mr-2" />
-                {selectedShows.size === filteredShows.length ? 'Deselect All' : 'Select All'}
+                <FontAwesomeIcon icon={selectedShows.size === paginatedShows.length ? faCheckSquare : faSquare} className="mr-2" />
+                {selectedShows.size === paginatedShows.length ? 'Deselect All' : 'Select All'}
               </button>
               <span className="text-slate-400 text-sm">
-                {selectedShows.size} of {filteredShows.length} selected
+                {selectedShows.size} selected
               </span>
             </div>
           )}
           <div className="grid grid-cols-1 gap-3">
-            {filteredShows.map((show) => (
+            {paginatedShows.map((show) => (
               <div
                 key={show.id}
                 className={`bg-slate-800 rounded-lg p-4 border transition-colors ${
@@ -564,6 +573,79 @@ export default function Shows() {
               </div>
             ))}
           </div>
+          
+          {/* Pagination Controls */}
+          {filteredShows.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 px-2">
+              <div className="flex items-center gap-3">
+                <span className="text-slate-400 text-sm">Items per page:</span>
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => setItemsPerPage(Number(e.target.value))}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+                <span className="text-slate-400 text-sm">
+                  Showing {Math.min((currentPage - 1) * itemsPerPage + 1, filteredShows.length)} - {Math.min(currentPage * itemsPerPage, filteredShows.length)} of {filteredShows.length}
+                </span>
+              </div>
+              
+              {totalPages > 1 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-100 rounded-lg border border-slate-700 transition-colors"
+                    title="Previous page"
+                  >
+                    <FontAwesomeIcon icon={faChevronLeft} />
+                  </button>
+                  
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`px-3 py-2 rounded-lg border transition-colors min-w-[40px] ${
+                            currentPage === pageNum
+                              ? 'bg-cyan-500 border-cyan-500 text-white'
+                              : 'bg-slate-800 border-slate-700 text-slate-100 hover:bg-slate-700'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-100 rounded-lg border border-slate-700 transition-colors"
+                    title="Next page"
+                  >
+                    <FontAwesomeIcon icon={faChevronRight} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
