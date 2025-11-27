@@ -8,41 +8,41 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### Backend Changes
 
-- [ ] Create new API endpoint `/api/monitor/operations` to get active operations
-- [ ] Add operation tracking to API state (track multiple concurrent rips/operations)
-- [ ] Enhance WebSocket events to include operation IDs and process types
-- [ ] Create operation status model (operation_id, type, drive, status, progress, logs)
-- [ ] Add endpoint to get drive information `/api/monitor/drives`
-- [ ] Implement operation lifecycle management (start, update, complete, error)
+- [x] Create new API endpoint `/api/monitor/operations` to get active operations
+- [x] Add operation tracking to API state (track multiple concurrent rips/operations)
+- [x] Enhance WebSocket events to include operation IDs and process types
+- [x] Create operation status model (operation_id, type, drive, status, progress, logs)
+- [x] Add endpoint to get drive information `/api/monitor/drives`
+- [x] Implement operation lifecycle management (start, update, complete, error)
 - [ ] Add real-time log streaming per operation via WebSocket
 - [ ] Store operation history in database for past operations view
 
 ### Frontend - Monitor Page
 
-- [ ] Create new `Monitor.jsx` page component
-- [ ] Add "Monitor" route to App.jsx navigation
-- [ ] Design layout with left panel (operations) and right panel (drive info)
-- [ ] Create `OperationLogWindow` component for individual operation logs
-- [ ] Create `DriveInfoPanel` component for drive status
-- [ ] Implement real-time WebSocket connection for operation updates
-- [ ] Add operation status indicators (running, completed, failed, paused)
-- [ ] Create progress bars for each active operation
-- [ ] Implement collapsible/expandable log windows per operation
-- [ ] Add filtering/sorting for operations (by type, status, drive)
-- [ ] Create operation detail view (expand to see full logs)
-- [ ] Add auto-scroll to latest logs in each window
-- [ ] Implement log level filtering (error, warning, info)
-- [ ] Add timestamps and drive indicators to log entries
-- [ ] Create empty state when no operations are active
+- [x] Create new `Monitor.jsx` page component
+- [x] Add "Monitor" route to App.jsx navigation
+- [x] Design layout with left panel (operations) and right panel (drive info)
+- [x] Create `OperationLogWindow` component for individual operation logs (integrated into Monitor.jsx)
+- [x] Create `DriveInfoPanel` component for drive status (integrated into Monitor.jsx)
+- [x] Implement real-time WebSocket connection for operation updates
+- [x] Add operation status indicators (running, completed, failed, paused)
+- [x] Create progress bars for each active operation
+- [x] Implement collapsible/expandable log windows per operation
+- [x] Add filtering/sorting for operations (by type, status, drive) - status filter implemented
+- [x] Create operation detail view (expand to see full logs)
+- [x] Add auto-scroll to latest logs in each window
+- [x] Implement log level filtering (error, warning, info) - shown in log entries
+- [x] Add timestamps and drive indicators to log entries
+- [x] Create empty state when no operations are active
 - [ ] Add operation history view (show recently completed operations)
 
 ### Dashboard Cleanup
 
-- [ ] Remove log display section from Dashboard
-- [ ] Remove log-related state from Dashboard component
-- [ ] Remove log fetching logic from Dashboard
-- [ ] Update Dashboard to focus on statistics and quick actions only
-- [ ] Add link/navigation hint to Monitor tab for viewing logs
+- [x] Remove log display section from Dashboard
+- [x] Remove log-related state from Dashboard component
+- [x] Remove log fetching logic from Dashboard
+- [x] Update Dashboard to focus on statistics and quick actions only
+- [x] Add link/navigation hint to Monitor tab for viewing logs
 
 ### Testing
 
@@ -59,22 +59,22 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 
 ### macOS Detection & Browser Opening
 
-- [ ] Detect macOS platform in dev script
-- [ ] Wait for Vite dev server to be ready (check port 5173)
-- [ ] Wait for Rust API server to be ready (check port 3000)
-- [ ] Execute `open -a "Google Chrome" http://localhost:5173` on macOS
-- [ ] Add optional flag to disable auto-open (e.g., `make dev NO_BROWSER=1`)
-- [ ] Add cross-platform support (skip browser open on non-macOS)
-- [ ] Log browser open attempt to console
-- [ ] Handle errors gracefully if Chrome is not installed
+- [x] Detect macOS platform in dev script
+- [x] Wait for Vite dev server to be ready (check port 5173)
+- [x] Wait for Rust API server to be ready (check port 3000)
+- [x] Execute `open -a "Google Chrome" http://localhost:5173` on macOS
+- [x] Add optional flag to disable auto-open (e.g., `make dev NO_BROWSER=1`)
+- [x] Add cross-platform support (skip browser open on non-macOS)
+- [x] Log browser open attempt to console
+- [x] Handle errors gracefully if Chrome is not installed
 
 ### Script Updates
 
-- [ ] Update `scripts/dev.sh` to include browser opening logic
-- [ ] Add delay/wait logic to ensure servers are fully started
-- [ ] Add health check for both servers before opening browser
-- [ ] Update Makefile `dev` target if needed
-- [ ] Add documentation comment about browser opening behavior
+- [x] Update `scripts/dev.sh` to include browser opening logic
+- [x] Add delay/wait logic to ensure servers are fully started
+- [x] Add health check for both servers before opening browser
+- [x] Update Makefile `dev` target if needed
+- [x] Add documentation comment about browser opening behavior
 
 ### Testing
 

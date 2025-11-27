@@ -11,6 +11,7 @@ import {
   faExclamationTriangle,
   faSearch,
   faUser,
+  faChartLine,
 } from '@fortawesome/free-solid-svg-icons';
 import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
@@ -25,6 +26,7 @@ import Logs from './pages/Logs';
 import Shows from './pages/Shows';
 import Issues from './pages/Issues';
 import Preferences from './pages/Preferences';
+import Monitor from './pages/Monitor';
 import GlobalSearch from './components/GlobalSearch';
 import Breadcrumbs from './components/Breadcrumbs';
 import { api } from './api';
@@ -179,6 +181,7 @@ function App() {
               <Breadcrumbs />
               <Routes>
                 <Route path="/" element={<ErrorBoundary><Dashboard /></ErrorBoundary>} />
+                <Route path="/monitor" element={<ErrorBoundary><Monitor /></ErrorBoundary>} />
                 <Route path="/shows" element={<ErrorBoundary><Shows /></ErrorBoundary>} />
                 <Route path="/issues" element={<ErrorBoundary><Issues /></ErrorBoundary>} />
                 <Route path="/configuration" element={<ErrorBoundary><Configuration /></ErrorBoundary>} />
@@ -198,6 +201,7 @@ function Sidebar({ isOpen, wsConnected }) {
 
   const navItems = [
     { path: '/', icon: faHome, label: 'Dashboard' },
+    { path: '/monitor', icon: faChartLine, label: 'Monitor' },
     { path: '/shows', icon: faTv, label: 'Shows' },
     { path: '/issues', icon: faExclamationTriangle, label: 'Issues' },
     { path: '/configuration', icon: faCog, label: 'Configuration' },

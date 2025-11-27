@@ -291,6 +291,16 @@ class ApiClient {
     return await this.request('GET', '/statistics/drives');
   }
 
+  // Get monitor operations
+  async getMonitorOperations() {
+    return this.request('/monitor/operations');
+  }
+
+  // Get monitor drives
+  async getMonitorDrives() {
+    return this.request('/monitor/drives');
+  }
+
   // Get WebSocket URL
   getWebSocketUrl() {
     if (import.meta.env.DEV) {

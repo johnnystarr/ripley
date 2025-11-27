@@ -19,11 +19,11 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
 import Dropdown from '../components/Dropdown';
+import { Link } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 export default function Dashboard() {
   const [drives, setDrives] = useState([]);
-  const [logs, setLogs] = useState([]);
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [lastTitle, setLastTitle] = useState('');
@@ -31,7 +31,6 @@ export default function Dashboard() {
   const [shows, setShows] = useState([]);
   const [selectedShowId, setSelectedShowId] = useState(null);
   const [statistics, setStatistics] = useState(null);
-  const [logLevelFilter, setLogLevelFilter] = useState('all');
   const [ripStartTimes, setRipStartTimes] = useState({}); // Track start times by drive
   const [elapsedTimes, setElapsedTimes] = useState({}); // Track elapsed time by drive
   const [ripSpeeds, setRipSpeeds] = useState({}); // Track current speed by drive (MB/s)
@@ -41,12 +40,9 @@ export default function Dashboard() {
   const [ripHistory, setRipHistory] = useState([]);
   const [driveStats, setDriveStats] = useState([]);
   const [errorFrequency, setErrorFrequency] = useState(null);
-  const logsEndRef = useRef(null);
-
-  // Fetch drives and logs on mount
+  // Fetch drives on mount
   useEffect(() => {
     fetchDrives();
-    fetchLogs();
     fetchActiveIssues();
     fetchLastTitle();
     fetchShows();
@@ -62,12 +58,6 @@ export default function Dashboard() {
     return () => clearInterval(driveInterval);
   }, []);
 
-  // Auto-scroll logs to bottom when new entries arrive
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs]);
 
   // Update elapsed times every second for active rips
   useEffect(() => {
@@ -95,11 +85,6 @@ export default function Dashboard() {
   // Listen to WebSocket events for real-time updates
   useEffect(() => {
     const unsubscribers = [
-      wsManager.on('Log', ({ level, message, drive }) => {
-        const timestamp = new Date().toLocaleTimeString();
-        const logEntry = { level, message, drive, timestamp };
-        setLogs(prev => [logEntry, ...prev].slice(0, 100));
-      }),
       wsManager.on('RipStarted', ({ disc, drive }) => {
         // Update drive with disc title when rip starts
         setDrives(prev => prev.map(d => 
@@ -121,13 +106,6 @@ export default function Dashboard() {
         toast(`Drive removed: ${device}`, { icon: '💿' });
       }),
       wsManager.on('DriveEjected', ({ device }) => {
-        const timestamp = new Date().toLocaleTimeString();
-        setLogs(prev => [{
-          level: 'success',
-          message: `Drive ${device} ejected`,
-          drive: device,
-          timestamp
-        }, ...prev].slice(0, 100));
         toast.success(`Drive ejected: ${device}`);
       }),
       wsManager.on('IssueCreated', ({ issue }) => {
@@ -250,17 +228,6 @@ export default function Dashboard() {
     }
   };
 
-  const fetchLogs = useCallback(async () => {
-    try {
-      const data = await api.getLogs();
-      setLogs(data.map(log => ({
-        ...log,
-        timestamp: new Date(log.timestamp).toLocaleTimeString()
-      })));
-    } catch (err) {
-      console.error('Failed to fetch logs:', err);
-    }
-  }, []);
 
   const fetchActiveIssues = useCallback(async () => {
     try {
@@ -419,16 +386,6 @@ export default function Dashboard() {
   }, []);
 
   // Memoized helper functions
-  const getLogColor = useCallback((level) => {
-    switch (level) {
-      case 'error': return 'text-red-400';
-      case 'warning': return 'text-yellow-400';
-      case 'success': return 'text-green-400';
-      case 'info': return 'text-cyan-400';
-      default: return 'text-slate-300';
-    }
-  }, []);
-
   const getIssueIcon = useCallback(() => {
     return faExclamationTriangle;
   }, []);
@@ -454,14 +411,6 @@ export default function Dashboard() {
       return `${secs}s`;
     }
   }, []);
-
-  // Filter logs based on selected level
-  const filteredLogs = useMemo(() => {
-    if (logLevelFilter === 'all') {
-      return logs;
-    }
-    return logs.filter(log => log.level === logLevelFilter);
-  }, [logs, logLevelFilter]);
 
   // Prepare chart data
   const chartData = useMemo(() => {
@@ -1125,59 +1074,21 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Real-time Log Stream */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-slate-100">Live Logs</h2>
-          <div className="flex items-center gap-3">
-            <Dropdown
-              value={logLevelFilter}
-              onChange={(value) => setLogLevelFilter(value)}
-              options={[
-                { value: 'all', label: 'All Levels' },
-                { value: 'info', label: 'Info' },
-                { value: 'success', label: 'Success' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'error', label: 'Error' },
-              ]}
-            />
-            {logs.length > 0 && (
-              <button
-                onClick={async () => {
-                  if (window.confirm('Clear all logs? This cannot be undone.')) {
-                    try {
-                      await api.clearLogs();
-                      setLogs([]);
-                      toast.success('Logs cleared');
-                    } catch (err) {
-                      toast.error('Failed to clear logs: ' + err.message);
-                    }
-                  }
-                }}
-                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-colors"
-              >
-                Clear
-              </button>
-            )}
+      {/* Monitor Link Hint */}
+      <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-cyan-400 mb-1">Real-Time Operation Monitoring</h2>
+            <p className="text-slate-300 text-sm">
+              View live logs, operation progress, and drive status in the Monitor tab
+            </p>
           </div>
-        </div>
-        <div className="bg-slate-900 rounded p-4 font-mono text-xs space-y-1 max-h-96 overflow-y-auto">
-          {filteredLogs.length === 0 ? (
-            <div className="text-slate-500 text-center py-8">
-              {logs.length === 0 ? 'No logs yet' : `No ${logLevelFilter} logs`}
-            </div>
-          ) : (
-            <>
-              {filteredLogs.map((log, index) => (
-                <div key={index} className={`${getLogColor(log.level)} flex items-start`}>
-                  <span className="text-slate-500 mr-2 flex-shrink-0">[{log.timestamp}]</span>
-                  {log.drive && <span className="text-slate-600 mr-2 flex-shrink-0">[{log.drive}]</span>}
-                  <span className={getLogColor(log.level)}>{log.message}</span>
-                </div>
-              ))}
-              <div ref={logsEndRef} />
-            </>
-          )}
+          <Link
+            to="/monitor"
+            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors font-medium"
+          >
+            Go to Monitor
+          </Link>
         </div>
       </div>
     </div>

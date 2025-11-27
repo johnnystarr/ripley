@@ -41,6 +41,7 @@ pub async fn start_server(
         rip_status: Arc::new(RwLock::new(RipStatus::default())),
         event_tx: event_tx.clone(),
         db: Arc::clone(&db),
+        operations: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
     
     // Spawn background task to log events to database
@@ -51,7 +52,7 @@ pub async fn start_server(
         
         while let Ok(event) = event_rx.recv().await {
             match event {
-                ApiEvent::Log { level, message, drive } => {
+                ApiEvent::Log { level, message, drive, operation_id: _ } => {
                     let log_level = match level.as_str() {
                         "error" => LogLevel::Error,
                         "warning" => LogLevel::Warning,
@@ -74,7 +75,7 @@ pub async fn start_server(
                         eprintln!("Failed to log to database: {}", e);
                     }
                 }
-                ApiEvent::RipError { error, drive } => {
+                ApiEvent::RipError { error, drive, operation_id: _ } => {
                     // Log the error
                     let entry = LogEntry {
                         id: None,
@@ -204,6 +205,7 @@ pub struct ApiState {
     pub rip_status: Arc<RwLock<RipStatus>>,
     pub event_tx: broadcast::Sender<ApiEvent>,
     pub db: Arc<Database>,
+    pub operations: Arc<RwLock<std::collections::HashMap<String, Operation>>>,
 }
 
 /// Per-drive ripping status
@@ -214,6 +216,170 @@ pub struct DriveRipStatus {
     pub progress: f32,
     pub paused: bool,
     pub paused_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Operation type enum
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationType {
+    Rip,
+    Upscale,
+    Rename,
+    Transfer,
+    Other,
+}
+
+/// Operation status
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationStatus {
+    Queued,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Active operation tracking
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Operation {
+    pub operation_id: String,
+    pub operation_type: OperationType,
+    pub status: OperationStatus,
+    pub drive: Option<String>,
+    pub title: Option<String>,
+    pub progress: f32,
+    pub message: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub error: Option<String>,
+}
+
+/// Generate a unique operation ID
+fn generate_operation_id(operation_type: OperationType, drive: Option<&String>) -> String {
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let drive_suffix = drive.map(|d| d.replace("/", "_")).unwrap_or_else(|| "default".to_string());
+    format!("{}_{}_{}", 
+        match operation_type {
+            OperationType::Rip => "rip",
+            OperationType::Upscale => "upscale",
+            OperationType::Rename => "rename",
+            OperationType::Transfer => "transfer",
+            OperationType::Other => "op",
+        },
+        drive_suffix,
+        timestamp
+    )
+}
+
+/// Create and register a new operation
+async fn create_operation(
+    state: &ApiState,
+    operation_type: OperationType,
+    drive: Option<String>,
+    title: Option<String>,
+    initial_message: String,
+) -> String {
+    let operation_id = generate_operation_id(operation_type, drive.as_ref());
+    let operation = Operation {
+        operation_id: operation_id.clone(),
+        operation_type,
+        status: OperationStatus::Running,
+        drive,
+        title,
+        progress: 0.0,
+        message: initial_message,
+        started_at: chrono::Utc::now(),
+        completed_at: None,
+        error: None,
+    };
+    
+    // Add to operations map
+    {
+        let mut operations = state.operations.write().await;
+        operations.insert(operation_id.clone(), operation.clone());
+    }
+    
+    // Broadcast operation started event
+    let _ = state.event_tx.send(ApiEvent::OperationStarted {
+        operation: operation.clone(),
+    });
+    
+    operation_id
+}
+
+/// Update an operation's progress
+async fn update_operation(
+    state: &ApiState,
+    operation_id: &str,
+    progress: f32,
+    message: String,
+) {
+    let mut operations = state.operations.write().await;
+    if let Some(op) = operations.get_mut(operation_id) {
+        op.progress = progress;
+        op.message = message.clone();
+        
+        // Broadcast progress update
+        drop(operations);
+        let _ = state.event_tx.send(ApiEvent::OperationProgress {
+            operation_id: operation_id.to_string(),
+            progress,
+            message,
+        });
+    }
+}
+
+/// Complete an operation (success)
+async fn complete_operation(
+    state: &ApiState,
+    operation_id: &str,
+    final_message: Option<String>,
+) {
+    let mut operations = state.operations.write().await;
+    if let Some(op) = operations.get_mut(operation_id) {
+        op.status = OperationStatus::Completed;
+        op.completed_at = Some(chrono::Utc::now());
+        op.progress = 100.0;
+        if let Some(msg) = final_message {
+            op.message = msg;
+        }
+        
+        let operation_id = operation_id.to_string();
+        drop(operations);
+        
+        // Broadcast completion event
+        let _ = state.event_tx.send(ApiEvent::OperationCompleted {
+            operation_id: operation_id.clone(),
+        });
+        
+        // Remove from active operations after a delay (to allow clients to see completion)
+        // For now, we'll keep completed operations until they're manually cleaned up
+    }
+}
+
+/// Fail an operation
+async fn fail_operation(
+    state: &ApiState,
+    operation_id: &str,
+    error: String,
+) {
+    let mut operations = state.operations.write().await;
+    if let Some(op) = operations.get_mut(operation_id) {
+        op.status = OperationStatus::Failed;
+        op.completed_at = Some(chrono::Utc::now());
+        op.error = Some(error.clone());
+        
+        let operation_id = operation_id.to_string();
+        drop(operations);
+        
+        // Broadcast failure event
+        let _ = state.event_tx.send(ApiEvent::OperationFailed {
+            operation_id: operation_id.clone(),
+            error,
+        });
+    }
 }
 
 /// Current ripping status (supports multiple drives)
@@ -236,18 +402,22 @@ impl Default for RipStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum ApiEvent {
-    RipStarted { disc: String, drive: String },
-    RipProgress { progress: f32, message: String, drive: String },
-    RipCompleted { disc: String, drive: String },
-    RipError { error: String, drive: Option<String> },
-    Log { level: String, message: String, drive: Option<String> },
+    RipStarted { disc: String, drive: String, operation_id: Option<String> },
+    RipProgress { progress: f32, message: String, drive: String, operation_id: Option<String> },
+    RipCompleted { disc: String, drive: String, operation_id: Option<String> },
+    RipError { error: String, drive: Option<String>, operation_id: Option<String> },
+    Log { level: String, message: String, drive: Option<String>, operation_id: Option<String> },
     StatusUpdate { status: RipStatus },
     DriveDetected { drive: crate::drive::DriveInfo },
     DriveRemoved { device: String },
     DriveEjected { device: String },
     IssueCreated { issue: Issue },
-    RipPaused { drive: String },
-    RipResumed { drive: String },
+    RipPaused { drive: String, operation_id: Option<String> },
+    RipResumed { drive: String, operation_id: Option<String> },
+    OperationStarted { operation: Operation },
+    OperationProgress { operation_id: String, progress: f32, message: String },
+    OperationCompleted { operation_id: String },
+    OperationFailed { operation_id: String, error: String },
 }
 
 /// Request body for starting a rip operation
@@ -321,6 +491,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/episode-match-statistics", get(get_episode_match_statistics_handler))
         .route("/database/backup", post(backup_database_handler))
         .route("/database/restore", post(restore_database_handler))
+        .route("/monitor/operations", get(get_monitor_operations))
+        .route("/monitor/drives", get(get_monitor_drives))
         .route("/ws", get(websocket_handler))
         .with_state(state);
 
@@ -434,6 +606,15 @@ async fn start_rip(
     // Drive is available, start immediately
     let drive_id = drive.clone().unwrap_or_else(|| "default".to_string());
     
+    // Create operation for this rip
+    let operation_id = create_operation(
+        &state,
+        OperationType::Rip,
+        Some(drive_id.clone()),
+        request.title.clone(),
+        format!("Starting rip on drive {}", drive_id),
+    ).await;
+    
     // Mark this drive as active
     status.active_rips.insert(drive_id.clone(), DriveRipStatus {
         current_disc: None,
@@ -448,17 +629,22 @@ async fn start_rip(
     let state_clone = state.clone();
     let request_clone = request;
     let drive_clone = drive_id.clone();
+    let operation_id_clone = operation_id.clone();
     
     // Spawn rip operation in background
     tokio::spawn(async move {
-        let result = run_rip_operation(state_clone.clone(), request_clone, drive_clone.clone()).await;
+        let result = run_rip_operation(state_clone.clone(), request_clone, drive_clone.clone(), operation_id_clone.clone()).await;
         
         // Remove from active rips when done
         let mut status = state_clone.rip_status.write().await;
         status.active_rips.remove(&drive_clone);
         
-        if let Err(e) = result {
+        // Complete or fail the operation
+        if let Err(ref e) = result {
             tracing::error!("Rip operation failed: {:?}", e);
+            fail_operation(&state_clone, &operation_id_clone, format!("{}", e)).await;
+        } else {
+            complete_operation(&state_clone, &operation_id_clone, Some("Rip completed successfully".to_string())).await;
         }
         
         // Process queue after rip completes (use tokio::task::spawn_local or check queue on next start_rip)
@@ -481,6 +667,7 @@ async fn stop_rip(State(state): State<ApiState>) -> Json<serde_json::Value> {
         level: "warning".to_string(),
         message: format!("Stopped {} active rip operation(s)", drive_count),
         drive: None,
+        operation_id: None,
     });
     
     Json(serde_json::json!({
@@ -510,9 +697,11 @@ async fn pause_rip_handler(
             level: "info".to_string(),
             message: format!("Rip operation on drive {} paused", drive),
             drive: Some(drive.clone()),
+            operation_id: None,
         });
         let _ = state.event_tx.send(ApiEvent::RipPaused {
             drive: drive.clone(),
+            operation_id: None,
         });
         
         drop(status);
@@ -550,9 +739,11 @@ async fn resume_rip_handler(
             level: "info".to_string(),
             message: format!("Rip operation on drive {} resumed", drive),
             drive: Some(drive.clone()),
+            operation_id: None,
         });
         let _ = state.event_tx.send(ApiEvent::RipResumed {
             drive: drive.clone(),
+            operation_id: None,
         });
         
         drop(status);
@@ -603,6 +794,7 @@ async fn eject_drive(
                 level: "info".to_string(),
                 message: format!("Ejected drive {}", device),
                 drive: Some(device.clone()),
+                operation_id: None,
             });
             
             Ok(Json(serde_json::json!({
@@ -689,6 +881,7 @@ async fn run_rip_operation(
     state: ApiState,
     request: StartRipRequest,
     drive_id: String,
+    operation_id: String,
 ) -> anyhow::Result<()> {
     
     let retry_config = {
@@ -716,15 +909,19 @@ async fn run_rip_operation(
                 level: "warning".to_string(),
                 message: format!("Retrying rip (attempt {}/{} after {}s delay)...", attempt, max_attempts, delay),
                 drive: Some(drive.clone()),
+                operation_id: None,
             });
             
             tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
         }
         
         let is_final_attempt = attempt >= max_attempts;
-        match run_single_rip_attempt(&state, &request, &drive, start_time, is_final_attempt).await {
+        update_operation(&state, &operation_id, 10.0 * attempt as f32, format!("Rip attempt {}/{}", attempt, max_attempts)).await;
+        
+        match run_single_rip_attempt(&state, &request, &drive, start_time, is_final_attempt, &operation_id).await {
             Ok(_) => {
                 // Success - return immediately (history already logged)
+                update_operation(&state, &operation_id, 100.0, "Rip completed successfully".to_string()).await;
                 return Ok(());
             }
             Err(e) => {
@@ -757,6 +954,7 @@ async fn run_rip_operation(
     let _ = state.event_tx.send(ApiEvent::RipError {
         error: error_msg.clone(),
         drive: Some(drive.clone()),
+        operation_id: Some(operation_id.clone()),
     });
     
     let history = RipHistory {
@@ -789,6 +987,7 @@ async fn run_single_rip_attempt(
     drive: &String,
     start_time: chrono::DateTime<chrono::Utc>,
     is_final_attempt: bool,
+    operation_id: &String,
 ) -> anyhow::Result<()> {
     use crate::database::{RipHistory, RipStatus};
     
@@ -839,6 +1038,7 @@ async fn run_single_rip_attempt(
         let _ = state.event_tx.send(ApiEvent::RipCompleted {
             disc: title.clone().unwrap_or_else(|| "Unknown".to_string()),
             drive: drive.clone(),
+            operation_id: Some(operation_id.clone()),
         });
         
         // Calculate checksum if output path exists
@@ -929,6 +1129,7 @@ async fn run_rename_operation(
         level: "info".to_string(),
         message: format!("Starting rename for directory: {}", request.directory),
         drive: None,
+        operation_id: None,
     });
     
     // Call existing rename functionality
@@ -939,6 +1140,7 @@ async fn run_rename_operation(
             level: "info".to_string(),
             message: format!("Using title: {}", title),
             drive: None,
+            operation_id: None,
         });
     }
     let _ = state.event_tx.send(ApiEvent::Log {
@@ -948,12 +1150,14 @@ async fn run_rename_operation(
             request.skip_speech, request.skip_filebot
         ),
         drive: None,
+        operation_id: None,
     });
     
     let _ = state.event_tx.send(ApiEvent::Log {
         level: "success".to_string(),
         message: "Rename operation completed".to_string(),
         drive: None,
+        operation_id: None,
     });
     
     Ok(())
@@ -1411,6 +1615,15 @@ async fn process_queue(state: ApiState) {
         return;
     }
     
+    // Create operation for this queued rip
+    let operation_id = create_operation(
+        &state,
+        OperationType::Rip,
+        Some(drive_id.clone()),
+        next_entry.title.clone(),
+        format!("Starting queued rip on drive {}", drive_id),
+    ).await;
+    
     // Mark drive as active
     let mut status = state.rip_status.write().await;
     status.active_rips.insert(drive_id.clone(), DriveRipStatus {
@@ -1436,10 +1649,18 @@ async fn process_queue(state: ApiState) {
     let state_clone = state.clone();
     let drive_clone = drive_id.clone();
     let queue_id_clone = queue_id;
+    let operation_id_clone = operation_id.clone();
     
     // Spawn rip operation
     tokio::spawn(async move {
-        let result = run_rip_operation(state_clone.clone(), request, drive_clone.clone()).await;
+        let result = run_rip_operation(state_clone.clone(), request, drive_clone.clone(), operation_id_clone.clone()).await;
+        
+        // Complete or fail the operation
+        if let Err(ref e) = result {
+            fail_operation(&state_clone, &operation_id_clone, format!("{}", e)).await;
+        } else {
+            complete_operation(&state_clone, &operation_id_clone, Some("Queued rip completed successfully".to_string())).await;
+        }
         
         // Remove from active rips when done
         let mut status = state_clone.rip_status.write().await;
@@ -1521,6 +1742,22 @@ async fn get_rip_history_handler(
     }
 }
 
+/// Get monitor operations (active operations)
+async fn get_monitor_operations(State(state): State<ApiState>) -> Result<Json<Vec<Operation>>, ErrorResponse> {
+    let operations = state.operations.read().await;
+    Ok(Json(operations.values().cloned().collect()))
+}
+
+/// Get monitor drives information
+async fn get_monitor_drives(State(_state): State<ApiState>) -> Result<Json<Vec<crate::drive::DriveInfo>>, ErrorResponse> {
+    match crate::drive::detect_drives().await {
+        Ok(drives) => Ok(Json(drives)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to detect drives: {}", e),
+        }),
+    }
+}
+
 /// Get user preferences
 async fn get_preferences(State(state): State<ApiState>) -> Result<Json<crate::database::UserPreferences>, ErrorResponse> {
     match state.db.get_preferences() {
@@ -1568,6 +1805,7 @@ mod tests {
             level: "info".to_string(),
             message: "test".to_string(),
             drive: None,
+            operation_id: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("Log"));

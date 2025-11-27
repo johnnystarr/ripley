@@ -20,12 +20,13 @@ debug:
 	@echo "✅ Debug build complete: target/debug/ripley"
 
 # Run development server with hot reload
+# Set NO_BROWSER=1 to disable automatic browser opening
 dev:
 	@echo "🚀 Starting Ripley development server..."
 	@echo "   API server: http://localhost:3000/api"
 	@echo "   Web UI: http://localhost:5173"
 	@echo ""
-	@./scripts/dev.sh
+	@NO_BROWSER=$(NO_BROWSER) ./scripts/dev.sh
 
 # Run tests
 test:
