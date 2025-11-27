@@ -212,6 +212,8 @@ pub struct DriveRipStatus {
     pub current_disc: Option<String>,
     pub current_title: Option<String>,
     pub progress: f32,
+    pub paused: bool,
+    pub paused_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Current ripping status (supports multiple drives)
@@ -244,6 +246,8 @@ pub enum ApiEvent {
     DriveRemoved { device: String },
     DriveEjected { device: String },
     IssueCreated { issue: Issue },
+    RipPaused { drive: String },
+    RipResumed { drive: String },
 }
 
 /// Request body for starting a rip operation
@@ -312,6 +316,9 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/rip-profiles", get(get_rip_profiles))
         .route("/queue", get(get_queue_handler))
         .route("/queue/:id/cancel", delete(cancel_queue_handler))
+        .route("/rip/:drive/pause", put(pause_rip_handler))
+        .route("/rip/:drive/resume", put(resume_rip_handler))
+        .route("/episode-match-statistics", get(get_episode_match_statistics_handler))
         .route("/database/backup", post(backup_database_handler))
         .route("/database/restore", post(restore_database_handler))
         .route("/ws", get(websocket_handler))
@@ -432,6 +439,8 @@ async fn start_rip(
         current_disc: None,
         current_title: request.title.clone(),
         progress: 0.0,
+        paused: false,
+        paused_at: None,
     });
     drop(status);
     
@@ -478,6 +487,86 @@ async fn stop_rip(State(state): State<ApiState>) -> Json<serde_json::Value> {
         "status": "stopped",
         "stopped_count": drive_count
     }))
+}
+
+/// Pause ripping operation for a specific drive
+async fn pause_rip_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(drive): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let mut status = state.rip_status.write().await;
+    
+    if let Some(rip_status) = status.active_rips.get_mut(&drive) {
+        if rip_status.paused {
+            return Err(ErrorResponse {
+                error: format!("Rip operation on drive {} is already paused", drive),
+            });
+        }
+        
+        rip_status.paused = true;
+        rip_status.paused_at = Some(chrono::Utc::now());
+        
+        let _ = state.event_tx.send(ApiEvent::Log {
+            level: "info".to_string(),
+            message: format!("Rip operation on drive {} paused", drive),
+            drive: Some(drive.clone()),
+        });
+        let _ = state.event_tx.send(ApiEvent::RipPaused {
+            drive: drive.clone(),
+        });
+        
+        drop(status);
+        
+        Ok(Json(serde_json::json!({
+            "status": "paused",
+            "drive": drive
+        })))
+    } else {
+        drop(status);
+        Err(ErrorResponse {
+            error: format!("No active rip operation found on drive {}", drive),
+        })
+    }
+}
+
+/// Resume ripping operation for a specific drive
+async fn resume_rip_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(drive): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let mut status = state.rip_status.write().await;
+    
+    if let Some(rip_status) = status.active_rips.get_mut(&drive) {
+        if !rip_status.paused {
+            return Err(ErrorResponse {
+                error: format!("Rip operation on drive {} is not paused", drive),
+            });
+        }
+        
+        rip_status.paused = false;
+        rip_status.paused_at = None;
+        
+        let _ = state.event_tx.send(ApiEvent::Log {
+            level: "info".to_string(),
+            message: format!("Rip operation on drive {} resumed", drive),
+            drive: Some(drive.clone()),
+        });
+        let _ = state.event_tx.send(ApiEvent::RipResumed {
+            drive: drive.clone(),
+        });
+        
+        drop(status);
+        
+        Ok(Json(serde_json::json!({
+            "status": "resumed",
+            "drive": drive
+        })))
+    } else {
+        drop(status);
+        Err(ErrorResponse {
+            error: format!("No active rip operation found on drive {}", drive),
+        })
+    }
 }
 
 /// List available optical drives
@@ -1335,6 +1424,8 @@ async fn process_queue(state: ApiState) {
         current_disc: None,
         current_title: next_entry.title.clone(),
         progress: 0.0,
+        paused: false,
+        paused_at: None,
     });
     drop(status);
     
@@ -1402,6 +1493,18 @@ async fn cancel_queue_handler(
         }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to cancel queue entry: {}", e),
+        }),
+    }
+}
+
+/// Get episode matching statistics
+async fn get_episode_match_statistics_handler(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_episode_match_statistics() {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get episode match statistics: {}", e),
         }),
     }
 }

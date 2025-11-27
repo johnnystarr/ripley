@@ -29,9 +29,18 @@ dev:
 
 # Run tests
 test:
-	@echo "🧪 Running tests..."
+	@echo "🧪 Running macOS tests..."
 	@cargo test
-	@echo "✅ Tests complete"
+	@echo "✅ macOS tests complete"
+
+# Run Linux tests via Podman
+test-linux:
+	@echo "🐳 Running Linux tests via Podman..."
+	@./test-linux.sh
+
+# Run all tests (macOS and Linux)
+test-all: test test-linux
+	@echo "✅ All tests complete"
 
 # Clean build artifacts
 clean:
@@ -95,7 +104,9 @@ help:
 	@echo "  make build      - Build release binary (includes web UI)"
 	@echo "  make debug      - Build debug binary (includes web UI)"
 	@echo "  make dev        - Run development server with hot reload"
-	@echo "  make test       - Run tests"
+	@echo "  make test       - Run macOS tests
+  make test-linux - Run Linux tests via Podman
+  make test-all   - Run all tests (macOS and Linux)"
 	@echo "  make clean      - Remove build artifacts"
 	@echo "  make install    - Install to ~/.cargo/bin"
 	@echo "  make uninstall  - Remove installed binary"

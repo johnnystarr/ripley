@@ -1,0 +1,35 @@
+# Dockerfile for Linux testing environment
+FROM rust:1.75-slim
+
+# Install dependencies for testing
+RUN apt-get update && apt-get install -y \
+    lsblk \
+    udisks2 \
+    eject \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    nodejs \
+    npm \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust tools for testing
+RUN rustup component add rustfmt clippy
+
+# Set working directory
+WORKDIR /app
+
+# Copy Cargo files first for better caching
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY tests ./tests
+
+# Build dependencies first for better caching
+RUN cargo fetch
+
+# Default command runs tests
+CMD ["cargo", "test", "--target", "x86_64-unknown-linux-gnu", "--", "--nocapture"]
+

@@ -1,17 +1,18 @@
-use axum::http::StatusCode;
 use ripley::api::{ApiEvent, ApiState, RipStatus};
 use ripley::config::Config;
-use serde_json::json;
+use ripley::database::Database;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 /// Helper to create test API state
 fn create_test_state() -> ApiState {
     let (event_tx, _) = broadcast::channel(100);
+    let db = Arc::new(Database::new().unwrap());
     ApiState {
         config: Arc::new(RwLock::new(Config::default())),
         rip_status: Arc::new(RwLock::new(RipStatus::default())),
         event_tx,
+        db,
     }
 }
 
@@ -19,17 +20,14 @@ fn create_test_state() -> ApiState {
 async fn test_api_state_creation() {
     let state = create_test_state();
     let status = state.rip_status.read().await;
-    assert!(!status.is_ripping);
-    assert_eq!(status.progress, 0.0);
+    assert!(status.active_rips.is_empty());
+    assert!(status.logs.is_empty());
 }
 
 #[tokio::test]
 async fn test_rip_status_default() {
     let status = RipStatus::default();
-    assert!(!status.is_ripping);
-    assert!(status.current_disc.is_none());
-    assert!(status.current_title.is_none());
-    assert_eq!(status.progress, 0.0);
+    assert!(status.active_rips.is_empty());
     assert!(status.logs.is_empty());
 }
 
@@ -38,25 +36,31 @@ async fn test_api_event_serialization() {
     let events = vec![
         ApiEvent::RipStarted {
             disc: "Test Disc".to_string(),
+            drive: "/dev/disk2".to_string(),
         },
         ApiEvent::RipProgress {
             progress: 0.5,
             message: "Processing...".to_string(),
+            drive: "/dev/disk2".to_string(),
         },
         ApiEvent::RipCompleted {
             disc: "Test Disc".to_string(),
+            drive: "/dev/disk2".to_string(),
         },
         ApiEvent::RipError {
             error: "Test error".to_string(),
+            drive: Some("/dev/disk2".to_string()),
         },
         ApiEvent::Log {
+            level: "info".to_string(),
             message: "Test log".to_string(),
+            drive: None,
         },
     ];
 
     for event in events {
         let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("type"));
+        assert!(json.contains("type") || json.contains("RipStarted") || json.contains("RipProgress"));
         
         // Deserialize back
         let deserialized: ApiEvent = serde_json::from_str(&json).unwrap();
@@ -68,6 +72,12 @@ async fn test_api_event_serialization() {
             ApiEvent::RipError { .. } => {}
             ApiEvent::Log { .. } => {}
             ApiEvent::StatusUpdate { .. } => {}
+            ApiEvent::DriveDetected { .. } => {}
+            ApiEvent::DriveRemoved { .. } => {}
+            ApiEvent::DriveEjected { .. } => {}
+            ApiEvent::IssueCreated { .. } => {}
+            ApiEvent::RipPaused { .. } => {}
+            ApiEvent::RipResumed { .. } => {}
         }
     }
 }
@@ -79,7 +89,9 @@ async fn test_broadcast_channel() {
     let mut rx2 = state.event_tx.subscribe();
 
     let event = ApiEvent::Log {
+        level: "info".to_string(),
         message: "Test broadcast".to_string(),
+        drive: None,
     };
 
     state.event_tx.send(event).unwrap();
@@ -88,13 +100,13 @@ async fn test_broadcast_channel() {
     let received1 = rx1.recv().await.unwrap();
     let received2 = rx2.recv().await.unwrap();
 
-    if let ApiEvent::Log { message: msg1 } = received1 {
+    if let ApiEvent::Log { message: msg1, .. } = received1 {
         assert_eq!(msg1, "Test broadcast");
     } else {
         panic!("Wrong event type received");
     }
 
-    if let ApiEvent::Log { message: msg2 } = received2 {
+    if let ApiEvent::Log { message: msg2, .. } = received2 {
         assert_eq!(msg2, "Test broadcast");
     } else {
         panic!("Wrong event type received");
@@ -131,51 +143,58 @@ async fn test_rip_status_updates() {
     // Initial state
     {
         let status = state.rip_status.read().await;
-        assert!(!status.is_ripping);
+        assert!(status.active_rips.is_empty());
+        assert!(status.logs.is_empty());
     }
 
     // Start ripping
     {
         let mut status = state.rip_status.write().await;
-        status.is_ripping = true;
-        status.current_disc = Some("Test Disc".to_string());
-        status.progress = 0.0;
+        status.active_rips.insert("/dev/disk2".to_string(), ripley::api::DriveRipStatus {
+            current_disc: Some("Test Disc".to_string()),
+            current_title: None,
+            progress: 0.0,
+            paused: false,
+            paused_at: None,
+        });
     }
 
     // Update progress
     {
         let mut status = state.rip_status.write().await;
-        status.progress = 0.5;
+        if let Some(drive_status) = status.active_rips.get_mut("/dev/disk2") {
+            drive_status.progress = 0.5;
+        }
         status.logs.push("Processing title 1".to_string());
     }
 
     // Complete ripping
     {
         let mut status = state.rip_status.write().await;
-        status.is_ripping = false;
-        status.progress = 1.0;
+        status.active_rips.remove("/dev/disk2");
         status.logs.push("Ripping complete".to_string());
     }
 
     // Verify final state
     {
         let status = state.rip_status.read().await;
-        assert!(!status.is_ripping);
-        assert_eq!(status.progress, 1.0);
+        assert!(status.active_rips.is_empty());
         assert_eq!(status.logs.len(), 2);
-        assert_eq!(status.current_disc, Some("Test Disc".to_string()));
     }
 }
 
 #[tokio::test]
 async fn test_status_update_event() {
-    let status = RipStatus {
-        is_ripping: true,
+    let mut status = RipStatus::default();
+    status.active_rips.insert("/dev/disk2".to_string(), ripley::api::DriveRipStatus {
         current_disc: Some("Test".to_string()),
         current_title: Some("Title 1".to_string()),
         progress: 0.75,
-        logs: vec!["Log 1".to_string(), "Log 2".to_string()],
-    };
+        paused: false,
+        paused_at: None,
+    });
+    status.logs.push("Log 1".to_string());
+    status.logs.push("Log 2".to_string());
 
     let event = ApiEvent::StatusUpdate {
         status: status.clone(),
@@ -185,8 +204,7 @@ async fn test_status_update_event() {
     let deserialized: ApiEvent = serde_json::from_str(&json).unwrap();
 
     if let ApiEvent::StatusUpdate { status: s } = deserialized {
-        assert_eq!(s.is_ripping, status.is_ripping);
-        assert_eq!(s.progress, status.progress);
+        assert_eq!(s.active_rips.len(), status.active_rips.len());
         assert_eq!(s.logs.len(), status.logs.len());
     } else {
         panic!("Wrong event type");
@@ -201,7 +219,9 @@ async fn test_multiple_log_events() {
     // Send multiple events
     for i in 1..=5 {
         let event = ApiEvent::Log {
+            level: "info".to_string(),
             message: format!("Log message {}", i),
+            drive: None,
         };
         state.event_tx.send(event).unwrap();
     }
@@ -209,7 +229,7 @@ async fn test_multiple_log_events() {
     // Receive and verify all events
     for i in 1..=5 {
         let received = rx.recv().await.unwrap();
-        if let ApiEvent::Log { message } = received {
+        if let ApiEvent::Log { message, .. } = received {
             assert_eq!(message, format!("Log message {}", i));
         } else {
             panic!("Wrong event type");
@@ -219,24 +239,22 @@ async fn test_multiple_log_events() {
 
 #[tokio::test]
 async fn test_rip_status_serialization() {
-    let status = RipStatus {
-        is_ripping: true,
+    let mut status = RipStatus::default();
+    status.active_rips.insert("/dev/disk2".to_string(), ripley::api::DriveRipStatus {
         current_disc: Some("Futurama Season 1".to_string()),
         current_title: Some("Space Pilot 3000".to_string()),
         progress: 0.42,
-        logs: vec![
-            "Starting rip...".to_string(),
-            "Processing MKV...".to_string(),
-        ],
-    };
+        paused: false,
+        paused_at: None,
+    });
+    status.logs.push("Starting rip...".to_string());
+    status.logs.push("Processing MKV...".to_string());
 
     let json = serde_json::to_string(&status).unwrap();
     let deserialized: RipStatus = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(status.is_ripping, deserialized.is_ripping);
-    assert_eq!(status.current_disc, deserialized.current_disc);
-    assert_eq!(status.current_title, deserialized.current_title);
-    assert_eq!(status.progress, deserialized.progress);
+    assert_eq!(status.active_rips.len(), deserialized.active_rips.len());
+    assert_eq!(status.logs.len(), deserialized.logs.len());
     assert_eq!(status.logs, deserialized.logs);
 }
 

@@ -100,12 +100,16 @@ mod tests {
             track_name: "Test Track".to_string(),
             percentage: 30.0,
             status: ripper::RipStatus::Ripping,
+            speed_mbps: Some(10.5),
+            bytes_processed: Some(1000000),
         };
 
         assert_eq!(progress.current_track, 3);
         assert_eq!(progress.total_tracks, 10);
         assert_eq!(progress.percentage, 30.0);
         assert_eq!(progress.status, ripper::RipStatus::Ripping);
+        assert_eq!(progress.speed_mbps, Some(10.5));
+        assert_eq!(progress.bytes_processed, Some(1000000));
     }
 
     #[test]

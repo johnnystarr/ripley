@@ -1,0 +1,7 @@
+target/
+.git/
+node_modules/
+web-ui/dist/
+*.log
+.DS_Store
+

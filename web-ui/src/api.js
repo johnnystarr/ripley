@@ -90,6 +90,32 @@ class ApiClient {
     });
   }
 
+  // Pause rip operation
+  async pauseRip(drive) {
+    return this.request(`/rip/${encodeURIComponent(drive)}/pause`, {
+      method: 'PUT',
+    });
+  }
+
+  // Resume rip operation
+  async resumeRip(drive) {
+    return this.request(`/rip/${encodeURIComponent(drive)}/resume`, {
+      method: 'PUT',
+    });
+  }
+
+  // Get rip queue
+  async getQueue() {
+    return this.request('/queue');
+  }
+
+  // Cancel queue entry
+  async cancelQueueEntry(queueId) {
+    return this.request(`/queue/${queueId}/cancel`, {
+      method: 'DELETE',
+    });
+  }
+
   // Rename files
   async renameFiles(params) {
     return this.request('/rename', {

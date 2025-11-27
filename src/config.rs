@@ -333,6 +333,13 @@ filebot:
   database: TheTVDB
   order: Airdate
   use_for_music: true
+retry:
+  enabled: true
+  max_attempts: 3
+  initial_delay_seconds: 1
+  max_delay_seconds: 60
+  backoff_multiplier: 2.0
+rip_profiles: []
 "#;
 
         let config: Config = serde_yaml::from_str(yaml).unwrap();

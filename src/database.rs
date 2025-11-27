@@ -19,7 +19,7 @@ pub struct LogEntry {
     pub context: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Info,
@@ -138,7 +138,7 @@ pub struct RipHistory {
     pub checksum: Option<String>, // SHA-256 checksum of ripped files
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum RipStatus {
     Success,
@@ -197,6 +197,21 @@ pub struct DriveStats {
 }
 
 /// Rip queue entry for managing pending rip operations
+/// Episode match result for tracking accuracy statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpisodeMatchResult {
+    pub id: Option<i64>,
+    pub timestamp: DateTime<Utc>,
+    pub show_name: String,
+    pub season: u32,
+    pub episode: u32,
+    pub episode_title: Option<String>,
+    pub match_method: String, // "duration", "transcript", "manual"
+    pub confidence: Option<f32>,
+    pub title_index: Option<u32>,
+    pub rip_history_id: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RipQueueEntry {
     pub id: Option<i64>,
@@ -517,9 +532,11 @@ impl Database {
             )?;
         }
 
-        // Migration 3: Add checksum column to rip_history
+        // Migration 3: Add checksum and avg_speed_mbps columns to rip_history (if not exists)
         if current_version < 3 {
-            info!("Applying migration 3: add_checksum_to_rip_history");
+            info!("Applying migration 3: add_checksum_and_speed_to_rip_history");
+            
+            // Check and add checksum column
             let checksum_exists: Result<i64, _> = conn.query_row(
                 "SELECT COUNT(*) FROM pragma_table_info('rip_history') WHERE name='checksum'",
                 [],
@@ -533,9 +550,23 @@ impl Database {
                 )?;
             }
             
+            // Check and add avg_speed_mbps column
+            let speed_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('rip_history') WHERE name='avg_speed_mbps'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if speed_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE rip_history ADD COLUMN avg_speed_mbps REAL",
+                    [],
+                )?;
+            }
+            
             conn.execute(
                 "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
-                params![3, "add_checksum_to_rip_history", chrono::Utc::now().to_rfc3339()],
+                params![3, "add_checksum_and_speed_to_rip_history", chrono::Utc::now().to_rfc3339()],
             )?;
         }
 
@@ -650,7 +681,202 @@ impl Database {
             )?;
         }
 
+        // Migration 6: Add episode match results table
+        if current_version < 6 {
+            info!("Applying migration 6: add_episode_match_results_table");
+            
+            let table_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='episode_match_results'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if table_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "CREATE TABLE episode_match_results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        show_name TEXT NOT NULL,
+                        season INTEGER NOT NULL,
+                        episode INTEGER NOT NULL,
+                        episode_title TEXT,
+                        match_method TEXT NOT NULL,
+                        confidence REAL,
+                        title_index INTEGER,
+                        rip_history_id INTEGER,
+                        FOREIGN KEY (rip_history_id) REFERENCES rip_history(id) ON DELETE SET NULL
+                    )",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_episode_match_show ON episode_match_results(show_name)",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_episode_match_method ON episode_match_results(match_method)",
+                    [],
+                )?;
+                
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_episode_match_timestamp ON episode_match_results(timestamp DESC)",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![6, "add_episode_match_results_table", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
         Ok(())
+    }
+
+    /// Record an episode match result for statistics tracking
+    pub fn record_episode_match(&self, match_result: &EpisodeMatchResult) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "INSERT INTO episode_match_results (timestamp, show_name, season, episode, episode_title, match_method, confidence, title_index, rip_history_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                match_result.timestamp.to_rfc3339(),
+                match_result.show_name,
+                match_result.season as i64,
+                match_result.episode as i64,
+                match_result.episode_title,
+                match_result.match_method,
+                match_result.confidence,
+                match_result.title_index.map(|t| t as i64),
+                match_result.rip_history_id,
+            ],
+        )?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get episode matching statistics
+    pub fn get_episode_match_statistics(&self) -> Result<serde_json::Value> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Total matches
+        let total_matches: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM episode_match_results",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        // Average confidence
+        let avg_confidence: Option<f64> = conn.query_row(
+            "SELECT AVG(confidence) FROM episode_match_results WHERE confidence IS NOT NULL",
+            [],
+            |row| row.get(0),
+        ).ok();
+        
+        // Matches by method
+        let mut method_stats = std::collections::HashMap::new();
+        let mut stmt = conn.prepare(
+            "SELECT match_method, COUNT(*) as count, AVG(confidence) as avg_conf
+             FROM episode_match_results
+             GROUP BY match_method"
+        )?;
+        
+        let method_rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+            ))
+        })?;
+        
+        for row in method_rows {
+            let (method, count, avg_conf) = row?;
+            method_stats.insert(method, serde_json::json!({
+                "count": count,
+                "avg_confidence": avg_conf,
+            }));
+        }
+        
+        // Confidence distribution (grouped into buckets)
+        let mut confidence_dist = std::collections::HashMap::new();
+        let buckets = vec![(0.0, 50.0), (50.0, 70.0), (70.0, 85.0), (85.0, 95.0), (95.0, 100.0)];
+        
+        for (min, max) in buckets {
+            let bucket_label = format!("{:.0}-{:.0}", min, max);
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM episode_match_results WHERE confidence >= ?1 AND confidence < ?2",
+                params![min, max],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            
+            confidence_dist.insert(bucket_label, count);
+        }
+        
+        // Matches over time (last 30 days)
+        let thirty_days_ago = chrono::Utc::now() - chrono::Duration::days(30);
+        let mut time_series = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT DATE(timestamp) as date, COUNT(*) as count, AVG(confidence) as avg_conf
+             FROM episode_match_results
+             WHERE timestamp >= ?1
+             GROUP BY DATE(timestamp)
+             ORDER BY date ASC"
+        )?;
+        
+        let time_rows = stmt.query_map([thirty_days_ago.to_rfc3339()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+            ))
+        })?;
+        
+        for row in time_rows {
+            let (date, count, avg_conf) = row?;
+            time_series.push(serde_json::json!({
+                "date": date,
+                "count": count,
+                "avg_confidence": avg_conf,
+            }));
+        }
+        
+        // Top shows by match count
+        let mut top_shows = Vec::new();
+        let mut stmt = conn.prepare(
+            "SELECT show_name, COUNT(*) as count, AVG(confidence) as avg_conf
+             FROM episode_match_results
+             GROUP BY show_name
+             ORDER BY count DESC
+             LIMIT 10"
+        )?;
+        
+        let show_rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+            ))
+        })?;
+        
+        for row in show_rows {
+            let (show, count, avg_conf) = row?;
+            top_shows.push(serde_json::json!({
+                "show_name": show,
+                "count": count,
+                "avg_confidence": avg_conf,
+            }));
+        }
+        
+        Ok(serde_json::json!({
+            "total_matches": total_matches,
+            "average_confidence": avg_confidence,
+            "by_method": method_stats,
+            "confidence_distribution": confidence_dist,
+            "over_time": time_series,
+            "top_shows": top_shows,
+        }))
     }
 
     /// Backup database to a file
@@ -1233,6 +1459,34 @@ impl Database {
     pub fn add_rip_history(&self, entry: &RipHistory) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         
+        // Check if avg_speed_mbps column exists, add it if not
+        let speed_exists: Result<i64, _> = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('rip_history') WHERE name='avg_speed_mbps'",
+            [],
+            |row| row.get(0),
+        );
+        
+        if speed_exists.unwrap_or(0) == 0 {
+            let _ = conn.execute(
+                "ALTER TABLE rip_history ADD COLUMN avg_speed_mbps REAL",
+                [],
+            );
+        }
+        
+        // Check if checksum column exists, add it if not
+        let checksum_exists: Result<i64, _> = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('rip_history') WHERE name='checksum'",
+            [],
+            |row| row.get(0),
+        );
+        
+        if checksum_exists.unwrap_or(0) == 0 {
+            let _ = conn.execute(
+                "ALTER TABLE rip_history ADD COLUMN checksum TEXT",
+                [],
+            );
+        }
+        
         conn.execute(
             "INSERT INTO rip_history (timestamp, drive, disc, title, disc_type, status, duration_seconds, file_size_bytes, output_path, error_message, avg_speed_mbps, checksum)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -1620,6 +1874,29 @@ mod tests {
     }
 
     #[test]
+    fn test_get_recent_logs() {
+        let db = Database::new().unwrap();
+        
+        // Add multiple logs
+        for i in 0..5 {
+            let log = LogEntry {
+                id: None,
+                timestamp: Utc::now(),
+                level: LogLevel::Info,
+                message: format!("Test log {}", i),
+                drive: None,
+                disc: None,
+                title: None,
+                context: None,
+            };
+            db.add_log(&log).unwrap();
+        }
+
+        let logs = db.get_recent_logs(3).unwrap();
+        assert_eq!(logs.len(), 3);
+    }
+
+    #[test]
     fn test_add_issue() {
         let db = Database::new().unwrap();
         let issue = Issue {
@@ -1632,9 +1909,226 @@ mod tests {
             disc: None,
             resolved: false,
             resolved_at: None,
+            assigned_to: None,
+            resolution_notes: None,
         };
 
         let id = db.add_issue(&issue).unwrap();
         assert!(id > 0);
+    }
+
+    #[test]
+    fn test_resolve_issue() {
+        let db = Database::new().unwrap();
+        let issue = Issue {
+            id: None,
+            timestamp: Utc::now(),
+            issue_type: IssueType::RipFailure,
+            title: "Test issue".to_string(),
+            description: "Test description".to_string(),
+            drive: None,
+            disc: None,
+            resolved: false,
+            resolved_at: None,
+            assigned_to: None,
+            resolution_notes: None,
+        };
+
+        let id = db.add_issue(&issue).unwrap();
+        db.resolve_issue(id).unwrap();
+
+        let active = db.get_active_issues().unwrap();
+        assert!(!active.iter().any(|i| i.id == Some(id)));
+    }
+
+    #[test]
+    fn test_assign_issue() {
+        let db = Database::new().unwrap();
+        let issue = Issue {
+            id: None,
+            timestamp: Utc::now(),
+            issue_type: IssueType::RipFailure,
+            title: "Test issue".to_string(),
+            description: "Test description".to_string(),
+            drive: None,
+            disc: None,
+            resolved: false,
+            resolved_at: None,
+            assigned_to: None,
+            resolution_notes: None,
+        };
+
+        let id = db.add_issue(&issue).unwrap();
+        db.assign_issue(id, Some("test_user")).unwrap();
+
+        let issues = db.get_all_issues(100).unwrap();
+        let assigned = issues.iter().find(|i| i.id == Some(id)).unwrap();
+        assert_eq!(assigned.assigned_to, Some("test_user".to_string()));
+    }
+
+    #[test]
+    fn test_add_show() {
+        let db = Database::new().unwrap();
+        // Use a unique name with timestamp to avoid conflicts
+        let unique_name = format!("Test Show {}", chrono::Utc::now().timestamp_millis());
+        let id = db.add_show(&unique_name).unwrap();
+        assert!(id > 0);
+
+        let show = db.get_show(id).unwrap().unwrap();
+        assert_eq!(show.name, unique_name);
+    }
+
+    #[test]
+    fn test_get_shows() {
+        let db = Database::new().unwrap();
+        
+        // Use unique names with timestamp to avoid conflicts
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        db.add_show(&format!("Show 1 {}", timestamp)).unwrap();
+        db.add_show(&format!("Show 2 {}", timestamp)).unwrap();
+
+        let shows = db.get_shows().unwrap();
+        assert!(shows.len() >= 2);
+    }
+
+    #[test]
+    fn test_add_rip_history() {
+        let db = Database::new().unwrap();
+        let history = RipHistory {
+            id: None,
+            timestamp: Utc::now(),
+            drive: "/dev/disk2".to_string(),
+            disc: Some("Test Disc".to_string()),
+            title: Some("Test Title".to_string()),
+            disc_type: Some("DVD".to_string()),
+            status: RipStatus::Success,
+            duration_seconds: Some(3600),
+            file_size_bytes: Some(1000000000),
+            output_path: Some("/tmp/test".to_string()),
+            error_message: None,
+            avg_speed_mbps: None, // May not be in schema yet
+            checksum: None,
+        };
+
+        let id = db.add_rip_history(&history).unwrap();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn test_get_statistics() {
+        let db = Database::new().unwrap();
+        
+        // Add some rip history
+        for i in 0..5 {
+            let history = RipHistory {
+                id: None,
+                timestamp: Utc::now(),
+                drive: "/dev/disk2".to_string(),
+                disc: Some(format!("Disc {}", i)),
+                title: None,
+                disc_type: Some("DVD".to_string()),
+                status: if i % 2 == 0 { RipStatus::Success } else { RipStatus::Failed },
+                duration_seconds: Some(3600),
+                file_size_bytes: if i % 2 == 0 { Some(1000000000) } else { None },
+                output_path: Some("/tmp/test".to_string()),
+                error_message: None,
+                avg_speed_mbps: None,
+                checksum: None,
+            };
+            db.add_rip_history(&history).unwrap();
+        }
+
+        let stats = db.get_statistics().unwrap();
+        assert!(stats["total_rips"].as_i64().unwrap() >= 5);
+    }
+
+    #[test]
+    fn test_episode_match_recording() {
+        let db = Database::new().unwrap();
+        let match_result = EpisodeMatchResult {
+            id: None,
+            timestamp: Utc::now(),
+            show_name: "Test Show".to_string(),
+            season: 1,
+            episode: 5,
+            episode_title: Some("Test Episode".to_string()),
+            match_method: "transcript".to_string(),
+            confidence: Some(95.0),
+            title_index: Some(1),
+            rip_history_id: None,
+        };
+
+        let id = db.record_episode_match(&match_result).unwrap();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn test_queue_operations() {
+        let db = Database::new().unwrap();
+        
+        let entry = RipQueueEntry {
+            id: None,
+            created_at: Utc::now(),
+            drive: Some("/dev/disk2".to_string()),
+            output_path: Some("/tmp/output".to_string()),
+            title: Some("Test Title".to_string()),
+            skip_metadata: false,
+            skip_filebot: false,
+            profile: Some("Standard".to_string()),
+            priority: 5,
+            status: QueueStatus::Pending,
+            started_at: None,
+        };
+
+        let id = db.add_to_queue(&entry).unwrap();
+        assert!(id > 0);
+
+        db.update_queue_status(id, QueueStatus::Processing, Some(Utc::now())).unwrap();
+        
+        let entries = db.get_queue_entries(false).unwrap();
+        assert!(entries.iter().any(|e| e.id == Some(id)));
+    }
+
+    #[test]
+    fn test_log_level_enum() {
+        assert_eq!(LogLevel::from_string("info"), LogLevel::Info);
+        assert_eq!(LogLevel::from_string("warning"), LogLevel::Warning);
+        assert_eq!(LogLevel::from_string("error"), LogLevel::Error);
+        assert_eq!(LogLevel::from_string("success"), LogLevel::Success);
+        assert_eq!(LogLevel::from_string("unknown"), LogLevel::Info); // Default
+    }
+
+    #[test]
+    fn test_rip_status_enum() {
+        assert_eq!(RipStatus::from_string("success"), RipStatus::Success);
+        assert_eq!(RipStatus::from_string("failed"), RipStatus::Failed);
+        assert_eq!(RipStatus::from_string("cancelled"), RipStatus::Cancelled);
+        assert_eq!(RipStatus::Success.to_string(), "success");
+    }
+
+    #[test]
+    fn test_clear_logs() {
+        let db = Database::new().unwrap();
+        
+        // Add a log
+        let log = LogEntry {
+            id: None,
+            timestamp: Utc::now(),
+            level: LogLevel::Info,
+            message: "Test log to clear".to_string(),
+            drive: None,
+            disc: None,
+            title: None,
+            context: None,
+        };
+        db.add_log(&log).unwrap();
+        
+        // Clear logs
+        let count = db.clear_logs().unwrap();
+        assert!(count >= 1);
+        
+        // Verify logs are cleared
+        let logs = db.get_recent_logs(10).unwrap();
+        assert_eq!(logs.len(), 0);
     }
 }

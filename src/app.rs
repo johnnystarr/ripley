@@ -130,25 +130,16 @@ async fn rip_disc(
     // Unmount disc before reading (cd-discid needs exclusive access)
     add_log(&tui_state, device, "💿 Preparing disc for reading...".to_string()).await;
     for attempt in 1..=3 {
-        match tokio::process::Command::new("diskutil")
-            .arg("unmountDisk")
-            .arg("force")
-            .arg(device)
-            .output()
-            .await {
-            Ok(output) if output.status.success() => {
+        match crate::drive::unmount_disc(device).await {
+            Ok(_) => {
                 tracing::info!("Unmounted {} for disc ID reading (attempt {})", device, attempt);
                 break;
             }
-            Ok(output) => {
-                let err = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("Unmount attempt {}: {}", attempt, err);
+            Err(e) => {
+                tracing::warn!("Unmount attempt {}: {}", attempt, e);
                 if attempt < 3 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
-            }
-            Err(e) => {
-                tracing::error!("Unmount command failed: {}", e);
             }
         }
     }
@@ -665,6 +656,24 @@ async fn rip_dvd_disc(
 async fn get_dvd_volume_name(device: &str) -> Result<String> {
     debug!("Getting volume name for device: {}", device);
     
+    #[cfg(target_os = "macos")]
+    {
+        get_dvd_volume_name_macos(device).await
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        get_dvd_volume_name_linux(device).await
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err(anyhow::anyhow!("Getting volume name not supported on this platform"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn get_dvd_volume_name_macos(device: &str) -> Result<String> {
     // Use diskutil info to get the Volume Name field (more reliable than drutil)
     let output = tokio::process::Command::new("diskutil")
         .arg("info")
@@ -688,6 +697,98 @@ async fn get_dvd_volume_name(device: &str) -> Result<String> {
     
     debug!("Extracted volume name: {}", volume_name);
     Ok(volume_name)
+}
+
+#[cfg(target_os = "linux")]
+async fn get_dvd_volume_name_linux(device: &str) -> Result<String> {
+    // On Linux, try multiple methods to get volume label
+    
+    // Method 1: Check if mounted and read from mount point
+    if let Ok(output) = tokio::process::Command::new("lsblk")
+        .arg("-n")
+        .arg("-o")
+        .arg("MOUNTPOINT,LABEL")
+        .arg(device)
+        .output()
+        .await
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let mount = parts[0];
+                let label = parts[1];
+                
+                if mount != "null" && !mount.is_empty() && label != "null" && !label.is_empty() {
+                    debug!("Found volume label via lsblk: {}", label);
+                    return Ok(label.to_string());
+                }
+            }
+        }
+    }
+    
+    // Method 2: Try blkid
+    if let Ok(output) = tokio::process::Command::new("blkid")
+        .arg("-s")
+        .arg("LABEL")
+        .arg("-o")
+        .arg("value")
+        .arg(device)
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let label = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !label.is_empty() {
+                debug!("Found volume label via blkid: {}", label);
+                return Ok(label);
+            }
+        }
+    }
+    
+    // Method 3: Try udev
+    if let Ok(output) = tokio::process::Command::new("udevadm")
+        .arg("info")
+        .arg("-q")
+        .arg("property")
+        .arg(device)
+        .arg("-n")
+        .arg(device)
+        .output()
+        .await
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(label_line) = stdout.lines().find(|l| l.starts_with("ID_FS_LABEL=")) {
+            if let Some(label) = label_line.strip_prefix("ID_FS_LABEL=") {
+                let label = label.trim();
+                if !label.is_empty() {
+                    debug!("Found volume label via udev: {}", label);
+                    return Ok(label.to_string());
+                }
+            }
+        }
+    }
+    
+    // Method 4: Try reading from mount point if mounted
+    if let Ok(output) = tokio::process::Command::new("findmnt")
+        .arg("-n")
+        .arg("-o")
+        .arg("TARGET")
+        .arg(device)
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let mount = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !mount.is_empty() {
+                // Try to read volume label from filesystem metadata
+                // For DVDs/Blu-rays, the label might be in the mount point name or filesystem
+                debug!("Found mount point: {}, but no label found", mount);
+            }
+        }
+    }
+    
+    Err(anyhow::anyhow!("No volume name found for device {}", device))
 }
 
 fn create_dummy_metadata() -> metadata::DiscMetadata {

@@ -31,66 +31,130 @@ pub struct Episode {
     pub overview: Option<String>, // Episode summary/description from TMDB
 }
 
-/// Get DVD disc ID using libdvdread or similar
-#[allow(dead_code)]
+/// Get DVD/Blu-ray disc ID using multiple identification methods
 pub async fn get_dvd_id(device: &str) -> Result<String> {
     use sha1::{Sha1, Digest};
     use base64::Engine;
     
-    debug!("Calculating DVD ID for device: {}", device);
+    debug!("Calculating disc ID for device: {}", device);
     
-    // Try to read DVD volume ID
-    let output = std::process::Command::new("drutil")
+    let mut hasher = Sha1::new();
+    let mut identifiers_used = Vec::new();
+    
+    // Method 1: Try to read from drutil
+    if let Ok(output) = std::process::Command::new("drutil")
         .arg("status")
         .arg("-drive")
         .arg(device)
-        .output()?;
-    
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    // Extract volume label if available
-    let volume_label = stdout.lines()
-        .find(|line| line.contains("Name:"))
-        .and_then(|line| line.split(':').nth(1))
-        .map(|s| s.trim().to_string());
-    
-    // Use diskutil to get more info
-    let diskutil_output = std::process::Command::new("diskutil")
-        .arg("info")
-        .arg(device)
-        .output()?;
-    
-    let diskutil_stdout = String::from_utf8_lossy(&diskutil_output.stdout);
-    
-    // Try to extract DVD serial or UUID
-    let disc_uuid = diskutil_stdout.lines()
-        .find(|line| line.contains("Volume UUID:") || line.contains("Disk UUID:"))
-        .and_then(|line| line.split(':').nth(1))
-        .map(|s| s.trim().to_string());
-    
-    // Generate a hash from available identifiers
-    let mut hasher = Sha1::new();
-    
-    if let Some(label) = volume_label {
-        hasher.update(label.as_bytes());
-        debug!("Using volume label for DVD ID");
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // Extract volume label if available
+        if let Some(label) = stdout.lines()
+            .find(|line| line.contains("Name:"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            hasher.update(label.as_bytes());
+            identifiers_used.push(format!("volume_label:{}", label));
+            debug!("Using volume label for disc ID");
+        }
     }
     
-    if let Some(uuid) = disc_uuid {
-        hasher.update(uuid.as_bytes());
-        debug!("Using UUID for DVD ID");
+    // Method 2: Use diskutil to get UUID and other identifiers
+    if let Ok(diskutil_output) = std::process::Command::new("diskutil")
+        .arg("info")
+        .arg(device)
+        .output()
+    {
+        let diskutil_stdout = String::from_utf8_lossy(&diskutil_output.stdout);
+        
+        // Try to extract UUID
+        if let Some(uuid) = diskutil_stdout.lines()
+            .find(|line| line.contains("Volume UUID:") || line.contains("Disk UUID:"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            hasher.update(uuid.as_bytes());
+            identifiers_used.push(format!("uuid:{}", uuid));
+            debug!("Using UUID for disc ID");
+        }
+        
+        // Try to extract Volume Name as additional identifier
+        if let Some(vol_name) = diskutil_stdout.lines()
+            .find(|line| line.trim().starts_with("Volume Name:"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "Not applicable (no file system)")
+        {
+            hasher.update(vol_name.as_bytes());
+            identifiers_used.push(format!("vol_name:{}", vol_name));
+            debug!("Using volume name for disc ID");
+        }
+        
+        // Try to extract device size as additional identifier (helps distinguish identical labels)
+        if let Some(size_line) = diskutil_stdout.lines()
+            .find(|line| line.trim().starts_with("Disk Size:"))
+        {
+            hasher.update(size_line.as_bytes());
+            identifiers_used.push(format!("size:{}", size_line.trim()));
+            debug!("Using disk size for disc ID");
+        }
+    }
+    
+    // Method 3: If we can get mount point, check directory structure for additional identifiers
+    if let Ok(mount_output) = std::process::Command::new("diskutil")
+        .arg("info")
+        .arg(device)
+        .output()
+    {
+        let mount_stdout = String::from_utf8_lossy(&mount_output.stdout);
+        
+        if let Some(mount) = mount_stdout.lines()
+            .find(|line| line.trim().starts_with("Mount Point:"))
+            .and_then(|line| line.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            let mount_path = std::path::PathBuf::from(&mount);
+            
+            // Check for BDMV directory (Blu-ray) and use its presence
+            if mount_path.join("BDMV").exists() {
+                hasher.update(b"BDMV");
+                identifiers_used.push("structure:BDMV".to_string());
+            }
+            
+            // Check for VIDEO_TS directory (DVD)
+            if mount_path.join("VIDEO_TS").exists() {
+                hasher.update(b"VIDEO_TS");
+                identifiers_used.push("structure:VIDEO_TS".to_string());
+            }
+        }
+    }
+    
+    // Ensure we have at least one identifier
+    if identifiers_used.is_empty() {
+        // Fallback: use device path as identifier
+        hasher.update(device.as_bytes());
+        hasher.update(&chrono::Utc::now().timestamp().to_be_bytes());
+        warn!("No identifiers found, using device path and timestamp for disc ID");
+    } else {
+        info!("Using {} identifiers for disc ID: {:?}", identifiers_used.len(), identifiers_used);
     }
     
     let hash = hasher.finalize();
-    let dvd_id = base64::engine::general_purpose::STANDARD.encode(hash)
+    let disc_id = base64::engine::general_purpose::STANDARD.encode(hash)
         .replace('+', ".")
         .replace('/', "_")
         .trim_end_matches('=')
         .to_string();
     
-    info!("Calculated DVD ID: {}", dvd_id);
+    info!("Calculated disc ID: {}", disc_id);
     
-    Ok(dvd_id)
+    Ok(disc_id)
 }
 
 /// Extract season number from volume name

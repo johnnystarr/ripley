@@ -57,28 +57,19 @@ where
     
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Unmount the disc with retries (macOS may auto-remount)
+    // Unmount the disc with retries (macOS may auto-remount, Linux may need permissions)
     info!("Unmounting {}...", device);
     for attempt in 1..=3 {
-        match Command::new("diskutil")
-            .arg("unmountDisk")
-            .arg("force")
-            .arg(device)
-            .output()
-            .await {
-            Ok(output) if output.status.success() => {
+        match crate::drive::unmount_disc(device).await {
+            Ok(_) => {
                 info!("Successfully unmounted {} (attempt {})", device, attempt);
                 break;
             }
-            Ok(output) => {
-                let err = String::from_utf8_lossy(&output.stderr);
-                tracing::error!("Unmount attempt {} failed: {}", attempt, err);
+            Err(e) => {
+                tracing::warn!("Unmount attempt {} failed: {}", attempt, e);
                 if attempt < 3 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
-            }
-            Err(e) => {
-                tracing::error!("Could not execute unmount command: {}", e);
             }
         }
     }
