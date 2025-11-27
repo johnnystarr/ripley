@@ -167,17 +167,6 @@ export default function Shows() {
     setCurrentPage(1);
   }, [searchQuery, sortBy, itemsPerPage]);
 
-  const handleSelectAll = useCallback(() => {
-    if (selectedShows.size === paginatedShows.length && 
-        paginatedShows.every(s => selectedShows.has(s.id))) {
-      setSelectedShows(new Set());
-    } else {
-      const newSelected = new Set(selectedShows);
-      paginatedShows.forEach(s => newSelected.add(s.id));
-      setSelectedShows(newSelected);
-    }
-  }, [selectedShows, paginatedShows]);
-
   const handleBulkDelete = useCallback(async () => {
     if (selectedShows.size === 0) return;
     
@@ -307,6 +296,17 @@ export default function Shows() {
     const endIndex = startIndex + itemsPerPage;
     return filteredShows.slice(startIndex, endIndex);
   }, [filteredShows, currentPage, itemsPerPage]);
+
+  const handleSelectAll = useCallback(() => {
+    if (selectedShows.size === paginatedShows.length && 
+        paginatedShows.every(s => selectedShows.has(s.id))) {
+      setSelectedShows(new Set());
+    } else {
+      const newSelected = new Set(selectedShows);
+      paginatedShows.forEach(s => newSelected.add(s.id));
+      setSelectedShows(newSelected);
+    }
+  }, [selectedShows, paginatedShows]);
 
   if (loading) {
     return (
