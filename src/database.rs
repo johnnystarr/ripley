@@ -236,6 +236,8 @@ impl Database {
                 "Batman Begins",
                 "Batman The Animated Series",
                 "King Of The Hill",
+                "Animaniacs",
+                "Rocko's Modern Life"
             ];
             
             let now = Utc::now().to_rfc3339();
