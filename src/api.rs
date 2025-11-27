@@ -99,6 +99,8 @@ pub async fn start_server(
                         disc: None,
                         resolved: false,
                         resolved_at: None,
+                        assigned_to: None,
+                        resolution_notes: None,
                     };
                     let _ = db_logger.add_issue(&issue);
                 }
@@ -285,6 +287,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/issues", get(get_all_issues_handler))
         .route("/issues/active", get(get_active_issues))
         .route("/issues/:id/resolve", post(resolve_issue))
+        .route("/issues/:id/assign", put(assign_issue_handler))
+        .route("/issues/:id/resolution-notes", put(update_resolution_notes_handler))
         .route("/issues/:id/notes", get(get_issue_notes_handler))
         .route("/issues/:id/notes", post(add_issue_note_handler))
         .route("/issues/:id/notes/:note_id", delete(delete_issue_note_handler))
@@ -839,6 +843,44 @@ async fn delete_issue_note_handler(
         Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to delete note: {}", e),
+        }),
+    }
+}
+
+/// Assign an issue to a user
+#[derive(Deserialize)]
+struct AssignIssueRequest {
+    assigned_to: Option<String>,
+}
+
+async fn assign_issue_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(request): Json<AssignIssueRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.assign_issue(id, request.assigned_to.as_deref()) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to assign issue: {}", e),
+        }),
+    }
+}
+
+/// Update resolution notes for an issue
+#[derive(Deserialize)]
+struct UpdateResolutionNotesRequest {
+    notes: String,
+}
+
+async fn update_resolution_notes_handler(
+    State(state): State<ApiState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    Json(request): Json<UpdateResolutionNotesRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.update_resolution_notes(id, &request.notes) {
+        Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to update resolution notes: {}", e),
         }),
     }
 }

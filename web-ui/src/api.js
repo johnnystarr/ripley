@@ -133,6 +133,22 @@ class ApiClient {
     });
   }
 
+  // Assign an issue
+  async assignIssue(issueId, assignedTo) {
+    return this.request(`/issues/${issueId}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify({ assigned_to: assignedTo || null }),
+    });
+  }
+
+  // Update resolution notes for an issue
+  async updateResolutionNotes(issueId, notes) {
+    return this.request(`/issues/${issueId}/resolution-notes`, {
+      method: 'PUT',
+      body: JSON.stringify({ notes }),
+    });
+  }
+
   // Get notes for an issue
   async getIssueNotes(issueId) {
     return this.request(`/issues/${issueId}/notes`);

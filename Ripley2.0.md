@@ -94,6 +94,18 @@
 - [ ] Add pause/resume for active rips
 - [ ] Show ETA calculations for active operations
 
+### Full Linux Support
+- [ ] Ensure disc drive commands work for macos as well as Linux
+- [ ] Support Debian/Raspberry Pi in particular
+- [ ] Ensure Rust supports Linux also
+- [ ] Ensure Linux specifc tests work
+
+### Testing All The Things!
+- [ ] Full unit tests for backend
+- [ ] Full unit tests for web-ui
+- [ ] Full API tests
+- [ ] Full integration tests
+
 ---
 
 ## Priority Levels

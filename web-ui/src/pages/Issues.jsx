@@ -11,6 +11,10 @@ import {
   faCompactDisc,
   faNetworkWired,
   faFileExport,
+  faUser,
+  faEdit,
+  faSave,
+  faTimes,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -25,6 +29,12 @@ export default function Issues() {
   const [issueNotes, setIssueNotes] = useState({});
   const [newNote, setNewNote] = useState('');
   const [addingNote, setAddingNote] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState(null);
+  const [assignmentValue, setAssignmentValue] = useState('');
+  const [editingResolutionNotes, setEditingResolutionNotes] = useState(null);
+  const [resolutionNotesValue, setResolutionNotesValue] = useState('');
+  const [updatingAssignment, setUpdatingAssignment] = useState(false);
+  const [updatingResolutionNotes, setUpdatingResolutionNotes] = useState(false);
 
   useEffect(() => {
     fetchIssues();
@@ -57,12 +67,16 @@ export default function Issues() {
     const exportData = filteredIssues.map(issue => ({
       id: issue.id,
       timestamp: issue.timestamp,
-      category: issue.category,
-      message: issue.message,
+      issue_type: issue.issue_type,
+      title: issue.title,
+      description: issue.description,
       drive: issue.drive,
       disc: issue.disc,
       resolved: issue.resolved,
       resolved_at: issue.resolved_at,
+      assigned_to: issue.assigned_to,
+      resolution_notes: issue.resolution_notes,
+      resolution_time: issue.resolved_at ? calculateResolutionTime(issue) : null,
     }));
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
@@ -113,6 +127,69 @@ export default function Issues() {
       toast.error('Failed to delete note: ' + err.message);
     }
   }, [fetchIssueNotes]);
+
+  const handleAssignIssue = useCallback(async (issueId, assignedTo) => {
+    try {
+      setUpdatingAssignment(true);
+      await api.assignIssue(issueId, assignedTo || null);
+      toast.success(assignedTo ? `Issue assigned to ${assignedTo}` : 'Assignment removed');
+      setEditingAssignment(null);
+      setAssignmentValue('');
+      fetchIssues();
+    } catch (err) {
+      toast.error('Failed to assign issue: ' + err.message);
+    } finally {
+      setUpdatingAssignment(false);
+    }
+  }, [fetchIssues]);
+
+  const handleUpdateResolutionNotes = useCallback(async (issueId, notes) => {
+    try {
+      setUpdatingResolutionNotes(true);
+      await api.updateResolutionNotes(issueId, notes);
+      toast.success('Resolution notes updated');
+      setEditingResolutionNotes(null);
+      setResolutionNotesValue('');
+      fetchIssues();
+    } catch (err) {
+      toast.error('Failed to update resolution notes: ' + err.message);
+    } finally {
+      setUpdatingResolutionNotes(false);
+    }
+  }, [fetchIssues]);
+
+  const startEditingAssignment = useCallback((issue) => {
+    setEditingAssignment(issue.id);
+    setAssignmentValue(issue.assigned_to || '');
+  }, []);
+
+  const cancelEditingAssignment = useCallback(() => {
+    setEditingAssignment(null);
+    setAssignmentValue('');
+  }, []);
+
+  const startEditingResolutionNotes = useCallback((issue) => {
+    setEditingResolutionNotes(issue.id);
+    setResolutionNotesValue(issue.resolution_notes || '');
+  }, []);
+
+  const cancelEditingResolutionNotes = useCallback(() => {
+    setEditingResolutionNotes(null);
+    setResolutionNotesValue('');
+  }, []);
+
+  const calculateResolutionTime = useCallback((issue) => {
+    if (!issue.resolved_at) return null;
+    const startTime = new Date(issue.timestamp).getTime();
+    const endTime = new Date(issue.resolved_at).getTime();
+    const diffMs = endTime - startTime;
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    if (diffHours > 0) {
+      return `${diffHours}h ${diffMinutes}m`;
+    }
+    return `${diffMinutes}m`;
+  }, []);
 
   const toggleIssueLogs = useCallback(async (issue) => {
     if (expandedIssue === issue.id) {
@@ -367,9 +444,129 @@ export default function Issues() {
                       <div>
                         <span className="font-medium">Resolved:</span>{' '}
                         {new Date(issue.resolved_at).toLocaleString()}
+                        {calculateResolutionTime(issue) && (
+                          <span className="ml-1 text-cyan-400">
+                            ({calculateResolutionTime(issue)} to resolve)
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {issue.assigned_to && (
+                      <div className="flex items-center gap-1">
+                        <FontAwesomeIcon icon={faUser} className="text-xs" />
+                        <span className="font-medium">Assigned:</span> {issue.assigned_to}
                       </div>
                     )}
                   </div>
+                  
+                  {/* Assignment Section */}
+                  {expandedIssue === issue.id && (
+                    <div className="mt-3 bg-slate-900/50 rounded p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                          <FontAwesomeIcon icon={faUser} />
+                          Assignment
+                        </h4>
+                        {editingAssignment !== issue.id && (
+                          <button
+                            onClick={() => startEditingAssignment(issue)}
+                            className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+                          >
+                            <FontAwesomeIcon icon={faEdit} className="text-[10px]" />
+                            {issue.assigned_to ? 'Change' : 'Assign'}
+                          </button>
+                        )}
+                      </div>
+                      
+                      {editingAssignment === issue.id ? (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={assignmentValue}
+                            onChange={(e) => setAssignmentValue(e.target.value)}
+                            placeholder="Enter assignee name..."
+                            className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-slate-100 text-sm placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                          />
+                          <button
+                            onClick={() => handleAssignIssue(issue.id, assignmentValue.trim())}
+                            disabled={updatingAssignment}
+                            className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded text-sm transition-colors flex items-center"
+                          >
+                            <FontAwesomeIcon icon={faSave} className="mr-1" />
+                            Save
+                          </button>
+                          <button
+                            onClick={cancelEditingAssignment}
+                            disabled={updatingAssignment}
+                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 text-white rounded text-sm transition-colors"
+                          >
+                            <FontAwesomeIcon icon={faTimes} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-slate-400">
+                          {issue.assigned_to ? (
+                            <span>{issue.assigned_to}</span>
+                          ) : (
+                            <span className="italic">Unassigned</span>
+                          )}
+                        </div>
+                      )}
+                      
+                      {/* Resolution Notes Section */}
+                      <div className="mt-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-semibold text-slate-300">Resolution Notes</h4>
+                          {editingResolutionNotes !== issue.id && (
+                            <button
+                              onClick={() => startEditingResolutionNotes(issue)}
+                              className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+                            >
+                              <FontAwesomeIcon icon={faEdit} className="text-[10px]" />
+                              {issue.resolution_notes ? 'Edit' : 'Add'}
+                            </button>
+                          )}
+                        </div>
+                        
+                        {editingResolutionNotes === issue.id ? (
+                          <div className="space-y-2">
+                            <textarea
+                              value={resolutionNotesValue}
+                              onChange={(e) => setResolutionNotesValue(e.target.value)}
+                              placeholder="Enter resolution notes..."
+                              rows={3}
+                              className="w-full px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-slate-100 text-sm placeholder-slate-500 focus:outline-none focus:border-cyan-500 resize-none"
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleUpdateResolutionNotes(issue.id, resolutionNotesValue.trim())}
+                                disabled={updatingResolutionNotes}
+                                className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded text-sm transition-colors flex items-center"
+                              >
+                                <FontAwesomeIcon icon={faSave} className="mr-1" />
+                                Save
+                              </button>
+                              <button
+                                onClick={cancelEditingResolutionNotes}
+                                disabled={updatingResolutionNotes}
+                                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 text-white rounded text-sm transition-colors"
+                              >
+                                <FontAwesomeIcon icon={faTimes} />
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-sm text-slate-400">
+                            {issue.resolution_notes ? (
+                              <p className="whitespace-pre-wrap">{issue.resolution_notes}</p>
+                            ) : (
+                              <span className="italic">No resolution notes</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
                   {/* Show Related Logs Button */}
                   <button
