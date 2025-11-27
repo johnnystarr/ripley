@@ -1529,7 +1529,6 @@ impl Database {
     }
 
     /// Mark agents as offline if they haven't sent heartbeat in X minutes
-    #[allow(dead_code)]
     pub fn cleanup_stale_agents(&self, minutes_threshold: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let threshold = chrono::Utc::now() - chrono::Duration::minutes(minutes_threshold);

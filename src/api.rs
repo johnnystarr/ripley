@@ -111,6 +111,25 @@ pub async fn start_server(
         }
     });
     
+    // Spawn background task to cleanup stale agents (every 5 minutes)
+    let db_cleanup = Arc::clone(&db);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 5 minutes
+        loop {
+            interval.tick().await;
+            match db_cleanup.cleanup_stale_agents(5) { // Mark offline if no heartbeat in 5 minutes
+                Ok(count) => {
+                    if count > 0 {
+                        info!("Marked {} stale agent(s) as offline", count);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to cleanup stale agents: {}", e);
+                }
+            }
+        }
+    });
+    
     // Spawn background task to poll for drive changes
     let event_tx_poller = event_tx.clone();
     tokio::spawn(async move {

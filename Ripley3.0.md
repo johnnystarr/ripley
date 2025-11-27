@@ -107,8 +107,8 @@ This document tracks the major features planned for Ripley 3.0. Check off items 
 - [x] Create job status update endpoint `/api/upscaling-jobs/:job_id/status`
 - [x] Implement job assignment logic (next available agent)
 - [x] Create job creation and listing endpoints
-- [ ] Add agent capability detection (Topaz Video installed, version, etc.)
-- [ ] Create agent disconnection/cleanup logic
+- [x] Add agent capability detection (Topaz Video installed, version, etc.)
+- [x] Create agent disconnection/cleanup logic
 - [ ] Add agent authentication/security (optional API key)
 
 ### Backend - Upscaling Workflow Integration

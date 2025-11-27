@@ -56,12 +56,26 @@ impl AgentClient {
             "linux"
         };
         
+        // Check Topaz capabilities
+        let (topaz_installed, topaz_version) = self.check_topaz_capabilities().await;
+        let capabilities = serde_json::json!({
+            "topaz_video": topaz_installed,
+        });
+        
+        // Generate agent_id if not set
+        let agent_id = self.config.agent_id.clone().unwrap_or_else(|| {
+            format!("agent-{}", std::env::var("COMPUTERNAME")
+                .unwrap_or_else(|_| std::env::var("HOSTNAME")
+                    .unwrap_or_else(|_| "unknown".to_string())))
+        });
+        
         let registration = serde_json::json!({
+            "agent_id": agent_id,
             "name": self.config.agent_name,
             "platform": platform,
-            "capabilities": {
-                "topaz_video": self.check_topaz_installed().await,
-            }
+            "capabilities": serde_json::to_string(&capabilities).unwrap_or_else(|_| "{}".to_string()),
+            "topaz_version": topaz_version,
+            "api_key": self.config.api_key.clone(),
         });
         
         let url = format!("{}/api/agents/register", self.config.server_url);
@@ -125,22 +139,43 @@ impl AgentClient {
         }
     }
     
-    pub async fn check_topaz_installed(&self) -> bool {
-        // Check if Topaz Video AI is installed
-        // On Windows, typically in Program Files
+    /// Check Topaz capabilities (installed status and version)
+    pub async fn check_topaz_capabilities(&self) -> (bool, Option<String>) {
         if cfg!(target_os = "windows") {
-            let possible_paths = vec![
-                r"C:\Program Files\Topaz Labs LLC\Topaz Video AI\Topaz Video AI.exe",
-                r"C:\Program Files (x86)\Topaz Labs LLC\Topaz Video AI\Topaz Video AI.exe",
-            ];
-            
-            for path in possible_paths {
-                if std::path::Path::new(path).exists() {
-                    return true;
-                }
+            if let Some(topaz_path) = crate::topaz::TopazVideo::find_executable() {
+                // Try to get version from executable
+                let version = self.get_topaz_version(&topaz_path).await;
+                return (true, version);
             }
         }
-        false
+        (false, None)
+    }
+    
+    /// Get Topaz Video version from executable
+    async fn get_topaz_version(&self, exe_path: &std::path::Path) -> Option<String> {
+        // Try simple approach: check if TopazVideo can get version
+        match crate::topaz::TopazVideo::new() {
+            Ok(topaz) => {
+                // Try to get version (if implemented)
+                match topaz.get_version().await {
+                    Ok(version) if version != "Unknown" => Some(version),
+                    _ => {
+                        // Fallback: use executable filename/path as identifier
+                        exe_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| format!("Topaz Video AI ({})", s))
+                            .or_else(|| Some("Installed".to_string()))
+                    }
+                }
+            }
+            Err(_) => None,
+        }
+    }
+    
+    #[allow(dead_code)]
+    pub async fn check_topaz_installed(&self) -> bool {
+        self.check_topaz_capabilities().await.0
     }
     
     pub fn agent_id(&self) -> Option<String> {
@@ -337,4 +372,5 @@ pub struct UpscalingJob {
     pub error_message: Option<String>,
     pub processing_time_seconds: Option<i64>,
 }
+
 

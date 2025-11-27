@@ -50,12 +50,40 @@ impl TopazVideo {
     }
     
     /// Get Topaz version
-    #[allow(dead_code)]
     pub async fn get_version(&self) -> Result<String> {
-        // Topaz Video AI doesn't have a --version flag typically
-        // We'll try to get version from the executable metadata or use a default
-        // For now, return a placeholder
-        Ok("Unknown".to_string())
+        // Try to get version from executable file metadata
+        // On Windows, we can check file version info
+        #[cfg(target_os = "windows")]
+        {
+            // Try running Topaz with --version or similar flag
+            if let Ok(output) = tokio::process::Command::new(&self.executable_path)
+                .arg("--version")
+                .output()
+                .await
+            {
+                if let Ok(version_str) = String::from_utf8(output.stdout) {
+                    let trimmed = version_str.trim();
+                    if !trimmed.is_empty() {
+                        return Ok(trimmed.to_string());
+                    }
+                }
+            }
+            
+            // Fallback: Use executable file name or path as version identifier
+            // Extract version from path if available (e.g., "Topaz Video AI 4.0.0")
+            if let Some(file_stem) = self.executable_path.parent() {
+                if let Some(parent_name) = file_stem.file_name().and_then(|n| n.to_str()) {
+                    return Ok(parent_name.to_string());
+                }
+            }
+            
+            Ok("Installed".to_string())
+        }
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok("Installed".to_string())
+        }
     }
     
     /// Execute upscaling with Topaz Video AI
