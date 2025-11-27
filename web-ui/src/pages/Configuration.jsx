@@ -14,12 +14,40 @@ import {
   faCircleXmark,
   faCompactDisc,
   faCog,
+  faFileExport,
+  faFileImport,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import Dropdown from '../components/Dropdown';
 import CollapsibleSection from '../components/CollapsibleSection';
 import Tooltip from '../components/Tooltip';
+
+// Default configuration values matching backend defaults
+const DEFAULT_CONFIG = {
+  openai_api_key: null,
+  tmdb_api_key: 'fef1285fb85a74350b3292b5fac37fce',
+  notifications: {
+    enabled: true,
+    topic: 'staryavsky_alerts',
+  },
+  rsync: {
+    enabled: true,
+    destination: '/Volumes/video/RawRips',
+  },
+  speech_match: {
+    enabled: true,
+    audio_duration: 180,
+    whisper_model: 'base',
+    use_openai_api: true,
+  },
+  filebot: {
+    skip_by_default: false,
+    database: 'TheTVDB',
+    order: 'Airdate',
+    use_for_music: true,
+  },
+};
 
 export default function Configuration() {
   const [config, setConfig] = useState(null);
@@ -58,6 +86,47 @@ export default function Configuration() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleExportConfig = () => {
+    const dataStr = JSON.stringify(config, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ripley-config-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success('Configuration exported');
+  };
+
+  const handleImportConfig = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target.result);
+        setConfig(imported);
+        toast.success('Configuration imported - click Save to apply');
+        event.target.value = ''; // Reset file input
+      } catch (err) {
+        toast.error('Failed to import configuration: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleResetToDefaults = () => {
+    if (!window.confirm('Reset all settings to default values? This cannot be undone.')) {
+      return;
+    }
+    
+    setConfig(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
+    setOpenAIValid(null);
+    setTMDBValid(null);
+    toast.success('Configuration reset to defaults - click Save to apply');
   };
 
   const updateConfig = (path, value) => {
@@ -158,23 +227,56 @@ export default function Configuration() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Configuration</h1>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center justify-center px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors whitespace-nowrap"
-        >
-          {saving ? (
-            <>
-              <FontAwesomeIcon icon={faSpinner} className="mr-2 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <FontAwesomeIcon icon={faSave} className="mr-2" />
-              Save Configuration
-            </>
-          )}
-        </button>
+        <div className="flex gap-2">
+          <input
+            type="file"
+            id="import-config"
+            accept=".json"
+            onChange={handleImportConfig}
+            className="hidden"
+          />
+          <button
+            onClick={() => document.getElementById('import-config').click()}
+            className="flex items-center px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
+            title="Import configuration from JSON"
+          >
+            <FontAwesomeIcon icon={faFileImport} className="mr-2" />
+            Import
+          </button>
+          <button
+            onClick={handleExportConfig}
+            className="flex items-center px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors whitespace-nowrap"
+            title="Export configuration to JSON"
+          >
+            <FontAwesomeIcon icon={faFileExport} className="mr-2" />
+            Export
+          </button>
+          <button
+            onClick={handleResetToDefaults}
+            className="flex items-center px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg transition-colors whitespace-nowrap"
+            title="Reset all settings to default values"
+          >
+            <FontAwesomeIcon icon={faSync} className="mr-2" />
+            Reset
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center justify-center px-4 py-2 bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors whitespace-nowrap"
+          >
+            {saving ? (
+              <>
+                <FontAwesomeIcon icon={faSpinner} className="mr-2 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <FontAwesomeIcon icon={faSave} className="mr-2" />
+                Save
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* API Keys Section */}

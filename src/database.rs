@@ -106,6 +106,7 @@ pub struct Show {
     pub id: Option<i64>,
     pub name: String,
     pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
 }
 
 /// Rip history entry
@@ -246,7 +247,8 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS shows (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                last_used_at TEXT
             )",
             [],
         )?;
@@ -309,6 +311,21 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_drive_stats_drive ON drive_stats(drive)",
             [],
         )?;
+
+        // Add last_used_at column to shows table if it doesn't exist (migration)
+        let column_exists: Result<i64, _> = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('shows') WHERE name='last_used_at'",
+            [],
+            |row| row.get(0),
+        );
+        
+        if column_exists.unwrap_or(0) == 0 {
+            info!("Running migration: Adding last_used_at column to shows table");
+            conn.execute(
+                "ALTER TABLE shows ADD COLUMN last_used_at TEXT",
+                [],
+            )?;
+        }
 
         debug!("Database schema initialized");
         
@@ -628,7 +645,7 @@ impl Database {
     pub fn get_shows(&self) -> Result<Vec<Show>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, created_at FROM shows ORDER BY name ASC"
+            "SELECT id, name, created_at, last_used_at FROM shows ORDER BY name ASC"
         )?;
 
         let shows = stmt.query_map([], |row| {
@@ -638,6 +655,9 @@ impl Database {
                 created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
                     .unwrap()
                     .with_timezone(&Utc),
+                last_used_at: row.get::<_, Option<String>>(3)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -649,7 +669,7 @@ impl Database {
     pub fn get_show(&self, id: i64) -> Result<Option<Show>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, created_at FROM shows WHERE id = ?1"
+            "SELECT id, name, created_at, last_used_at FROM shows WHERE id = ?1"
         )?;
 
         let result = stmt.query_row([id], |row| {
@@ -659,6 +679,9 @@ impl Database {
                 created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
                     .unwrap()
                     .with_timezone(&Utc),
+                last_used_at: row.get::<_, Option<String>>(3)?
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                    .map(|dt| dt.with_timezone(&Utc)),
             })
         });
 
@@ -686,6 +709,18 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         conn.execute("DELETE FROM shows WHERE id = ?1", [id])?;
+
+        Ok(())
+    }
+
+    /// Update a show's last used timestamp
+    pub fn update_show_last_used(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "UPDATE shows SET last_used_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), id],
+        )?;
 
         Ok(())
     }

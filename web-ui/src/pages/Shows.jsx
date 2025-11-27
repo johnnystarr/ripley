@@ -10,9 +10,34 @@ import {
   faSpinner,
   faTv,
   faSearch,
+  faCheckSquare,
+  faSquare,
+  faFileExport,
+  faFileImport,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
+
+// Helper function to format relative time
+function formatRelativeTime(dateString) {
+  if (!dateString) return 'Never used';
+  
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffSecs = Math.floor(diffMs / 1000);
+  const diffMins = Math.floor(diffSecs / 60);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  
+  if (diffSecs < 60) return 'Just now';
+  if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? 's' : ''} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)} week${Math.floor(diffDays / 7) !== 1 ? 's' : ''} ago`;
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)} month${Math.floor(diffDays / 30) !== 1 ? 's' : ''} ago`;
+  return `${Math.floor(diffDays / 365)} year${Math.floor(diffDays / 365) !== 1 ? 's' : ''} ago`;
+}
 
 export default function Shows() {
   const [shows, setShows] = useState([]);
@@ -23,7 +48,9 @@ export default function Shows() {
   const [editingName, setEditingName] = useState('');
   const [selectedShowId, setSelectedShowId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('name-asc'); // name-asc, name-desc, date-asc, date-desc
+  const [sortBy, setSortBy] = useState('name-asc'); // name-asc, name-desc, date-asc, date-desc, last-used-asc, last-used-desc
+  const [selectedShows, setSelectedShows] = useState(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
 
   useEffect(() => {
     fetchShows();
@@ -113,11 +140,97 @@ export default function Shows() {
     try {
       await api.selectShow(id);
       setSelectedShowId(id);
-      toast.success('Show selected - will be used for all rips');
+      toast.success('Show selected');
     } catch (err) {
       toast.error('Failed to select show: ' + err.message);
     }
   }, []);
+
+  const handleToggleSelect = useCallback((id) => {
+    setSelectedShows(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    if (selectedShows.size === filteredShows.length) {
+      setSelectedShows(new Set());
+    } else {
+      setSelectedShows(new Set(filteredShows.map(s => s.id)));
+    }
+  }, [selectedShows.size, filteredShows]);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedShows.size === 0) return;
+    
+    if (!confirm(`Delete ${selectedShows.size} show(s)?`)) {
+      return;
+    }
+
+    try {
+      await Promise.all(
+        Array.from(selectedShows).map(id => api.deleteShow(id))
+      );
+      toast.success(`Deleted ${selectedShows.size} show(s)`);
+      setSelectedShows(new Set());
+      setBulkMode(false);
+      fetchShows();
+    } catch (err) {
+      toast.error('Failed to delete shows: ' + err.message);
+    }
+  }, [selectedShows, fetchShows]);
+
+  const handleExportShows = useCallback(() => {
+    const dataStr = JSON.stringify(shows, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ripley-shows-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success('Shows exported');
+  }, [shows]);
+
+  const handleImportShows = useCallback((event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const imported = JSON.parse(e.target.result);
+        if (!Array.isArray(imported)) {
+          throw new Error('Invalid format: expected array');
+        }
+
+        let imported_count = 0;
+        for (const show of imported) {
+          if (show.name && typeof show.name === 'string') {
+            try {
+              await api.createShow(show.name);
+              imported_count++;
+            } catch (err) {
+              console.error(`Failed to import "${show.name}":`, err);
+            }
+          }
+        }
+
+        toast.success(`Imported ${imported_count} show(s)`);
+        fetchShows();
+        event.target.value = ''; // Reset file input
+      } catch (err) {
+        toast.error('Failed to import shows: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  }, [fetchShows]);
 
   const startEdit = useCallback((show) => {
     setEditingId(show.id);
@@ -150,6 +263,20 @@ export default function Shows() {
           return a.id - b.id; // Older first (lower IDs)
         case 'date-desc':
           return b.id - a.id; // Newer first (higher IDs)
+        case 'last-used-desc': {
+          // Most recently used first, null values last
+          if (!a.last_used_at && !b.last_used_at) return 0;
+          if (!a.last_used_at) return 1;
+          if (!b.last_used_at) return -1;
+          return new Date(b.last_used_at) - new Date(a.last_used_at);
+        }
+        case 'last-used-asc': {
+          // Least recently used first, null values last
+          if (!a.last_used_at && !b.last_used_at) return 0;
+          if (!a.last_used_at) return 1;
+          if (!b.last_used_at) return -1;
+          return new Date(a.last_used_at) - new Date(b.last_used_at);
+        }
         default:
           return 0;
       }
@@ -175,15 +302,72 @@ export default function Shows() {
             Manage your list of shows. Select one to use as the default title for ripping.
           </p>
         </div>
-        {!isAdding && (
-          <button
-            onClick={() => setIsAdding(true)}
-            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
-          >
-            <FontAwesomeIcon icon={faPlus} className="mr-2" />
-            Add Show
-          </button>
-        )}
+        <div className="flex gap-2">
+          {!isAdding && !bulkMode && (
+            <>
+              <input
+                type="file"
+                id="import-shows"
+                accept=".json"
+                onChange={handleImportShows}
+                className="hidden"
+              />
+              <button
+                onClick={() => document.getElementById('import-shows').click()}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
+                title="Import shows from JSON"
+              >
+                <FontAwesomeIcon icon={faFileImport} className="mr-2" />
+                Import
+              </button>
+              <button
+                onClick={handleExportShows}
+                disabled={shows.length === 0}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
+                title="Export shows to JSON"
+              >
+                <FontAwesomeIcon icon={faFileExport} className="mr-2" />
+                Export
+              </button>
+              <button
+                onClick={() => setBulkMode(true)}
+                disabled={shows.length === 0}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
+              >
+                <FontAwesomeIcon icon={faCheckSquare} className="mr-2" />
+                Bulk
+              </button>
+              <button
+                onClick={() => setIsAdding(true)}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
+              >
+                <FontAwesomeIcon icon={faPlus} className="mr-2" />
+                Add
+              </button>
+            </>
+          )}
+          {bulkMode && (
+            <>
+              <button
+                onClick={handleBulkDelete}
+                disabled={selectedShows.size === 0}
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
+              >
+                <FontAwesomeIcon icon={faTrash} className="mr-2" />
+                Delete ({selectedShows.size})
+              </button>
+              <button
+                onClick={() => {
+                  setBulkMode(false);
+                  setSelectedShows(new Set());
+                }}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Search and Sort */}
@@ -219,6 +403,8 @@ export default function Shows() {
             <option value="name-desc">Name (Z-A)</option>
             <option value="date-desc">Newest First</option>
             <option value="date-asc">Oldest First</option>
+            <option value="last-used-desc">Recently Used</option>
+            <option value="last-used-asc">Least Used</option>
           </select>
         </div>
       )}
@@ -271,17 +457,44 @@ export default function Shows() {
           <p className="text-slate-500 text-sm mt-2">Try a different search term</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3">
-          {filteredShows.map((show) => (
-            <div
-              key={show.id}
-              className={`bg-slate-800 rounded-lg p-4 border transition-colors ${
-                selectedShowId === show.id
-                  ? 'border-cyan-500 bg-cyan-500/5'
-                  : 'border-slate-700 hover:border-slate-600'
-              }`}
-            >
-              {editingId === show.id ? (
+        <>
+          {bulkMode && (
+            <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 flex items-center justify-between">
+              <button
+                onClick={handleSelectAll}
+                className="text-cyan-400 hover:text-cyan-300 transition-colors"
+              >
+                <FontAwesomeIcon icon={selectedShows.size === filteredShows.length ? faCheckSquare : faSquare} className="mr-2" />
+                {selectedShows.size === filteredShows.length ? 'Deselect All' : 'Select All'}
+              </button>
+              <span className="text-slate-400 text-sm">
+                {selectedShows.size} of {filteredShows.length} selected
+              </span>
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-3">
+            {filteredShows.map((show) => (
+              <div
+                key={show.id}
+                className={`bg-slate-800 rounded-lg p-4 border transition-colors ${
+                  selectedShowId === show.id
+                    ? 'border-cyan-500 bg-cyan-500/5'
+                    : selectedShows.has(show.id)
+                    ? 'border-yellow-500 bg-yellow-500/5'
+                    : 'border-slate-700 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  {bulkMode && (
+                    <button
+                      onClick={() => handleToggleSelect(show.id)}
+                      className="text-2xl text-slate-400 hover:text-cyan-400 transition-colors mt-1"
+                    >
+                      <FontAwesomeIcon icon={selectedShows.has(show.id) ? faCheckSquare : faSquare} />
+                    </button>
+                  )}
+                  <div className="flex-1">
+                    {editingId === show.id ? (
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -313,9 +526,14 @@ export default function Shows() {
                         className="text-cyan-400 text-lg"
                       />
                     )}
-                    <span className="text-slate-100 font-medium text-lg">
-                      {show.name}
-                    </span>
+                    <div className="flex flex-col">
+                      <span className="text-slate-100 font-medium text-lg">
+                        {show.name}
+                      </span>
+                      <span className="text-slate-500 text-xs mt-0.5">
+                        Last used: {formatRelativeTime(show.last_used_at)}
+                      </span>
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     {selectedShowId !== show.id && (
@@ -341,9 +559,12 @@ export default function Shows() {
                   </div>
                 </div>
               )}
-            </div>
-          ))}
-        </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

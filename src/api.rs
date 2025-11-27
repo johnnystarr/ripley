@@ -909,6 +909,12 @@ async fn select_show(
                     error: format!("Failed to set title: {}", e),
                 });
             }
+            // Update the show's last used timestamp
+            if let Err(e) = state.db.update_show_last_used(id) {
+                return Err(ErrorResponse {
+                    error: format!("Failed to update last used timestamp: {}", e),
+                });
+            }
             Ok(Json(serde_json::json!({ "success": true, "name": show.name })))
         }
         Ok(None) => Err(ErrorResponse {

@@ -16,9 +16,9 @@
 
 ### Shows Page Improvements
 - [x] Add search/filter for shows list
-- [ ] Add bulk operations (delete multiple shows)
-- [ ] Add import/export shows (JSON/CSV)
-- [ ] Show last used date for each show
+- [x] Add bulk operations (delete multiple shows)
+- [x] Add import/export shows (JSON/CSV)
+- [x] Show last used date for each show
 - [x] Add sorting options (alphabetical, last used, date added)
 - [ ] Add pagination for large show lists
 
@@ -27,9 +27,9 @@
 - [x] Add "Test Connection" buttons for TMDB/OpenAI APIs
 - [x] Group settings into collapsible sections (API Keys, Ripping, Metadata, etc.)
 - [x] Add tooltips/help text explaining each setting
-- [ ] Add "Reset to Defaults" button
+- [x] Add "Reset to Defaults" button
 - [ ] Show config file location
-- [ ] Add config export/import feature
+- [x] Add config export/import feature
 
 ### Navigation & Layout
 - [ ] Add breadcrumbs navigation
@@ -84,7 +84,7 @@
 
 ### Ripping Features
 - [x] Add rip history logging (saves to database on completion)
-- [x] Add support for multiple simultaneous rips (multi-drive backend)
+- [x] Add support for multiple simultaneous rips (multi-drive backend with per-drive tracking)
 - [ ] Add rip queue management
 - [ ] Add priority system for rip queue
 - [ ] Add automatic retry logic with backoff
