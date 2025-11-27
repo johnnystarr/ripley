@@ -460,6 +460,13 @@ impl Database {
         Ok(logs)
     }
 
+    /// Clear all logs
+    pub fn clear_logs(&self) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute("DELETE FROM logs", [])?;
+        Ok(count)
+    }
+
     /// Add an issue
     pub fn add_issue(&self, issue: &Issue) -> Result<i64> {
         let conn = self.conn.lock().unwrap();

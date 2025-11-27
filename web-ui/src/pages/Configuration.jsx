@@ -10,6 +10,8 @@ import {
   faMicrophone,
   faEye,
   faEyeSlash,
+  faCircleCheck,
+  faCircleXmark,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -21,6 +23,10 @@ export default function Configuration() {
   const [saving, setSaving] = useState(false);
   const [showOpenAIKey, setShowOpenAIKey] = useState(false);
   const [showTMDBKey, setShowTMDBKey] = useState(false);
+  const [testingOpenAI, setTestingOpenAI] = useState(false);
+  const [testingTMDB, setTestingTMDB] = useState(false);
+  const [openAIValid, setOpenAIValid] = useState(null);
+  const [tmdbValid, setTMDBValid] = useState(null);
 
   useEffect(() => {
     fetchConfig();
@@ -63,6 +69,69 @@ export default function Configuration() {
       current[keys[keys.length - 1]] = value;
       return newConfig;
     });
+    
+    // Clear validation when key changes
+    if (path === 'openai_api_key') {
+      setOpenAIValid(null);
+    } else if (path === 'tmdb_api_key') {
+      setTMDBValid(null);
+    }
+  };
+
+  const testOpenAIConnection = async () => {
+    if (!config.openai_api_key) {
+      toast.error('Please enter an OpenAI API key first');
+      return;
+    }
+    
+    setTestingOpenAI(true);
+    try {
+      const response = await fetch('https://api.openai.com/v1/models', {
+        headers: {
+          'Authorization': `Bearer ${config.openai_api_key}`,
+        },
+      });
+      
+      if (response.ok) {
+        setOpenAIValid(true);
+        toast.success('OpenAI API key is valid!');
+      } else {
+        setOpenAIValid(false);
+        toast.error('OpenAI API key is invalid');
+      }
+    } catch (err) {
+      setOpenAIValid(false);
+      toast.error('Failed to test OpenAI connection: ' + err.message);
+    } finally {
+      setTestingOpenAI(false);
+    }
+  };
+
+  const testTMDBConnection = async () => {
+    if (!config.tmdb_api_key) {
+      toast.error('Please enter a TMDB API key first');
+      return;
+    }
+    
+    setTestingTMDB(true);
+    try {
+      const response = await fetch(
+        `https://api.themoviedb.org/3/configuration?api_key=${config.tmdb_api_key}`
+      );
+      
+      if (response.ok) {
+        setTMDBValid(true);
+        toast.success('TMDB API key is valid!');
+      } else {
+        setTMDBValid(false);
+        toast.error('TMDB API key is invalid');
+      }
+    } catch (err) {
+      setTMDBValid(false);
+      toast.error('Failed to test TMDB connection: ' + err.message);
+    } finally {
+      setTestingTMDB(false);
+    }
   };
 
   if (loading) {
@@ -118,20 +187,48 @@ export default function Configuration() {
               OpenAI API Key
               <span className="text-slate-500 ml-2">(for speech matching)</span>
             </label>
-            <div className="relative">
-              <input
-                type={showOpenAIKey ? 'text' : 'password'}
-                value={config.openai_api_key || ''}
-                onChange={(e) => updateConfig('openai_api_key', e.target.value || null)}
-                placeholder="sk-..."
-                className="w-full px-4 py-2 pr-12 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-              />
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showOpenAIKey ? 'text' : 'password'}
+                  value={config.openai_api_key || ''}
+                  onChange={(e) => updateConfig('openai_api_key', e.target.value || null)}
+                  placeholder="sk-..."
+                  className={`w-full px-4 py-2 pr-12 bg-slate-900 border rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none ${
+                    openAIValid === true
+                      ? 'border-green-500'
+                      : openAIValid === false
+                      ? 'border-red-500'
+                      : 'border-slate-700 focus:border-cyan-500'
+                  }`}
+                />
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
+                  {openAIValid === true && (
+                    <FontAwesomeIcon icon={faCircleCheck} className="text-green-400" />
+                  )}
+                  {openAIValid === false && (
+                    <FontAwesomeIcon icon={faCircleXmark} className="text-red-400" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowOpenAIKey(!showOpenAIKey)}
+                    className="text-slate-400 hover:text-slate-300"
+                  >
+                    <FontAwesomeIcon icon={showOpenAIKey ? faEyeSlash : faEye} />
+                  </button>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowOpenAIKey(!showOpenAIKey)}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300"
+                onClick={testOpenAIConnection}
+                disabled={testingOpenAI || !config.openai_api_key}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-600 text-slate-200 rounded-lg transition-colors whitespace-nowrap"
               >
-                <FontAwesomeIcon icon={showOpenAIKey ? faEyeSlash : faEye} />
+                {testingOpenAI ? (
+                  <FontAwesomeIcon icon={faSpinner} className="animate-spin" />
+                ) : (
+                  'Test'
+                )}
               </button>
             </div>
           </div>
@@ -142,20 +239,48 @@ export default function Configuration() {
               TMDB API Key
               <span className="text-slate-500 ml-2">(for movie metadata)</span>
             </label>
-            <div className="relative">
-              <input
-                type={showTMDBKey ? 'text' : 'password'}
-                value={config.tmdb_api_key || ''}
-                onChange={(e) => updateConfig('tmdb_api_key', e.target.value || null)}
-                placeholder="Enter TMDB API key"
-                className="w-full px-4 py-2 pr-12 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-              />
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showTMDBKey ? 'text' : 'password'}
+                  value={config.tmdb_api_key || ''}
+                  onChange={(e) => updateConfig('tmdb_api_key', e.target.value || null)}
+                  placeholder="Enter TMDB API key"
+                  className={`w-full px-4 py-2 pr-12 bg-slate-900 border rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none ${
+                    tmdbValid === true
+                      ? 'border-green-500'
+                      : tmdbValid === false
+                      ? 'border-red-500'
+                      : 'border-slate-700 focus:border-cyan-500'
+                  }`}
+                />
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center gap-2">
+                  {tmdbValid === true && (
+                    <FontAwesomeIcon icon={faCircleCheck} className="text-green-400" />
+                  )}
+                  {tmdbValid === false && (
+                    <FontAwesomeIcon icon={faCircleXmark} className="text-red-400" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowTMDBKey(!showTMDBKey)}
+                    className="text-slate-400 hover:text-slate-300"
+                  >
+                    <FontAwesomeIcon icon={showTMDBKey ? faEyeSlash : faEye} />
+                  </button>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setShowTMDBKey(!showTMDBKey)}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300"
+                onClick={testTMDBConnection}
+                disabled={testingTMDB || !config.tmdb_api_key}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-600 text-slate-200 rounded-lg transition-colors whitespace-nowrap"
               >
-                <FontAwesomeIcon icon={showTMDBKey ? faEyeSlash : faEye} />
+                {testingTMDB ? (
+                  <FontAwesomeIcon icon={faSpinner} className="animate-spin" />
+                ) : (
+                  'Test'
+                )}
               </button>
             </div>
           </div>

@@ -277,6 +277,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/rename", post(rename_files))
         .route("/logs", get(get_logs))
         .route("/logs/search", get(search_logs_handler))
+        .route("/logs/clear", delete(clear_logs_handler))
         .route("/issues", get(get_all_issues_handler))
         .route("/issues/active", get(get_active_issues))
         .route("/issues/:id/resolve", post(resolve_issue))
@@ -489,23 +490,27 @@ async fn run_rip_operation(
     state: ApiState,
     request: StartRipRequest,
 ) -> anyhow::Result<()> {
+    use crate::database::{RipHistory, RipStatus};
+    
+    let start_time = chrono::Utc::now();
+    let drive = "API".to_string(); // Will be updated when we detect the actual drive
     
     let _ = state.event_tx.send(ApiEvent::Log {
         level: "info".to_string(),
         message: "Starting rip operation...".to_string(),
-        drive: None,
+        drive: Some(drive.clone()),
     });
     
     // Use provided title or fall back to last saved title
     let title = if request.title.is_some() {
-        request.title
+        request.title.clone()
     } else {
         state.db.get_last_title().ok().flatten()
     };
     
     let args = RipArgs {
-        output_folder: request.output_path.map(PathBuf::from),
-        title,
+        output_folder: request.output_path.clone().map(PathBuf::from),
+        title: title.clone(),
         skip_metadata: request.skip_metadata,
         skip_filebot: request.skip_filebot,
         quality: 5,
@@ -514,18 +519,71 @@ async fn run_rip_operation(
     
     // Note: We'll need to refactor app::run to work without TUI
     // For now, this is a placeholder
-    match crate::app::run(args).await {
+    let result = crate::app::run(args).await;
+    
+    // Calculate duration
+    let end_time = chrono::Utc::now();
+    let duration_seconds = (end_time - start_time).num_seconds();
+    
+    // Try to get file size from output path
+    let file_size_bytes = if let Some(ref path) = request.output_path {
+        get_directory_size(&std::path::PathBuf::from(path)).await.ok()
+    } else {
+        None
+    };
+    
+    // Log to rip history
+    match &result {
         Ok(_) => {
             let _ = state.event_tx.send(ApiEvent::RipCompleted {
-                disc: "Unknown".to_string(),
-                drive: "Unknown".to_string(),
+                disc: title.clone().unwrap_or_else(|| "Unknown".to_string()),
+                drive: drive.clone(),
             });
+            
+            // Save successful rip to history
+            let history = RipHistory {
+                id: None,
+                timestamp: start_time,
+                drive: drive.clone(),
+                disc: None,
+                title: title.clone(),
+                disc_type: None, // Could be detected from media type
+                status: RipStatus::Success,
+                duration_seconds: Some(duration_seconds),
+                file_size_bytes,
+                output_path: request.output_path.clone(),
+                error_message: None,
+            };
+            
+            if let Err(e) = state.db.add_rip_history(&history) {
+                tracing::error!("Failed to save rip history: {}", e);
+            }
         }
         Err(e) => {
+            let error_msg = e.to_string();
             let _ = state.event_tx.send(ApiEvent::RipError {
-                error: e.to_string(),
-                drive: None,
+                error: error_msg.clone(),
+                drive: Some(drive.clone()),
             });
+            
+            // Save failed rip to history
+            let history = RipHistory {
+                id: None,
+                timestamp: start_time,
+                drive: drive.clone(),
+                disc: None,
+                title: title.clone(),
+                disc_type: None,
+                status: RipStatus::Failed,
+                duration_seconds: Some(duration_seconds),
+                file_size_bytes: None,
+                output_path: request.output_path.clone(),
+                error_message: Some(error_msg),
+            };
+            
+            if let Err(e) = state.db.add_rip_history(&history) {
+                tracing::error!("Failed to save rip history: {}", e);
+            }
         }
     }
     
@@ -533,6 +591,36 @@ async fn run_rip_operation(
     status.is_ripping = false;
     
     Ok(())
+}
+
+/// Get total size of a directory recursively
+fn get_directory_size_sync(path: &std::path::Path) -> anyhow::Result<i64> {
+    let mut total_size = 0i64;
+    
+    if path.is_file() {
+        let metadata = std::fs::metadata(path)?;
+        return Ok(metadata.len() as i64);
+    }
+    
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            if metadata.is_file() {
+                total_size += metadata.len() as i64;
+            } else if metadata.is_dir() {
+                total_size += get_directory_size_sync(&entry.path())?;
+            }
+        }
+    }
+    
+    Ok(total_size)
+}
+
+async fn get_directory_size(path: &std::path::Path) -> anyhow::Result<i64> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || get_directory_size_sync(&path))
+        .await?
 }
 
 /// Run rename operation in background
@@ -609,6 +697,19 @@ async fn search_logs_handler(
         Ok(logs) => Ok(Json(logs)),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to search logs: {}", e),
+        }),
+    }
+}
+
+/// Clear all logs
+async fn clear_logs_handler(State(state): State<ApiState>) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.clear_logs() {
+        Ok(count) => Ok(Json(serde_json::json!({
+            "success": true,
+            "deleted": count
+        }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to clear logs: {}", e),
         }),
     }
 }

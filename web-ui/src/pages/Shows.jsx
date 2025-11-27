@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faPlus,
@@ -9,6 +9,7 @@ import {
   faCheck,
   faSpinner,
   faTv,
+  faSearch,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -21,6 +22,7 @@ export default function Shows() {
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
   const [selectedShowId, setSelectedShowId] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     fetchShows();
@@ -126,6 +128,15 @@ export default function Shows() {
     setEditingName('');
   }, []);
 
+  // Filter shows based on search query
+  const filteredShows = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return shows;
+    }
+    const query = searchQuery.toLowerCase();
+    return shows.filter(show => show.name.toLowerCase().includes(query));
+  }, [shows, searchQuery]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -153,6 +164,31 @@ export default function Shows() {
           </button>
         )}
       </div>
+
+      {/* Search */}
+      {shows.length > 0 && (
+        <div className="relative">
+          <FontAwesomeIcon
+            icon={faSearch}
+            className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+          />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search shows..."
+            className="w-full pl-11 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-300"
+            >
+              <FontAwesomeIcon icon={faTimes} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Add New Show */}
       {isAdding && (
@@ -195,9 +231,15 @@ export default function Shows() {
           <p className="text-slate-400">No shows added yet</p>
           <p className="text-slate-500 text-sm mt-2">Click "Add Show" to get started</p>
         </div>
+      ) : filteredShows.length === 0 ? (
+        <div className="bg-slate-800 rounded-lg p-8 border border-slate-700 text-center">
+          <FontAwesomeIcon icon={faSearch} className="text-slate-600 text-4xl mb-3" />
+          <p className="text-slate-400">No shows match your search</p>
+          <p className="text-slate-500 text-sm mt-2">Try a different search term</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 gap-3">
-          {shows.map((show) => (
+          {filteredShows.map((show) => (
             <div
               key={show.id}
               className={`bg-slate-800 rounded-lg p-4 border transition-colors ${

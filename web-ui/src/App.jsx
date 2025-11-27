@@ -13,6 +13,7 @@ import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { wsManager } from './websocket';
 import ErrorBoundary from './components/ErrorBoundary';
+import { requestNotificationPermission, showRipNotification } from './utils/notifications';
 
 // Import pages
 import Dashboard from './pages/Dashboard';
@@ -25,16 +26,39 @@ function App() {
   const [wsConnected, setWsConnected] = useState(false);
 
   useEffect(() => {
+    // Request notification permission on mount
+    requestNotificationPermission();
+
     // Connect to WebSocket
     wsManager.connect();
 
     // Listen for connection status
-    const unsubscribe = wsManager.on('connection', ({ connected }) => {
+    const unsubscribeConnection = wsManager.on('connection', ({ connected }) => {
       setWsConnected(connected);
     });
 
+    // Listen for rip completion events
+    const unsubscribeRipComplete = wsManager.on('RipCompleted', (data) => {
+      showRipNotification({
+        title: data.disc_title || 'Unknown Disc',
+        status: 'success',
+        message: `Successfully ripped to ${data.output_path || 'output directory'}`,
+      });
+    });
+
+    // Listen for rip error events
+    const unsubscribeRipError = wsManager.on('RipError', (data) => {
+      showRipNotification({
+        title: data.disc_title || 'Unknown Disc',
+        status: 'failed',
+        message: data.error || 'Rip operation failed',
+      });
+    });
+
     return () => {
-      unsubscribe();
+      unsubscribeConnection();
+      unsubscribeRipComplete();
+      unsubscribeRipError();
       wsManager.disconnect();
     };
   }, []);

@@ -104,6 +104,13 @@ class ApiClient {
     return this.request(`/logs/search?${query}`);
   }
 
+  // Clear all logs
+  async clearLogs() {
+    return this.request('/logs/clear', {
+      method: 'DELETE',
+    });
+  }
+
   // Get all issues
   async getIssues() {
     return this.request('/issues');

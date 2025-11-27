@@ -9,13 +9,13 @@
 ### Dashboard Improvements
 - [ ] Show disc title/name when available (not just disc type)
 - [x] Add statistics cards (total rips, success rate, storage used)
-- [ ] Auto-scroll logs to bottom when new entries arrive
-- [ ] Add log level filtering on Dashboard (like Logs page)
-- [ ] Add clear logs button
-- [ ] Show rip duration/elapsed time for active operations
+- [x] Auto-scroll logs to bottom when new entries arrive
+- [x] Add log level filtering on Dashboard (like Logs page)
+- [x] Add clear logs button
+- [x] Show rip duration/elapsed time for active operations
 
 ### Shows Page Improvements
-- [ ] Add search/filter for shows list
+- [x] Add search/filter for shows list
 - [ ] Add bulk operations (delete multiple shows)
 - [ ] Add import/export shows (JSON/CSV)
 - [ ] Show last used date for each show
@@ -23,8 +23,8 @@
 - [ ] Add pagination for large show lists
 
 ### Configuration Page Improvements
-- [ ] Add validation feedback for API keys (visual indicators)
-- [ ] Add "Test Connection" buttons for TMDB/OpenAI APIs
+- [x] Add validation feedback for API keys (visual indicators)
+- [x] Add "Test Connection" buttons for TMDB/OpenAI APIs
 - [ ] Group settings into collapsible sections (API Keys, Ripping, Metadata, etc.)
 - [ ] Add tooltips/help text explaining each setting
 - [ ] Add "Reset to Defaults" button
@@ -38,7 +38,7 @@
 - [ ] Add user preferences (logs per page, polling interval, etc.)
 
 ### Real-time Features
-- [ ] Add browser/desktop notifications for completed rips
+- [x] Add browser/desktop notifications for completed rips
 - [ ] Add configurable sound notifications
 - [ ] Show active rip progress in browser tab title
 - [ ] Add pause/resume for rip operations
@@ -82,6 +82,7 @@
 - [ ] Add full-text search for logs
 
 ### Ripping Features
+- [x] Add rip history logging (saves to database on completion)
 - [ ] Add support for multiple simultaneous rips (multi-drive)
 - [ ] Add rip queue management
 - [ ] Add priority system for rip queue

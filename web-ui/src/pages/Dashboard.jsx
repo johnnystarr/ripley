@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
   faCompactDisc,
@@ -27,6 +27,10 @@ export default function Dashboard() {
   const [shows, setShows] = useState([]);
   const [selectedShowId, setSelectedShowId] = useState(null);
   const [statistics, setStatistics] = useState(null);
+  const [logLevelFilter, setLogLevelFilter] = useState('all');
+  const [ripStartTimes, setRipStartTimes] = useState({}); // Track start times by drive
+  const [elapsedTimes, setElapsedTimes] = useState({}); // Track elapsed time by drive
+  const logsEndRef = useRef(null);
 
   // Fetch drives and logs on mount
   useEffect(() => {
@@ -42,6 +46,36 @@ export default function Dashboard() {
     
     return () => clearInterval(driveInterval);
   }, []);
+
+  // Auto-scroll logs to bottom when new entries arrive
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs]);
+
+  // Update elapsed times every second for active rips
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsedTimes(prev => {
+        const now = Date.now();
+        const updated = {};
+        let hasChanges = false;
+        
+        for (const [drive, startTime] of Object.entries(ripStartTimes)) {
+          const elapsed = Math.floor((now - startTime) / 1000);
+          if (prev[drive] !== elapsed) {
+            hasChanges = true;
+          }
+          updated[drive] = elapsed;
+        }
+        
+        return hasChanges ? updated : prev;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [ripStartTimes]);
 
   // Listen to WebSocket events for real-time updates
   useEffect(() => {
@@ -82,12 +116,44 @@ export default function Dashboard() {
         setDrives(prev => prev.map(d => 
           d.device === drive ? { ...d, progress, status: message } : d
         ));
+        
+        // Start tracking time when rip begins (first progress update)
+        setRipStartTimes(prev => {
+          if (!prev[drive] && progress > 0) {
+            return { ...prev, [drive]: Date.now() };
+          }
+          return prev;
+        });
       }),
       wsManager.on('RipCompleted', ({ disc, drive }) => {
         toast.success(`Rip completed: ${disc}`);
+        // Clear start time when completed
+        setRipStartTimes(prev => {
+          const updated = { ...prev };
+          delete updated[drive];
+          return updated;
+        });
+        setElapsedTimes(prev => {
+          const updated = { ...prev };
+          delete updated[drive];
+          return updated;
+        });
       }),
-      wsManager.on('RipError', ({ error }) => {
+      wsManager.on('RipError', ({ error, drive }) => {
         toast.error(`Rip error: ${error}`);
+        // Clear start time on error
+        if (drive) {
+          setRipStartTimes(prev => {
+            const updated = { ...prev };
+            delete updated[drive];
+            return updated;
+          });
+          setElapsedTimes(prev => {
+            const updated = { ...prev };
+            delete updated[drive];
+            return updated;
+          });
+        }
       }),
     ];
 
@@ -234,6 +300,28 @@ export default function Dashboard() {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }, []);
+
+  const formatElapsedTime = useCallback((seconds) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${secs}s`;
+    } else {
+      return `${secs}s`;
+    }
+  }, []);
+
+  // Filter logs based on selected level
+  const filteredLogs = useMemo(() => {
+    if (logLevelFilter === 'all') {
+      return logs;
+    }
+    return logs.filter(log => log.level === logLevelFilter);
+  }, [logs, logLevelFilter]);
 
   if (loading) {
     return (
@@ -474,6 +562,12 @@ export default function Dashboard() {
                           style={{ width: `${drive.progress * 100}%` }}
                         />
                       </div>
+                      {elapsedTimes[drive.device] !== undefined && (
+                        <div className="flex justify-between text-xs mt-2">
+                          <span className="text-slate-400">Elapsed:</span>
+                          <span className="text-cyan-400 font-mono">{formatElapsedTime(elapsedTimes[drive.device])}</span>
+                        </div>
+                      )}
                       {drive.status && (
                         <p className="text-xs text-slate-400 mt-1">{drive.status}</p>
                       )}
@@ -498,18 +592,56 @@ export default function Dashboard() {
 
       {/* Real-time Log Stream */}
       <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold text-slate-100 mb-4">Live Logs</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold text-slate-100">Live Logs</h2>
+          <div className="flex items-center gap-3">
+            <Dropdown
+              value={logLevelFilter}
+              onChange={(value) => setLogLevelFilter(value)}
+              options={[
+                { value: 'all', label: 'All Levels' },
+                { value: 'info', label: 'Info' },
+                { value: 'success', label: 'Success' },
+                { value: 'warning', label: 'Warning' },
+                { value: 'error', label: 'Error' },
+              ]}
+            />
+            {logs.length > 0 && (
+              <button
+                onClick={async () => {
+                  if (window.confirm('Clear all logs? This cannot be undone.')) {
+                    try {
+                      await api.clearLogs();
+                      setLogs([]);
+                      toast.success('Logs cleared');
+                    } catch (err) {
+                      toast.error('Failed to clear logs: ' + err.message);
+                    }
+                  }
+                }}
+                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-sm rounded transition-colors"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
         <div className="bg-slate-900 rounded p-4 font-mono text-xs space-y-1 max-h-96 overflow-y-auto">
-          {logs.length === 0 ? (
-            <div className="text-slate-500 text-center py-8">No logs yet</div>
+          {filteredLogs.length === 0 ? (
+            <div className="text-slate-500 text-center py-8">
+              {logs.length === 0 ? 'No logs yet' : `No ${logLevelFilter} logs`}
+            </div>
           ) : (
-            logs.map((log, index) => (
-              <div key={index} className={`${getLogColor(log.level)} flex items-start`}>
-                <span className="text-slate-500 mr-2 flex-shrink-0">[{log.timestamp}]</span>
-                {log.drive && <span className="text-slate-600 mr-2 flex-shrink-0">[{log.drive}]</span>}
-                <span className={getLogColor(log.level)}>{log.message}</span>
-              </div>
-            ))
+            <>
+              {filteredLogs.map((log, index) => (
+                <div key={index} className={`${getLogColor(log.level)} flex items-start`}>
+                  <span className="text-slate-500 mr-2 flex-shrink-0">[{log.timestamp}]</span>
+                  {log.drive && <span className="text-slate-600 mr-2 flex-shrink-0">[{log.drive}]</span>}
+                  <span className={getLogColor(log.level)}>{log.message}</span>
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </>
           )}
         </div>
       </div>
