@@ -18,6 +18,9 @@ export default function Issues() {
   const [issues, setIssues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all'); // all, active, resolved
+  const [typeFilter, setTypeFilter] = useState('all'); // all, drive_error, network_error, rip_error
+  const [expandedIssue, setExpandedIssue] = useState(null);
+  const [issueLogs, setIssueLogs] = useState({});
 
   useEffect(() => {
     fetchIssues();
@@ -46,6 +49,38 @@ export default function Issues() {
     }
   }, [fetchIssues]);
 
+  const toggleIssueLogs = useCallback(async (issue) => {
+    if (expandedIssue === issue.id) {
+      setExpandedIssue(null);
+      return;
+    }
+    
+    setExpandedIssue(issue.id);
+    
+    // Fetch logs if not already cached
+    if (!issueLogs[issue.id]) {
+      try {
+        // Search for logs around the issue timestamp
+        const params = {};
+        if (issue.drive) params.drive = issue.drive;
+        
+        const logs = await api.searchLogs(params);
+        
+        // Filter logs near the issue timestamp (within 5 minutes)
+        const issueTime = new Date(issue.timestamp).getTime();
+        const relatedLogs = logs.filter(log => {
+          const logTime = new Date(log.timestamp).getTime();
+          const diff = Math.abs(logTime - issueTime);
+          return diff < 5 * 60 * 1000; // 5 minutes
+        }).slice(0, 10); // Limit to 10 logs
+        
+        setIssueLogs(prev => ({ ...prev, [issue.id]: relatedLogs }));
+      } catch (err) {
+        console.error('Failed to fetch issue logs:', err);
+      }
+    }
+  }, [expandedIssue, issueLogs]);
+
   const getIssueIcon = useCallback((issueType) => {
     switch (issueType?.toLowerCase()) {
       case 'drive_error':
@@ -73,15 +108,31 @@ export default function Issues() {
   }, []);
 
   const filteredIssues = useMemo(() => {
+    let filtered = issues;
+    
+    // Filter by status
     switch (filter) {
       case 'active':
-        return issues.filter(i => !i.resolved);
+        filtered = filtered.filter(i => !i.resolved);
+        break;
       case 'resolved':
-        return issues.filter(i => i.resolved);
-      default:
-        return issues;
+        filtered = filtered.filter(i => i.resolved);
+        break;
     }
-  }, [issues, filter]);
+    
+    // Filter by type
+    if (typeFilter !== 'all') {
+      filtered = filtered.filter(i => i.issue_type?.toLowerCase() === typeFilter);
+    }
+    
+    return filtered;
+  }, [issues, filter, typeFilter]);
+  
+  // Get unique issue types for filter badges
+  const issueTypes = useMemo(() => {
+    const types = new Set(issues.map(i => i.issue_type?.toLowerCase()).filter(Boolean));
+    return Array.from(types);
+  }, [issues]);
 
   if (loading) {
     return (
@@ -108,18 +159,19 @@ export default function Issues() {
         </button>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex gap-2 border-b border-slate-700">
-        <button
-          onClick={() => setFilter('all')}
-          className={`px-4 py-2 font-medium transition-colors ${
-            filter === 'all'
-              ? 'text-cyan-400 border-b-2 border-cyan-400'
-              : 'text-slate-400 hover:text-slate-300'
-          }`}
-        >
-          All Issues ({issues.length})
-        </button>
+      {/* Filter Tabs and Type Badges */}
+      <div className="space-y-3">
+        <div className="flex gap-2 border-b border-slate-700">
+          <button
+            onClick={() => setFilter('all')}
+            className={`px-4 py-2 font-medium transition-colors ${
+              filter === 'all'
+                ? 'text-cyan-400 border-b-2 border-cyan-400'
+                : 'text-slate-400 hover:text-slate-300'
+            }`}
+          >
+            All Issues ({issues.length})
+          </button>
         <button
           onClick={() => setFilter('active')}
           className={`px-4 py-2 font-medium transition-colors ${
@@ -140,6 +192,37 @@ export default function Issues() {
         >
           Resolved ({issues.filter(i => i.resolved).length})
         </button>
+        </div>
+        
+        {/* Type Filter Badges */}
+        {issueTypes.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setTypeFilter('all')}
+              className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                typeFilter === 'all'
+                  ? 'bg-cyan-500 text-white'
+                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              }`}
+            >
+              All Types
+            </button>
+            {issueTypes.map(type => (
+              <button
+                key={type}
+                onClick={() => setTypeFilter(type)}
+                className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                  typeFilter === type
+                    ? 'bg-cyan-500 text-white'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                <FontAwesomeIcon icon={getIssueIcon(type)} className="mr-1" />
+                {type.replace('_', ' ')}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Issues List */}
@@ -206,6 +289,46 @@ export default function Issues() {
                       </div>
                     )}
                   </div>
+                  
+                  {/* Show Related Logs Button */}
+                  <button
+                    onClick={() => toggleIssueLogs(issue)}
+                    className="mt-3 text-sm text-cyan-400 hover:text-cyan-300 transition-colors"
+                  >
+                    {expandedIssue === issue.id ? '▼' : '▶'} Show Related Logs
+                  </button>
+                  
+                  {/* Related Logs */}
+                  {expandedIssue === issue.id && (
+                    <div className="mt-3 bg-slate-900/50 rounded p-3 max-h-64 overflow-y-auto">
+                      <h4 className="text-sm font-semibold text-slate-300 mb-2">Related Logs (within 5 min)</h4>
+                      {issueLogs[issue.id] ? (
+                        issueLogs[issue.id].length > 0 ? (
+                          <div className="space-y-1 font-mono text-xs">
+                            {issueLogs[issue.id].map((log, idx) => (
+                              <div key={idx} className="text-slate-400">
+                                <span className="text-slate-600">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                                {log.drive && <span className="text-slate-600 ml-1">[{log.drive}]</span>}
+                                <span className={`ml-1 ${
+                                  log.level === 'error' ? 'text-red-400' :
+                                  log.level === 'warning' ? 'text-yellow-400' :
+                                  log.level === 'success' ? 'text-green-400' :
+                                  'text-cyan-400'
+                                }`}>{log.message}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-slate-500 text-sm">No related logs found</p>
+                        )
+                      ) : (
+                        <div className="flex items-center text-slate-500">
+                          <FontAwesomeIcon icon={faSpinner} className="animate-spin mr-2" />
+                          Loading logs...
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 
                 {!issue.resolved && (

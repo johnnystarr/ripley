@@ -31,6 +31,8 @@ export default function Dashboard() {
   const [logLevelFilter, setLogLevelFilter] = useState('all');
   const [ripStartTimes, setRipStartTimes] = useState({}); // Track start times by drive
   const [elapsedTimes, setElapsedTimes] = useState({}); // Track elapsed time by drive
+  const [failedRips, setFailedRips] = useState([]);
+  const [showFailedRips, setShowFailedRips] = useState(false);
   const logsEndRef = useRef(null);
 
   // Fetch drives and logs on mount
