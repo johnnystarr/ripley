@@ -12,6 +12,7 @@ import {
   faSave,
   faTimes,
   faBan,
+  faSync,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
@@ -43,6 +44,7 @@ export default function Dashboard() {
     fetchLastTitle();
     fetchShows();
     fetchStatistics();
+    fetchFailedRips();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -251,6 +253,16 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchFailedRips = useCallback(async () => {
+    try {
+      const data = await api.getRipHistory(10);
+      const failed = data.filter(rip => rip.status === 'failed');
+      setFailedRips(failed.slice(0, 5)); // Show last 5 failures
+    } catch (err) {
+      console.error('Failed to fetch rip history:', err);
+    }
+  }, []);
+
   const handleShowSelect = useCallback(async (showId) => {
     try {
       await api.selectShow(showId);
@@ -306,6 +318,20 @@ export default function Dashboard() {
       toast.success('Rip operation stopped');
     } catch (err) {
       toast.error('Failed to stop rip: ' + err.message);
+    }
+  }, []);
+
+  const handleRetryRip = useCallback(async (ripHistory) => {
+    try {
+      const params = {
+        title: ripHistory.title,
+        output_path: ripHistory.output_path,
+      };
+      await api.startRip(params);
+      toast.success(`Retrying rip: ${ripHistory.title || 'Unknown'}`);
+      setShowFailedRips(false);
+    } catch (err) {
+      toast.error('Failed to start rip: ' + err.message);
     }
   }, []);
 
@@ -404,11 +430,17 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+          <div 
+            className="bg-slate-800 rounded-lg p-5 border border-slate-700 cursor-pointer hover:border-red-500/50 transition-colors"
+            onClick={() => failedRips.length > 0 && setShowFailedRips(!showFailedRips)}
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-slate-400 text-sm">Failed Rips</p>
                 <p className="text-3xl font-bold text-red-400 mt-1">{statistics.failed_rips}</p>
+                {failedRips.length > 0 && (
+                  <p className="text-xs text-slate-500 mt-1">Click to view recent failures</p>
+                )}
               </div>
               <div className="bg-red-500/10 p-3 rounded-lg">
                 <FontAwesomeIcon icon={faCircleXmark} className="text-red-400 text-2xl" />
@@ -428,6 +460,46 @@ export default function Dashboard() {
                 <FontAwesomeIcon icon={faHdd} className="text-slate-400 text-2xl" />
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recent Failed Rips */}
+      {showFailedRips && failedRips.length > 0 && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-red-400">Recent Failed Rips</h2>
+            <button
+              onClick={() => setShowFailedRips(false)}
+              className="text-slate-400 hover:text-slate-300"
+            >
+              <FontAwesomeIcon icon={faTimes} />
+            </button>
+          </div>
+          <div className="space-y-3">
+            {failedRips.map((rip, idx) => (
+              <div key={idx} className="bg-slate-900/50 rounded-lg p-4 border border-slate-700">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-slate-100 mb-1">
+                      {rip.title || 'Unknown Title'}
+                    </h3>
+                    <p className="text-sm text-red-400 mb-2">{rip.error_message}</p>
+                    <div className="flex gap-4 text-xs text-slate-400">
+                      <span>{new Date(rip.timestamp).toLocaleString()}</span>
+                      {rip.drive && <span>Drive: {rip.drive}</span>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleRetryRip(rip)}
+                    className="ml-4 px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white text-sm rounded transition-colors whitespace-nowrap"
+                  >
+                    <FontAwesomeIcon icon={faSync} className="mr-1" />
+                    Retry
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

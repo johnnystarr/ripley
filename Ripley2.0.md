@@ -55,8 +55,8 @@
 - [ ] Add timeline view of all rip operations
 
 ### Error Handling & UX
-- [ ] Better error messages with suggested fixes
-- [ ] Add retry button for failed operations
+- [x] Better error messages with suggested fixes
+- [x] Add retry button for failed operations
 - [ ] Export error logs for debugging
 - [ ] Add issue resolution workflow (assign, track, notes)
 - [ ] Show error frequency/patterns
