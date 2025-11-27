@@ -85,6 +85,13 @@ export default function Dashboard() {
         const logEntry = { level, message, drive, timestamp };
         setLogs(prev => [logEntry, ...prev].slice(0, 100));
       }),
+      wsManager.on('RipStarted', ({ disc, drive }) => {
+        // Update drive with disc title when rip starts
+        setDrives(prev => prev.map(d => 
+          d.device === drive ? { ...d, disc_title: disc, progress: 0 } : d
+        ));
+        toast.success(`Started ripping: ${disc}`);
+      }),
       wsManager.on('DriveDetected', ({ drive }) => {
         setDrives(prev => {
           const exists = prev.some(d => d.device === drive.device);
@@ -127,6 +134,10 @@ export default function Dashboard() {
       }),
       wsManager.on('RipCompleted', ({ disc, drive }) => {
         toast.success(`Rip completed: ${disc}`);
+        // Clear disc title and rip state
+        setDrives(prev => prev.map(d => 
+          d.device === drive ? { ...d, disc_title: null, progress: 0, status: null } : d
+        ));
         // Clear start time when completed
         setRipStartTimes(prev => {
           const updated = { ...prev };
@@ -138,11 +149,16 @@ export default function Dashboard() {
           delete updated[drive];
           return updated;
         });
+        // Refresh statistics
+        fetchStatistics();
       }),
       wsManager.on('RipError', ({ error, drive }) => {
         toast.error(`Rip error: ${error}`);
-        // Clear start time on error
+        // Clear disc title and rip state on error
         if (drive) {
+          setDrives(prev => prev.map(d => 
+            d.device === drive ? { ...d, disc_title: null, progress: 0, status: null } : d
+          ));
           setRipStartTimes(prev => {
             const updated = { ...prev };
             delete updated[drive];
@@ -542,6 +558,13 @@ export default function Dashboard() {
                       {drive.has_disc ? 'Disc Present' : 'No Disc'}
                     </span>
                   </div>
+                  
+                  {drive.disc_title && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Title:</span>
+                      <span className="text-cyan-400 font-semibold">{drive.disc_title}</span>
+                    </div>
+                  )}
                   
                   {drive.disc_type && (
                     <div className="flex justify-between">

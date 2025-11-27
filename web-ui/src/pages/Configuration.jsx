@@ -12,10 +12,13 @@ import {
   faEyeSlash,
   faCircleCheck,
   faCircleXmark,
+  faCompactDisc,
+  faCog,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import Dropdown from '../components/Dropdown';
+import CollapsibleSection from '../components/CollapsibleSection';
 
 export default function Configuration() {
   const [config, setConfig] = useState(null);
@@ -174,13 +177,8 @@ export default function Configuration() {
       </div>
 
       {/* API Keys Section */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center">
-          <FontAwesomeIcon icon={faKey} className="mr-2 text-cyan-400" />
-          API Keys
-        </h2>
-        
-        <div className="space-y-4">
+      <CollapsibleSection title="API Keys" icon={faKey} defaultOpen={true}>
+        <div className="space-y-4 mt-4">
           {/* OpenAI API Key */}
           <div>
             <label className="block text-slate-400 text-sm mb-2">
@@ -285,16 +283,11 @@ export default function Configuration() {
             </div>
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* Notifications Section */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center">
-          <FontAwesomeIcon icon={faBell} className="mr-2 text-cyan-400" />
-          Notifications
-        </h2>
-        
-        <div className="space-y-4">
+      <CollapsibleSection title="Notifications" icon={faBell} defaultOpen={false}>
+        <div className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <div>
               <label className="text-slate-100 font-medium">Enable Notifications</label>
@@ -325,16 +318,11 @@ export default function Configuration() {
             />
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* Rsync Section */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center">
-          <FontAwesomeIcon icon={faSync} className="mr-2 text-cyan-400" />
-          Rsync Backup
-        </h2>
-        
-        <div className="space-y-4">
+      <CollapsibleSection title="Rsync Backup" icon={faSync} defaultOpen={false}>
+        <div className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <div>
               <label className="text-slate-100 font-medium">Enable Rsync</label>
@@ -365,16 +353,11 @@ export default function Configuration() {
             />
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* Speech Match Section */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center">
-          <FontAwesomeIcon icon={faMicrophone} className="mr-2 text-cyan-400" />
-          Speech Matching
-        </h2>
-        
-        <div className="space-y-4">
+      <CollapsibleSection title="Speech Matching" icon={faMicrophone} defaultOpen={false}>
+        <div className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <div>
               <label className="text-slate-100 font-medium">Enable Speech Match</label>
@@ -445,16 +428,11 @@ export default function Configuration() {
             </button>
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* Filebot Section */}
-      <div className="bg-slate-800 rounded-lg p-6 border border-slate-700">
-        <h2 className="text-xl font-semibold text-slate-100 mb-4 flex items-center">
-          <FontAwesomeIcon icon={faFilm} className="mr-2 text-cyan-400" />
-          Filebot
-        </h2>
-        
-        <div className="space-y-4">
+      <CollapsibleSection title="Filebot Metadata" icon={faFilm} defaultOpen={false}>
+        <div className="space-y-4 mt-4">
           <div className="flex items-center justify-between">
             <div>
               <label className="text-slate-100 font-medium">Skip by Default</label>
@@ -513,9 +491,9 @@ export default function Configuration() {
             </button>
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      {/* Save Button (bottom) */}
+      {/* Save Button */}
       <div className="flex justify-end">
         <button
           onClick={handleSave}

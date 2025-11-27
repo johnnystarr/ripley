@@ -495,18 +495,24 @@ async fn run_rip_operation(
     let start_time = chrono::Utc::now();
     let drive = "API".to_string(); // Will be updated when we detect the actual drive
     
-    let _ = state.event_tx.send(ApiEvent::Log {
-        level: "info".to_string(),
-        message: "Starting rip operation...".to_string(),
-        drive: Some(drive.clone()),
-    });
-    
     // Use provided title or fall back to last saved title
     let title = if request.title.is_some() {
         request.title.clone()
     } else {
         state.db.get_last_title().ok().flatten()
     };
+    
+    // Send RipStarted event
+    let _ = state.event_tx.send(ApiEvent::RipStarted {
+        disc: title.clone().unwrap_or_else(|| "Unknown Disc".to_string()),
+        drive: drive.clone(),
+    });
+    
+    let _ = state.event_tx.send(ApiEvent::Log {
+        level: "info".to_string(),
+        message: format!("Starting rip: {}", title.clone().unwrap_or_else(|| "Unknown".to_string())),
+        drive: Some(drive.clone()),
+    });
     
     let args = RipArgs {
         output_folder: request.output_path.clone().map(PathBuf::from),

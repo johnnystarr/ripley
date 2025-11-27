@@ -7,7 +7,7 @@
 ## Frontend Enhancements
 
 ### Dashboard Improvements
-- [ ] Show disc title/name when available (not just disc type)
+- [x] Show disc title/name when available (not just disc type)
 - [x] Add statistics cards (total rips, success rate, storage used)
 - [x] Auto-scroll logs to bottom when new entries arrive
 - [x] Add log level filtering on Dashboard (like Logs page)
@@ -19,13 +19,13 @@
 - [ ] Add bulk operations (delete multiple shows)
 - [ ] Add import/export shows (JSON/CSV)
 - [ ] Show last used date for each show
-- [ ] Add sorting options (alphabetical, last used, date added)
+- [x] Add sorting options (alphabetical, last used, date added)
 - [ ] Add pagination for large show lists
 
 ### Configuration Page Improvements
 - [x] Add validation feedback for API keys (visual indicators)
 - [x] Add "Test Connection" buttons for TMDB/OpenAI APIs
-- [ ] Group settings into collapsible sections (API Keys, Ripping, Metadata, etc.)
+- [x] Group settings into collapsible sections (API Keys, Ripping, Metadata, etc.)
 - [ ] Add tooltips/help text explaining each setting
 - [ ] Add "Reset to Defaults" button
 - [ ] Show config file location

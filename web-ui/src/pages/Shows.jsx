@@ -23,6 +23,7 @@ export default function Shows() {
   const [editingName, setEditingName] = useState('');
   const [selectedShowId, setSelectedShowId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('name-asc'); // name-asc, name-desc, date-asc, date-desc
 
   useEffect(() => {
     fetchShows();
@@ -128,14 +129,34 @@ export default function Shows() {
     setEditingName('');
   }, []);
 
-  // Filter shows based on search query
+  // Filter and sort shows
   const filteredShows = useMemo(() => {
-    if (!searchQuery.trim()) {
-      return shows;
+    let filtered = shows;
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = shows.filter(show => show.name.toLowerCase().includes(query));
     }
-    const query = searchQuery.toLowerCase();
-    return shows.filter(show => show.name.toLowerCase().includes(query));
-  }, [shows, searchQuery]);
+    
+    // Apply sorting
+    const sorted = [...filtered].sort((a, b) => {
+      switch (sortBy) {
+        case 'name-asc':
+          return a.name.localeCompare(b.name);
+        case 'name-desc':
+          return b.name.localeCompare(a.name);
+        case 'date-asc':
+          return a.id - b.id; // Older first (lower IDs)
+        case 'date-desc':
+          return b.id - a.id; // Newer first (higher IDs)
+        default:
+          return 0;
+      }
+    });
+    
+    return sorted;
+  }, [shows, searchQuery, sortBy]);
 
   if (loading) {
     return (
@@ -165,28 +186,40 @@ export default function Shows() {
         )}
       </div>
 
-      {/* Search */}
+      {/* Search and Sort */}
       {shows.length > 0 && (
-        <div className="relative">
-          <FontAwesomeIcon
-            icon={faSearch}
-            className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-          />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search shows..."
-            className="w-full pl-11 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-300"
-            >
-              <FontAwesomeIcon icon={faTimes} />
-            </button>
-          )}
+        <div className="flex gap-3">
+          <div className="relative flex-1">
+            <FontAwesomeIcon
+              icon={faSearch}
+              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search shows..."
+              className="w-full pl-11 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-300"
+              >
+                <FontAwesomeIcon icon={faTimes} />
+              </button>
+            )}
+          </div>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
+          >
+            <option value="name-asc">Name (A-Z)</option>
+            <option value="name-desc">Name (Z-A)</option>
+            <option value="date-desc">Newest First</option>
+            <option value="date-asc">Oldest First</option>
+          </select>
         </div>
       )}
 
