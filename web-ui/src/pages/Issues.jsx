@@ -144,16 +144,16 @@ export default function Issues() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-slate-100">Issues</h1>
-          <p className="text-slate-400 mt-2">
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Issues</h1>
+          <p className="text-slate-400 mt-2 text-sm sm:text-base">
             View and manage system issues and errors
           </p>
         </div>
         <button
           onClick={fetchIssues}
-          className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
+          className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors whitespace-nowrap"
         >
           Refresh
         </button>
@@ -161,10 +161,10 @@ export default function Issues() {
 
       {/* Filter Tabs and Type Badges */}
       <div className="space-y-3">
-        <div className="flex gap-2 border-b border-slate-700">
+        <div className="flex gap-2 border-b border-slate-700 overflow-x-auto">
           <button
             onClick={() => setFilter('all')}
-            className={`px-4 py-2 font-medium transition-colors ${
+            className={`px-4 py-2 font-medium transition-colors whitespace-nowrap text-sm sm:text-base ${
               filter === 'all'
                 ? 'text-cyan-400 border-b-2 border-cyan-400'
                 : 'text-slate-400 hover:text-slate-300'
@@ -174,7 +174,7 @@ export default function Issues() {
           </button>
         <button
           onClick={() => setFilter('active')}
-          className={`px-4 py-2 font-medium transition-colors ${
+          className={`px-4 py-2 font-medium transition-colors whitespace-nowrap text-sm sm:text-base ${
             filter === 'active'
               ? 'text-cyan-400 border-b-2 border-cyan-400'
               : 'text-slate-400 hover:text-slate-300'
@@ -184,7 +184,7 @@ export default function Issues() {
         </button>
         <button
           onClick={() => setFilter('resolved')}
-          className={`px-4 py-2 font-medium transition-colors ${
+          className={`px-4 py-2 font-medium transition-colors whitespace-nowrap text-sm sm:text-base ${
             filter === 'resolved'
               ? 'text-cyan-400 border-b-2 border-cyan-400'
               : 'text-slate-400 hover:text-slate-300'
@@ -249,17 +249,17 @@ export default function Issues() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center mb-2">
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
                     <FontAwesomeIcon
                       icon={getIssueIcon(issue.issue_type)}
-                      className="mr-3"
+                      className="mr-1"
                     />
-                    <h3 className="font-semibold text-lg">{issue.title}</h3>
-                    <span className="ml-3 px-2 py-1 text-xs rounded bg-slate-900/50">
+                    <h3 className="font-semibold text-base sm:text-lg">{issue.title}</h3>
+                    <span className="px-2 py-1 text-xs rounded bg-slate-900/50">
                       {issue.issue_type}
                     </span>
                     {issue.resolved && (
-                      <span className="ml-2 px-2 py-1 text-xs rounded bg-green-500/20 text-green-400">
+                      <span className="px-2 py-1 text-xs rounded bg-green-500/20 text-green-400">
                         Resolved
                       </span>
                     )}

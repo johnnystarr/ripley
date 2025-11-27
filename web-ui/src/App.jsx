@@ -24,9 +24,29 @@ import Shows from './pages/Shows';
 import Issues from './pages/Issues';
 
 function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 1024); // Default closed on mobile
   const [wsConnected, setWsConnected] = useState(false);
   const [ripProgress, setRipProgress] = useState(null); // { disc: string, progress: number }
+
+  // Handle responsive sidebar
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth >= 1024) {
+        setSidebarOpen(true);
+      }
+    };
+    
+    const handleCloseSidebar = () => {
+      setSidebarOpen(false);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('closeSidebar', handleCloseSidebar);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('closeSidebar', handleCloseSidebar);
+    };
+  }, []);
 
   useEffect(() => {
     // Request notification permission on mount
@@ -153,14 +173,32 @@ function Sidebar({ isOpen, wsConnected }) {
   ];
 
   return (
-    <div className={`bg-slate-800 border-r border-slate-700 transition-all duration-300 ${
-      isOpen ? 'w-64' : 'w-0'
-    } overflow-hidden`}>
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-yellow-400 mb-8 flex items-center">
-          <img src="/ripley-head.png" alt="Ripley" className="w-[35px] h-auto mr-2" />
-          RIPLEY
-        </h1>
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+          onClick={() => {
+            if (window.innerWidth < 1024) {
+              // Close sidebar when clicking overlay on mobile
+              const event = new CustomEvent('closeSidebar');
+              window.dispatchEvent(event);
+            }
+          }}
+        />
+      )}
+      
+      {/* Sidebar */}
+      <div className={`
+        bg-slate-800 border-r border-slate-700 transition-all duration-300
+        ${isOpen ? 'w-64' : 'w-0'} overflow-hidden
+        lg:relative fixed inset-y-0 left-0 z-50
+      `}>
+        <div className="p-6">
+          <h1 className="text-2xl font-bold text-yellow-400 mb-8 flex items-center">
+            <img src="/ripley-head.png" alt="Ripley" className="w-[35px] h-auto mr-2" />
+            RIPLEY
+          </h1>
 
         <nav className="space-y-2">
           {navItems.map((item) => (
@@ -193,8 +231,9 @@ function Sidebar({ isOpen, wsConnected }) {
             </span>
           </div>
         </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

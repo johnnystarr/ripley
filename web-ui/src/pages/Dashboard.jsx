@@ -18,6 +18,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
 import Dropdown from '../components/Dropdown';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 export default function Dashboard() {
   const [drives, setDrives] = useState([]);
@@ -34,6 +35,7 @@ export default function Dashboard() {
   const [elapsedTimes, setElapsedTimes] = useState({}); // Track elapsed time by drive
   const [failedRips, setFailedRips] = useState([]);
   const [showFailedRips, setShowFailedRips] = useState(false);
+  const [ripHistory, setRipHistory] = useState([]);
   const logsEndRef = useRef(null);
 
   // Fetch drives and logs on mount
@@ -45,6 +47,7 @@ export default function Dashboard() {
     fetchShows();
     fetchStatistics();
     fetchFailedRips();
+    fetchRipHistory();
     
     // Poll for drive changes every 3 seconds
     const driveInterval = setInterval(fetchDrives, 3000);
@@ -263,6 +266,15 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchRipHistory = useCallback(async () => {
+    try {
+      const data = await api.getRipHistory(30); // Get last 30 for charts
+      setRipHistory(data);
+    } catch (err) {
+      console.error('Failed to fetch rip history:', err);
+    }
+  }, []);
+
   const handleShowSelect = useCallback(async (showId) => {
     try {
       await api.selectShow(showId);
@@ -380,6 +392,37 @@ export default function Dashboard() {
     return logs.filter(log => log.level === logLevelFilter);
   }, [logs, logLevelFilter]);
 
+  // Prepare chart data
+  const chartData = useMemo(() => {
+    if (!ripHistory.length) return { daily: [], statusPie: [] };
+
+    // Group by date
+    const dailyStats = {};
+    ripHistory.forEach(rip => {
+      const date = new Date(rip.timestamp).toLocaleDateString();
+      if (!dailyStats[date]) {
+        dailyStats[date] = { date, success: 0, failed: 0, cancelled: 0 };
+      }
+      dailyStats[date][rip.status]++;
+    });
+
+    const daily = Object.values(dailyStats).slice(-14); // Last 14 days
+
+    // Status distribution
+    const statusCounts = { success: 0, failed: 0, cancelled: 0 };
+    ripHistory.forEach(rip => {
+      statusCounts[rip.status]++;
+    });
+
+    const statusPie = [
+      { name: 'Success', value: statusCounts.success, color: '#22d3ee' },
+      { name: 'Failed', value: statusCounts.failed, color: '#ef4444' },
+      { name: 'Cancelled', value: statusCounts.cancelled, color: '#94a3b8' },
+    ].filter(item => item.value > 0);
+
+    return { daily, statusPie };
+  }, [ripHistory]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -399,7 +442,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <h1 className="text-3xl font-bold text-slate-100">Dashboard</h1>
+      <h1 className="text-2xl md:text-3xl font-bold text-slate-100">Dashboard</h1>
 
       {/* Statistics Cards */}
       {statistics && (
@@ -408,7 +451,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-slate-400 text-sm">Total Rips</p>
-                <p className="text-3xl font-bold text-slate-100 mt-1">{statistics.total_rips}</p>
+                <p className="text-2xl md:text-3xl font-bold text-slate-100 mt-1">{statistics.total_rips}</p>
               </div>
               <div className="bg-cyan-500/10 p-3 rounded-lg">
                 <FontAwesomeIcon icon={faCompactDisc} className="text-cyan-400 text-2xl" />
@@ -420,7 +463,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-slate-400 text-sm">Success Rate</p>
-                <p className="text-3xl font-bold text-green-400 mt-1">
+                <p className="text-2xl md:text-3xl font-bold text-green-400 mt-1">
                   {statistics.success_rate.toFixed(1)}%
                 </p>
               </div>
@@ -437,7 +480,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-slate-400 text-sm">Failed Rips</p>
-                <p className="text-3xl font-bold text-red-400 mt-1">{statistics.failed_rips}</p>
+                <p className="text-2xl md:text-3xl font-bold text-red-400 mt-1">{statistics.failed_rips}</p>
                 {failedRips.length > 0 && (
                   <p className="text-xs text-slate-500 mt-1">Click to view recent failures</p>
                 )}
@@ -452,7 +495,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-slate-400 text-sm">Storage Used</p>
-                <p className="text-3xl font-bold text-slate-100 mt-1">
+                <p className="text-2xl md:text-3xl font-bold text-slate-100 mt-1">
                   {formatBytes(statistics.total_storage_bytes)}
                 </p>
               </div>
@@ -461,6 +504,70 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Charts */}
+      {ripHistory.length > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Daily Rips Chart */}
+          {chartData.daily.length > 0 && (
+            <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+              <h2 className="text-lg font-semibold text-slate-100 mb-4">Rip History (Last 14 Days)</h2>
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={chartData.daily}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                  <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+                  <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: '#1e293b', 
+                      border: '1px solid #334155',
+                      borderRadius: '8px',
+                      color: '#f1f5f9'
+                    }}
+                  />
+                  <Legend />
+                  <Bar dataKey="success" fill="#22d3ee" name="Success" />
+                  <Bar dataKey="failed" fill="#ef4444" name="Failed" />
+                  <Bar dataKey="cancelled" fill="#94a3b8" name="Cancelled" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Status Distribution */}
+          {chartData.statusPie.length > 0 && (
+            <div className="bg-slate-800 rounded-lg p-5 border border-slate-700">
+              <h2 className="text-lg font-semibold text-slate-100 mb-4">Status Distribution</h2>
+              <ResponsiveContainer width="100%" height={250}>
+                <PieChart>
+                  <Pie
+                    data={chartData.statusPie}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    outerRadius={80}
+                    fill="#8884d8"
+                    dataKey="value"
+                  >
+                    {chartData.statusPie.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: '#1e293b', 
+                      border: '1px solid #334155',
+                      borderRadius: '8px',
+                      color: '#f1f5f9'
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       )}
 

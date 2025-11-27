@@ -204,23 +204,25 @@ pub struct ApiState {
     pub db: Arc<Database>,
 }
 
-/// Current ripping status
+/// Per-drive ripping status
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RipStatus {
-    pub is_ripping: bool,
+pub struct DriveRipStatus {
     pub current_disc: Option<String>,
     pub current_title: Option<String>,
     pub progress: f32,
+}
+
+/// Current ripping status (supports multiple drives)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RipStatus {
+    pub active_rips: std::collections::HashMap<String, DriveRipStatus>,
     pub logs: Vec<String>,
 }
 
 impl Default for RipStatus {
     fn default() -> Self {
         Self {
-            is_ripping: false,
-            current_disc: None,
-            current_title: None,
-            progress: 0.0,
+            active_rips: std::collections::HashMap::new(),
             logs: Vec::new(),
         }
     }
@@ -245,6 +247,7 @@ pub enum ApiEvent {
 /// Request body for starting a rip operation
 #[derive(Debug, Deserialize)]
 pub struct StartRipRequest {
+    pub drive: Option<String>,
     pub output_path: Option<String>,
     pub title: Option<String>,
     pub skip_metadata: bool,
@@ -345,45 +348,65 @@ async fn start_rip(
     State(state): State<ApiState>,
     Json(request): Json<StartRipRequest>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    // Determine the drive identifier (use "default" if not specified)
+    let drive = request.drive.clone().unwrap_or_else(|| "default".to_string());
+    
     let mut status = state.rip_status.write().await;
     
-    if status.is_ripping {
+    // Check if this specific drive is already ripping
+    if status.active_rips.contains_key(&drive) {
         return Err(ErrorResponse {
-            error: "A rip operation is already in progress".to_string(),
+            error: format!("A rip operation is already in progress on drive {}", drive),
         });
     }
     
-    status.is_ripping = true;
-    status.progress = 0.0;
+    // Mark this drive as active
+    status.active_rips.insert(drive.clone(), DriveRipStatus {
+        current_disc: None,
+        current_title: request.title.clone(),
+        progress: 0.0,
+    });
     drop(status);
     
     // Clone state for async task
     let state_clone = state.clone();
     let request_clone = request;
+    let drive_clone = drive.clone();
     
     // Spawn rip operation in background
     tokio::spawn(async move {
-        let _ = run_rip_operation(state_clone, request_clone).await;
+        let result = run_rip_operation(state_clone.clone(), request_clone, drive_clone.clone()).await;
+        
+        // Remove from active rips when done
+        let mut status = state_clone.rip_status.write().await;
+        status.active_rips.remove(&drive_clone);
+        
+        if let Err(e) = result {
+            tracing::error!("Rip operation failed: {:?}", e);
+        }
     });
     
     Ok(Json(serde_json::json!({
-        "status": "started"
+        "status": "started",
+        "drive": drive
     })))
 }
 
-/// Stop ripping operation
+/// Stop ripping operation (stops all active rips)
 async fn stop_rip(State(state): State<ApiState>) -> Json<serde_json::Value> {
     let mut status = state.rip_status.write().await;
-    status.is_ripping = false;
+    let drive_count = status.active_rips.len();
+    status.active_rips.clear();
     
     let _ = state.event_tx.send(ApiEvent::Log {
         level: "warning".to_string(),
-        message: "Rip operation stopped by user".to_string(),
+        message: format!("Stopped {} active rip operation(s)", drive_count),
         drive: None,
     });
     
     Json(serde_json::json!({
-        "status": "stopped"
+        "status": "stopped",
+        "stopped_count": drive_count
     }))
 }
 
@@ -489,11 +512,12 @@ async fn handle_websocket(mut socket: WebSocket, state: ApiState) {
 async fn run_rip_operation(
     state: ApiState,
     request: StartRipRequest,
+    drive_id: String,
 ) -> anyhow::Result<()> {
     use crate::database::{RipHistory, RipStatus};
     
     let start_time = chrono::Utc::now();
-    let drive = "API".to_string(); // Will be updated when we detect the actual drive
+    let drive = drive_id; // Use the provided drive identifier
     
     // Use provided title or fall back to last saved title
     let title = if request.title.is_some() {
@@ -593,9 +617,7 @@ async fn run_rip_operation(
         }
     }
     
-    let mut status = state.rip_status.write().await;
-    status.is_ripping = false;
-    
+    // Drive will be removed from active_rips in the spawned task
     Ok(())
 }
 
@@ -944,8 +966,7 @@ mod tests {
     #[tokio::test]
     async fn test_rip_status_default() {
         let status = RipStatus::default();
-        assert!(!status.is_ripping);
-        assert_eq!(status.progress, 0.0);
+        assert!(status.active_rips.is_empty());
         assert!(status.logs.is_empty());
     }
 

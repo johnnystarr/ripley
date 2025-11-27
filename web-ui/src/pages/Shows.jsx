@@ -168,17 +168,17 @@ export default function Shows() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-slate-100">TV Shows</h1>
-          <p className="text-slate-400 mt-2">
+          <h1 className="text-2xl md:text-3xl font-bold text-slate-100">TV Shows</h1>
+          <p className="text-slate-400 mt-2 text-sm sm:text-base">
             Manage your list of shows. Select one to use as the default title for ripping.
           </p>
         </div>
         {!isAdding && (
           <button
             onClick={() => setIsAdding(true)}
-            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors flex items-center"
+            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors flex items-center whitespace-nowrap"
           >
             <FontAwesomeIcon icon={faPlus} className="mr-2" />
             Add Show
@@ -188,7 +188,7 @@ export default function Shows() {
 
       {/* Search and Sort */}
       {shows.length > 0 && (
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <FontAwesomeIcon
               icon={faSearch}
@@ -213,7 +213,7 @@ export default function Shows() {
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
-            className="px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
+            className="px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors sm:w-auto w-full"
           >
             <option value="name-asc">Name (A-Z)</option>
             <option value="name-desc">Name (Z-A)</option>
