@@ -131,21 +131,25 @@ export default function Dashboard() {
       const data = await api.getLastTitle();
       if (data.title) {
         setLastTitle(data.title);
-        // Find matching show
-        const matchingShow = shows.find(s => s.name === data.title);
-        if (matchingShow) {
-          setSelectedShowId(matchingShow.id);
-        }
       }
     } catch (err) {
       console.error('Failed to fetch last title:', err);
     }
-  }, [shows]);
+  }, []);
 
   const fetchShows = useCallback(async () => {
     try {
       const data = await api.getShows();
       setShows(data);
+      // After fetching shows, get the last selected show ID
+      try {
+        const lastShowData = await api.getLastShowId();
+        if (lastShowData.show_id) {
+          setSelectedShowId(lastShowData.show_id);
+        }
+      } catch (err) {
+        console.error('Failed to fetch last show ID:', err);
+      }
     } catch (err) {
       console.error('Failed to fetch shows:', err);
     }

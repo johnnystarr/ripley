@@ -282,6 +282,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/issues/:id/resolve", post(resolve_issue))
         .route("/settings/last-title", get(get_last_title))
         .route("/settings/last-title", post(set_last_title))
+        .route("/settings/last-show", get(get_last_show_id_handler))
         .route("/shows", get(get_shows))
         .route("/shows", post(create_show))
         .route("/shows/:id", get(get_show))
@@ -666,6 +667,16 @@ async fn set_last_title(
         Ok(_) => Ok(Json(serde_json::json!({ "success": true }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to set last title: {}", e),
+        }),
+    }
+}
+
+/// Get the last selected show ID
+async fn get_last_show_id_handler(State(state): State<ApiState>) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_last_show_id() {
+        Ok(show_id) => Ok(Json(serde_json::json!({ "show_id": show_id }))),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get last show ID: {}", e),
         }),
     }
 }

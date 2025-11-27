@@ -134,6 +134,11 @@ class ApiClient {
     });
   }
 
+  // Get last selected show ID
+  async getLastShowId() {
+    return this.request('/settings/last-show');
+  }
+
   // Get all shows
   async getShows() {
     return this.request('/shows');
