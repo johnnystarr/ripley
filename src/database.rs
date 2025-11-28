@@ -2693,11 +2693,20 @@ impl Database {
             let show_count = show_seeds.len();
             
             // First, get all profiles by name for lookup
-            let all_profiles = Self::get_all_topaz_profiles_static(conn)?;
+            // This will return empty vec if table doesn't exist yet (which is fine - no associations)
+            let all_profiles = Self::get_all_topaz_profiles_static(conn)
+                .unwrap_or_else(|e| {
+                    warn!("Failed to get Topaz profiles for association: {}, continuing without associations", e);
+                    vec![]
+                });
             let profile_map: std::collections::HashMap<String, i64> = all_profiles
                 .iter()
                 .filter_map(|p| p.id.map(|id| (p.name.clone(), id)))
                 .collect();
+            
+            if !profile_map.is_empty() {
+                info!("Found {} Topaz profiles for association lookup", profile_map.len());
+            }
             
             // Create shows and associations
             for show_seed in show_seeds {
@@ -2742,6 +2751,18 @@ impl Database {
 
     /// Static version of get_topaz_profiles for use in seeding
     fn get_all_topaz_profiles_static(conn: &Connection) -> Result<Vec<TopazProfile>> {
+        // Check if table exists first
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='topaz_profiles'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            warn!("topaz_profiles table doesn't exist yet, returning empty list");
+            return Ok(vec![]);
+        }
+        
         // Check if command column exists
         let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
             .query_map([], |row| Ok(row.get::<_, String>(1)?))?
@@ -2777,7 +2798,19 @@ impl Database {
     /// Seed initial Topaz profiles if the table is empty
     /// Reads seed data from config.yaml
     fn seed_initial_topaz_profiles(conn: &Connection) -> Result<()> {
-        // Check if topaz_profiles table exists and is empty
+        // Check if table exists first
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='topaz_profiles'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            warn!("topaz_profiles table doesn't exist yet, skipping profile seeding");
+            return Ok(());
+        }
+        
+        // Check if topaz_profiles table is empty
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM topaz_profiles",
             [],
