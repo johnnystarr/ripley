@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+#[cfg(feature = "audio")]
 use rodio::{Decoder, OutputStream, Sink};
 use std::fs::File;
 use std::io::BufReader;
@@ -34,6 +35,7 @@ pub async fn play_notification(sound_name: &str) -> Result<()> {
 }
 
 /// Play audio file synchronously (blocking)
+#[cfg(feature = "audio")]
 fn play_audio_sync(path: &PathBuf) -> Result<()> {
     let (_stream, stream_handle) = OutputStream::try_default()
         .context("Failed to open audio output stream")?;
@@ -50,6 +52,12 @@ fn play_audio_sync(path: &PathBuf) -> Result<()> {
     sink.append(source);
     sink.sleep_until_end();
 
+    Ok(())
+}
+
+#[cfg(not(feature = "audio"))]
+fn play_audio_sync(_path: &PathBuf) -> Result<()> {
+    // Audio feature disabled - no-op
     Ok(())
 }
 
