@@ -3,7 +3,7 @@
 # Default target
 .DEFAULT_GOAL := help
 
-# Build the project in release mode (includes web UI)
+# Build the project in release mode (includes web UI and agent)
 build:
 	@echo "🔨 Cleaning Web UI build artifacts..."
 	@rm -rf web-ui/dist
@@ -11,9 +11,13 @@ build:
 	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (release mode)..."
 	@cargo build --release
-	@echo "✅ Build complete: target/release/ripley"
+	@echo "🔨 Building Ripley Agent (release mode)..."
+	@cd agent && cargo build --release
+	@echo "✅ Build complete:"
+	@echo "   - target/release/ripley"
+	@echo "   - agent/target/release/ripley-agent"
 
-# Build debug version (includes web UI)
+# Build debug version (includes web UI and agent)
 debug:
 	@echo "🔨 Cleaning Web UI build artifacts..."
 	@rm -rf web-ui/dist
@@ -21,7 +25,11 @@ debug:
 	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (debug mode)..."
 	@cargo build
-	@echo "✅ Debug build complete: target/debug/ripley"
+	@echo "🔨 Building Ripley Agent (debug mode)..."
+	@cd agent && cargo build
+	@echo "✅ Debug build complete:"
+	@echo "   - target/debug/ripley"
+	@echo "   - agent/target/debug/ripley-agent"
 
 # Run development server with hot reload
 # Set NO_BROWSER=1 to disable automatic browser opening
@@ -51,9 +59,11 @@ test-all: test test-linux
 clean:
 	@echo "🧹 Cleaning build artifacts..."
 	@cargo clean
+	@cd agent && cargo clean || true
 	@rm -rf target/
+	@rm -rf agent/target/
 	@rm -rf web-ui/dist
-	@echo "✅ Clean complete"
+	@echo "✅ Clean complete (removed all binaries and build artifacts)"
 
 # Install the binary to ~/.cargo/bin
 install:

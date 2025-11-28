@@ -8,6 +8,8 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
   const [command, setCommand] = useState('');
   const [logs, setLogs] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [debugInfo, setDebugInfo] = useState(null);
+  const [pollCount, setPollCount] = useState(0);
   const logsEndRef = useRef(null);
   const pollIntervalRef = useRef(null);
   const pollTimeoutRef = useRef(null);
@@ -17,6 +19,8 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
       setCommand('');
       setLogs([]);
       setIsRunning(false);
+      setDebugInfo(null);
+      setPollCount(0);
     } else {
       // Clean up polling when modal closes
       if (pollIntervalRef.current) {
@@ -65,13 +69,36 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
     setCommand(''); // Clear input for next command
 
     try {
+      setDebugInfo({ step: 'Creating instruction...', instructionId: null, status: null });
       const result = await api.testAgentCommand(agentId, commandToRun);
       const instructionId = result.instruction_id;
       
+      setDebugInfo({ 
+        step: 'Instruction created', 
+        instructionId, 
+        status: 'pending',
+        message: 'Waiting for agent to pick up instruction...'
+      });
+      
       // Poll for instruction result
+      let pollAttempts = 0;
       pollIntervalRef.current = setInterval(async () => {
+        pollAttempts++;
+        setPollCount(pollAttempts);
+        
         try {
           const instruction = await api.getInstruction(instructionId);
+          
+          setDebugInfo({
+            step: 'Polling instruction',
+            instructionId,
+            status: instruction.status,
+            pollAttempts,
+            assignedTo: instruction.assigned_to_agent_id,
+            hasOutput: !!instruction.output,
+            errorMessage: instruction.error_message,
+            message: `Status: ${instruction.status}, Poll #${pollAttempts}`
+          });
           
           if (instruction.status === 'completed' || instruction.status === 'failed') {
             if (pollIntervalRef.current) {
@@ -83,14 +110,24 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
               pollTimeoutRef.current = null;
             }
             setIsRunning(false);
+            setDebugInfo(null);
             
-            if (instruction.status === 'completed' && instruction.output) {
-              // Add output to logs
-              setLogs(prev => [...prev, {
-                type: 'output',
-                timestamp: new Date().toLocaleTimeString(),
-                content: instruction.output,
-              }]);
+            if (instruction.status === 'completed') {
+              if (instruction.output) {
+                // Add output to logs
+                setLogs(prev => [...prev, {
+                  type: 'output',
+                  timestamp: new Date().toLocaleTimeString(),
+                  content: instruction.output,
+                }]);
+              } else {
+                // No output but completed
+                setLogs(prev => [...prev, {
+                  type: 'output',
+                  timestamp: new Date().toLocaleTimeString(),
+                  content: '(Command completed with no output)',
+                }]);
+              }
             } else if (instruction.status === 'failed') {
               // Add error to logs
               setLogs(prev => [...prev, {
@@ -99,9 +136,26 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
                 content: instruction.error_message || 'Command failed',
               }]);
             }
+          } else if (instruction.status === 'processing' || instruction.status === 'assigned') {
+            setDebugInfo({
+              step: 'Instruction in progress',
+              instructionId,
+              status: instruction.status,
+              pollAttempts,
+              message: `Agent is ${instruction.status === 'processing' ? 'executing' : 'assigned'} command...`
+            });
           }
         } catch (err) {
-          // Continue polling on error
+          setDebugInfo({
+            step: 'Error polling',
+            instructionId,
+            status: 'error',
+            pollAttempts,
+            error: err.message,
+            message: `Failed to get instruction: ${err.message}`
+          });
+          // Continue polling on error, but log it
+          console.error('Error polling for instruction:', err);
         }
       }, 500); // Poll every 500ms
       
@@ -112,16 +166,32 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
           pollIntervalRef.current = null;
         }
         setIsRunning(false);
+        setLogs(prev => [...prev, {
+          type: 'error',
+          timestamp: new Date().toLocaleTimeString(),
+          content: 'Timeout: Command did not complete within 30 seconds. The agent may not be processing instructions.',
+        }]);
+        setDebugInfo(prev => prev ? {
+          ...prev,
+          step: 'Timeout',
+          message: 'Command timed out after 30 seconds. Check if agent is connected and processing instructions.'
+        } : null);
       }, 30000);
       
     } catch (err) {
       setIsRunning(false);
+      setDebugInfo({
+        step: 'Failed to create instruction',
+        error: err.message,
+        message: `Error: ${err.message}`
+      });
       // Add error message
       setLogs(prev => [...prev, {
         type: 'error',
         timestamp: new Date().toLocaleTimeString(),
-        content: `Error: ${err.message}`,
+        content: `Error creating instruction: ${err.message}`,
       }]);
+      toast.error(`Failed to send command: ${err.message}`);
     }
   };
 
@@ -184,6 +254,57 @@ export default function TestCommandModal({ agentId, agentName, isOpen, onClose }
             Press Enter to run, Shift+Enter for new line. Commands are sent to the agent in real-time.
           </p>
         </div>
+
+        {/* Debug Info Alert */}
+        {debugInfo && (
+          <div className={`mx-6 mb-4 p-4 rounded-lg border ${
+            debugInfo.status === 'error' || debugInfo.step === 'Timeout' || debugInfo.step === 'Failed to create instruction'
+              ? 'bg-red-500/10 border-red-500/30 text-red-400'
+              : debugInfo.status === 'completed'
+              ? 'bg-green-500/10 border-green-500/30 text-green-400'
+              : debugInfo.status === 'processing' || debugInfo.status === 'assigned'
+              ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+              : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+          }`}>
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="font-semibold mb-1">{debugInfo.step}</div>
+                {debugInfo.message && (
+                  <div className="text-sm opacity-90">{debugInfo.message}</div>
+                )}
+                <div className="text-xs mt-2 space-y-1 opacity-75">
+                  {debugInfo.instructionId && (
+                    <div>Instruction ID: {debugInfo.instructionId}</div>
+                  )}
+                  {debugInfo.status && (
+                    <div>Status: <span className="font-mono">{debugInfo.status}</span></div>
+                  )}
+                  {debugInfo.pollAttempts && (
+                    <div>Poll attempts: {debugInfo.pollAttempts}</div>
+                  )}
+                  {debugInfo.assignedTo && (
+                    <div>Assigned to: {debugInfo.assignedTo}</div>
+                  )}
+                  {debugInfo.hasOutput !== undefined && (
+                    <div>Has output: {debugInfo.hasOutput ? 'Yes' : 'No'}</div>
+                  )}
+                  {debugInfo.error && (
+                    <div className="text-red-400">Error: {debugInfo.error}</div>
+                  )}
+                  {debugInfo.errorMessage && (
+                    <div className="text-red-400">Error message: {debugInfo.errorMessage}</div>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setDebugInfo(null)}
+                className="text-slate-400 hover:text-slate-200 ml-4"
+              >
+                <FontAwesomeIcon icon={faTimes} />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Log Output */}
         <div className="flex-1 overflow-hidden flex flex-col p-6">

@@ -35,6 +35,7 @@ pub struct TuiApp {
     connection_logs: Vec<String>,
     connection_in_progress: bool,
     job_history: Vec<(String, String, f32)>, // (job_id, status, progress)
+    processing_instructions: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<i64>>>, // Track instructions being processed
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -92,6 +93,7 @@ impl TuiApp {
             connection_logs: vec![],
             connection_in_progress: false,
             job_history: vec![],
+            processing_instructions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         })
     }
     
@@ -261,9 +263,17 @@ impl TuiApp {
             }
             
             // Update instructions if connected and process test commands
+            let mut log_messages = Vec::new(); // Collect log messages to add after client borrow is done
             if let Some(ref client) = self.agent_client {
+                tracing::debug!("[POLL] Polling for instructions...");
                 match client.get_instructions().await {
                     Ok(instructions) => {
+                        tracing::info!("[POLL] Received {} instructions from server", instructions.len());
+                        if !instructions.is_empty() {
+                            tracing::info!("[POLL] Got {} instructions: {:?}", instructions.len(), instructions.iter().map(|i| (i.id, &i.instruction_type, &i.status)).collect::<Vec<_>>());
+                        } else {
+                            tracing::debug!("[POLL] No instructions received");
+                        }
                         self.instructions = instructions.iter()
                             .map(|i| {
                                 let base = format!("[{}] {} - {}", i.id, i.instruction_type, i.status);
@@ -285,27 +295,95 @@ impl TuiApp {
                             })
                             .collect();
                         
-                        // Process pending test_command instructions
+                        // Process pending or assigned test_command instructions
+                        // Track which instructions we're already processing to avoid duplicates
+                        let processing_set = self.processing_instructions.clone();
+                        
                         for instruction in instructions {
-                            if instruction.instruction_type == "test_command" && instruction.status == "pending" {
+                            tracing::debug!("[POLL] Checking instruction: id={}, type={}, status={}", 
+                                instruction.id, instruction.instruction_type, instruction.status);
+                            
+                            if instruction.instruction_type == "test_command" && (instruction.status == "pending" || instruction.status == "assigned") {
+                                tracing::info!("[POLL] Found test_command instruction: id={}, status={}", instruction.id, instruction.status);
+                                
+                                // Check if we're already processing this instruction
+                                let is_processing = {
+                                    let set = processing_set.lock().unwrap();
+                                    set.contains(&instruction.id)
+                                };
+                                
+                                if is_processing {
+                                    tracing::info!("[POLL] Instruction {} is already being processed, skipping", instruction.id);
+                                    continue;
+                                }
+                                
                                 if let Some(command) = instruction.payload.get("command").and_then(|v| v.as_str()) {
+                                    tracing::info!("[POLL] Extracted command from payload: '{}'", command);
+                                    
+                                    // Mark as processing IMMEDIATELY before spawning
+                                    {
+                                        let mut set = processing_set.lock().unwrap();
+                                        set.insert(instruction.id);
+                                        tracing::info!("[POLL] Marked instruction {} as processing in tracking set", instruction.id);
+                                    }
+                                    
+                                    // Clone what we need before spawning task
                                     let client_clone = client.clone();
                                     let instruction_id = instruction.id;
                                     let command_str = command.to_string();
+                                    let processing_set_clone = processing_set.clone();
+                                    let log_message = format!("Processing test command: {} (instruction {})", command_str, instruction_id);
+                                    log_messages.push(log_message);
                                     
+                                    tracing::info!("[POLL] Spawning task to process instruction {} with command '{}'", instruction_id, command_str);
+                                    
+                                    // Spawn the task
                                     tokio::spawn(async move {
-                                        if let Err(e) = client_clone.process_test_command(instruction_id, &command_str).await {
-                                            tracing::error!("Failed to process test command: {}", e);
+                                        tracing::info!("[TASK STARTED] Starting test command execution: '{}' (instruction {})", command_str, instruction_id);
+                                        
+                                        // Call process_test_command - this should handle start_instruction internally
+                                        let result = client_clone.process_test_command(instruction_id, &command_str).await;
+                                        
+                                        // Remove from processing set when done (success or failure)
+                                        {
+                                            let mut set = processing_set_clone.lock().unwrap();
+                                            set.remove(&instruction_id);
+                                            tracing::info!("[TASK] Removed instruction {} from processing set", instruction_id);
+                                        }
+                                        
+                                        match result {
+                                            Ok(_) => {
+                                                tracing::info!("[TASK COMPLETE] Test command {} completed successfully", instruction_id);
+                                            }
+                                            Err(e) => {
+                                                tracing::error!("[TASK FAILED] Failed to process test command {}: {}", instruction_id, e);
+                                            }
                                         }
                                     });
+                                    
+                                    tracing::info!("[POLL] Task spawned for instruction {}", instruction_id);
+                                } else {
+                                    tracing::warn!("[POLL] Test command instruction {} has no command in payload. Payload: {:?}", instruction.id, instruction.payload);
+                                    log_messages.push(format!("ERROR: Test command instruction {} has no command", instruction.id));
                                 }
+                            } else if instruction.instruction_type == "test_command" && (instruction.status == "completed" || instruction.status == "failed") {
+                                tracing::info!("[POLL] Instruction {} is {}, cleaning up from processing set", instruction.id, instruction.status);
+                                // Clean up completed/failed instructions from processing set
+                                let mut set = processing_set.lock().unwrap();
+                                set.remove(&instruction.id);
                             }
                         }
                     }
-                    Err(_e) => {
-                        // Don't spam error messages
+                    Err(e) => {
+                        tracing::warn!("Failed to get instructions: {}", e);
+                        // Don't spam error messages in UI, but log them
                     }
                 }
+            }
+            
+            // Add log messages after client borrow is done
+            for msg in log_messages {
+                self.add_log(msg);
             }
             
             // Get current job and pause state if connected
@@ -361,7 +439,10 @@ impl TuiApp {
                 );
             })?;
             
-            if crossterm::event::poll(Duration::from_millis(100))? {
+            // Add a small delay to prevent CPU spinning
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            
+            if crossterm::event::poll(Duration::from_millis(0))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         match key.code {

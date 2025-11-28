@@ -84,13 +84,33 @@ async fn main() -> Result<()> {
             .await?;
         }
         Some(Command::Serve { port, host, dev }) => {
-            // Initialize tracing for server mode
+            // Set up comprehensive file logging to ~/.config/ripley/web.log
+            let log_dir = dirs::home_dir()
+                .map(|h| h.join(".config").join("ripley"))
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            std::fs::create_dir_all(&log_dir)?;
+            
+            let log_file = log_dir.join("web.log");
+            
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_file)?;
+            
+            // Initialize logging to both file and console with DEBUG level
             tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::INFO)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(std::sync::Arc::new(file))
+                .with_ansi(false)
+                .with_target(true)
+                .with_file(true)
+                .with_line_number(true)
                 .init();
             
+            tracing::info!("🌐 Ripley REST API Server - Logging to: {}", log_file.display());
             eprintln!("\x1b[35m🌐 Ripley REST API Server\x1b[0m");
             eprintln!("\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m\n");
+            eprintln!("\x1b[36m📝 Server logs: {}\x1b[0m\n", log_file.display());
             
             // Load configuration
             let config = config::Config::load()?;

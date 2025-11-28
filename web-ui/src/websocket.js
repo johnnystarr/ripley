@@ -13,8 +13,30 @@ export class WebSocketManager {
   }
 
   connect() {
+    // If already connected, don't reconnect
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return;
+    }
+
+    // If there's a connection in progress (CONNECTING), wait for it
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      console.log('WebSocket connection already in progress, waiting...');
+      return;
+    }
+
+    // Clean up any existing connection that's closing or closed
+    if (this.ws) {
+      if (this.ws.readyState === WebSocket.CLOSING || this.ws.readyState === WebSocket.CLOSED) {
+        this.ws = null;
+      } else {
+        // If it's in an unexpected state, close it first
+        try {
+          this.ws.close();
+        } catch (e) {
+          // Ignore errors when closing
+        }
+        this.ws = null;
+      }
     }
 
     this.isIntentionallyClosed = false;
@@ -46,12 +68,37 @@ export class WebSocketManager {
 
       this.ws.onerror = (error) => {
         console.error('WebSocket error:', error);
-        this.emit('error', error);
+        // Don't emit error if connection was intentionally closed
+        if (!this.isIntentionallyClosed) {
+          this.emit('error', error);
+        }
       };
 
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        this.emit('connection', { connected: false });
+      this.ws.onclose = (event) => {
+        const wasOpen = event.wasClean === true || (event.code === 1000 || event.code === 1001);
+        const wasConnecting = event.code === 1006; // Abnormal closure often means connection never established
+        
+        console.log('WebSocket disconnected', {
+          code: event.code,
+          reason: event.reason || 'No reason provided',
+          wasClean: event.wasClean,
+          wasOpen,
+          wasConnecting
+        });
+        
+        // Store reference before cleanup
+        const wsRef = this.ws;
+        
+        // Clean up the WebSocket reference
+        this.ws = null;
+        
+        // Only emit connection event if it was actually connected (not just failed to connect)
+        if (wasOpen && !wasConnecting) {
+          this.emit('connection', { connected: false });
+        } else if (wasConnecting) {
+          // Connection failed before establishing - this is expected on first attempt sometimes
+          console.log('WebSocket connection failed before establishing - will retry');
+        }
         
         // Attempt to reconnect if not intentionally closed
         if (!this.isIntentionallyClosed && this.reconnectAttempts < this.maxReconnectAttempts) {
@@ -60,7 +107,10 @@ export class WebSocketManager {
           console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
           
           setTimeout(() => {
-            this.connect();
+            // Only reconnect if we're still supposed to be connected
+            if (!this.isIntentionallyClosed) {
+              this.connect();
+            }
           }, delay);
         }
       };
@@ -72,7 +122,14 @@ export class WebSocketManager {
   disconnect() {
     this.isIntentionallyClosed = true;
     if (this.ws) {
-      this.ws.close();
+      // Only close if not already closed or closing
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        try {
+          this.ws.close(1000, 'Client disconnecting'); // Normal closure
+        } catch (e) {
+          console.error('Error closing WebSocket:', e);
+        }
+      }
       this.ws = null;
     }
   }

@@ -2330,41 +2330,68 @@ async fn get_agent_instructions(
     State(state): State<ApiState>,
     axum::extract::Path(agent_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, ErrorResponse> {
+    tracing::debug!("[GET_INSTRUCTIONS] Agent {} requesting instructions", agent_id);
+    
     // Get pending instructions
     match state.db.get_pending_instructions(Some(&agent_id)) {
         Ok(mut instructions) => {
+            tracing::debug!("[GET_INSTRUCTIONS] Found {} pending/assigned instructions for agent {}", instructions.len(), agent_id);
+            
             // Auto-assign the first pending instruction to this agent if not already assigned
             if let Some(instruction) = instructions.first_mut() {
                 if let Some(id_val) = instruction.get("id").and_then(|v| v.as_i64()) {
                     if instruction.get("assigned_to_agent_id").is_none() {
+                        tracing::info!("[GET_INSTRUCTIONS] Auto-assigning instruction_id={} to agent_id={}", id_val, agent_id);
                         // Assign instruction to this agent
                         if let Err(e) = state.db.assign_instruction_to_agent(id_val, &agent_id) {
+                            tracing::error!("[GET_INSTRUCTIONS] Failed to assign instruction_id={} to agent_id={}: {}", id_val, agent_id, e);
                             return Err(ErrorResponse {
                                 error: format!("Failed to assign instruction: {}", e),
                             });
                         }
                         instruction["assigned_to_agent_id"] = serde_json::Value::String(agent_id.clone());
                         instruction["status"] = serde_json::Value::String("assigned".to_string());
+                    } else {
+                        let assigned_to = instruction.get("assigned_to_agent_id").and_then(|v| v.as_str()).unwrap_or("none");
+                        tracing::debug!("[GET_INSTRUCTIONS] Instruction_id={} already assigned to {}", id_val, assigned_to);
                     }
+                }
+            }
+            
+            // Log all instructions being returned
+            for inst in &instructions {
+                if let (Some(id), Some(typ), Some(status)) = (
+                    inst.get("id").and_then(|v| v.as_i64()),
+                    inst.get("instruction_type").and_then(|v| v.as_str()),
+                    inst.get("status").and_then(|v| v.as_str())
+                ) {
+                    tracing::info!("[GET_INSTRUCTIONS] Returning instruction: id={}, type={}, status={}", id, typ, status);
                 }
             }
             
             // Also get recent completed instructions for this agent (last 5) to show output
             let completed = match state.db.get_recent_completed_instructions(&agent_id, 5) {
-                Ok(insts) => insts,
+                Ok(insts) => {
+                    tracing::debug!("[GET_INSTRUCTIONS] Found {} recent completed instructions", insts.len());
+                    insts
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to get recent completed instructions for agent {}: {}", agent_id, e);
+                    tracing::warn!("[GET_INSTRUCTIONS] Failed to get recent completed instructions for agent {}: {}", agent_id, e);
                     vec![] // If query fails, just return pending instructions
                 }
             };
             
             // Combine pending and recent completed
             instructions.extend(completed);
+            tracing::debug!("[GET_INSTRUCTIONS] Returning total of {} instructions to agent {}", instructions.len(), agent_id);
             Ok(Json(instructions))
         }
-        Err(e) => Err(ErrorResponse {
-            error: format!("Failed to get instructions: {}", e),
-        }),
+        Err(e) => {
+            tracing::error!("[GET_INSTRUCTIONS] Failed to get instructions for agent {}: {}", agent_id, e);
+            Err(ErrorResponse {
+                error: format!("Failed to get instructions: {}", e),
+            })
+        }
     }
 }
 
@@ -2475,17 +2502,34 @@ async fn test_agent_command(
     axum::extract::Path(agent_id): axum::extract::Path<String>,
     Json(request): Json<TestCommandRequest>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    tracing::info!("[TEST_COMMAND] Received test command request for agent_id={}, command={}", agent_id, request.command);
+    
     // Create a test instruction for the agent
     let payload = serde_json::json!({
         "command": request.command,
         "test": true,
     });
     
+    tracing::debug!("[TEST_COMMAND] Creating instruction with payload: {:?}", payload);
+    
     match state.db.create_instruction("test_command", &payload) {
         Ok(instruction_id) => {
+            tracing::info!("[TEST_COMMAND] Created instruction_id={} for agent_id={}", instruction_id, agent_id);
+            
             // Assign to the specific agent
             match state.db.assign_instruction_to_agent(instruction_id, &agent_id) {
                 Ok(_) => {
+                    tracing::info!("[TEST_COMMAND] Successfully assigned instruction_id={} to agent_id={}", instruction_id, agent_id);
+                    
+                    // Verify the instruction was assigned correctly
+                    if let Ok(Some(instruction)) = state.db.get_instruction(instruction_id) {
+                        tracing::info!("[TEST_COMMAND] Verified instruction: id={}, status={}, assigned_to={}", 
+                            instruction_id,
+                            instruction.get("status").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                            instruction.get("assigned_to_agent_id").and_then(|v| v.as_str()).unwrap_or("none")
+                        );
+                    }
+                    
                     Ok(Json(serde_json::json!({
                         "success": true,
                         "instruction_id": instruction_id,
@@ -2493,14 +2537,20 @@ async fn test_agent_command(
                         "message": "Test command sent to agent"
                     })))
                 }
-                Err(e) => Err(ErrorResponse {
-                    error: format!("Failed to assign test command: {}", e),
-                }),
+                Err(e) => {
+                    tracing::error!("[TEST_COMMAND] Failed to assign instruction_id={} to agent_id={}: {}", instruction_id, agent_id, e);
+                    Err(ErrorResponse {
+                        error: format!("Failed to assign test command: {}", e),
+                    })
+                }
             }
         }
-        Err(e) => Err(ErrorResponse {
-            error: format!("Failed to create test command: {}", e),
-        }),
+        Err(e) => {
+            tracing::error!("[TEST_COMMAND] Failed to create instruction: {}", e);
+            Err(ErrorResponse {
+                error: format!("Failed to create test command: {}", e),
+            })
+        }
     }
 }
 
@@ -2554,14 +2604,35 @@ async fn start_instruction(
     State(state): State<ApiState>,
     axum::extract::Path(instruction_id): axum::extract::Path<i64>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    tracing::info!("[START_INSTRUCTION] Agent requesting to start instruction_id={}", instruction_id);
+    
+    // Get current instruction status before updating
+    if let Ok(Some(inst)) = state.db.get_instruction(instruction_id) {
+        let old_status = inst.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+        tracing::info!("[START_INSTRUCTION] Current status: {}", old_status);
+    }
+    
     match state.db.start_instruction(instruction_id) {
-        Ok(_) => Ok(Json(serde_json::json!({
-            "success": true,
-            "instruction_id": instruction_id
-        }))),
-        Err(e) => Err(ErrorResponse {
-            error: format!("Failed to start instruction: {}", e),
-        }),
+        Ok(_) => {
+            tracing::info!("[START_INSTRUCTION] Successfully marked instruction_id={} as started (status=processing)", instruction_id);
+            
+            // Verify the status was updated
+            if let Ok(Some(inst)) = state.db.get_instruction(instruction_id) {
+                let new_status = inst.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                tracing::info!("[START_INSTRUCTION] Verified new status: {}", new_status);
+            }
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "instruction_id": instruction_id
+            })))
+        }
+        Err(e) => {
+            tracing::error!("[START_INSTRUCTION] Failed to start instruction_id={}: {}", instruction_id, e);
+            Err(ErrorResponse {
+                error: format!("Failed to start instruction: {}", e),
+            })
+        }
     }
 }
 
@@ -2577,14 +2648,36 @@ async fn complete_instruction(
     axum::extract::Path(instruction_id): axum::extract::Path<i64>,
     Json(request): Json<CompleteInstructionRequest>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    let output_len = request.output.as_ref().map(|s| s.len()).unwrap_or(0);
+    tracing::info!("[COMPLETE_INSTRUCTION] Agent completing instruction_id={} with output length={}", instruction_id, output_len);
+    
+    if let Some(ref output) = request.output {
+        tracing::debug!("[COMPLETE_INSTRUCTION] Output preview (first 200 chars): {}", 
+            if output.len() > 200 { &output[..200] } else { output });
+    }
+    
     match state.db.complete_instruction(instruction_id, request.output.as_deref()) {
-        Ok(_) => Ok(Json(serde_json::json!({
-            "success": true,
-            "instruction_id": instruction_id
-        }))),
-        Err(e) => Err(ErrorResponse {
-            error: format!("Failed to complete instruction: {}", e),
-        }),
+        Ok(_) => {
+            tracing::info!("[COMPLETE_INSTRUCTION] Successfully marked instruction_id={} as completed", instruction_id);
+            
+            // Verify the status was updated
+            if let Ok(Some(inst)) = state.db.get_instruction(instruction_id) {
+                let new_status = inst.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let has_output = inst.get("output").is_some();
+                tracing::info!("[COMPLETE_INSTRUCTION] Verified: status={}, has_output={}", new_status, has_output);
+            }
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "instruction_id": instruction_id
+            })))
+        }
+        Err(e) => {
+            tracing::error!("[COMPLETE_INSTRUCTION] Failed to complete instruction_id={}: {}", instruction_id, e);
+            Err(ErrorResponse {
+                error: format!("Failed to complete instruction: {}", e),
+            })
+        }
     }
 }
 

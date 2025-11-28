@@ -141,6 +141,7 @@ impl AgentClient {
         let agent_id = self.agent_id.lock().unwrap().clone();
         if let Some(ref agent_id) = agent_id {
             let url = format!("{}/api/agents/{}/instructions", self.config.server_url, agent_id);
+            
             let response = self.http_client
                 .get(&url)
                 .send()
@@ -148,6 +149,7 @@ impl AgentClient {
             
             if response.status().is_success() {
                 let instructions_json: Vec<serde_json::Value> = response.json().await?;
+                
                 let instructions: Vec<Instruction> = instructions_json
                     .into_iter()
                     .filter_map(|inst| {
@@ -158,22 +160,27 @@ impl AgentClient {
                             payload.as_object_mut()?.insert("output".to_string(), serde_json::Value::String(output.to_string()));
                         }
                         
-                        Some(Instruction {
+                        let instruction = Instruction {
                             id: inst.get("id")?.as_i64()?,
                             instruction_type: inst.get("instruction_type")?.as_str()?.to_string(),
-                            payload,
+                            payload: payload.clone(),
                             status: inst.get("status")?.as_str()?.to_string(),
                             assigned_to_agent_id: inst.get("assigned_to_agent_id")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string()),
-                        })
+                        };
+                        
+                        Some(instruction)
                     })
                     .collect();
+                
                 Ok(instructions)
             } else {
+                tracing::warn!("[get_instructions] Non-success status: {}", response.status());
                 Ok(vec![])
             }
         } else {
+            tracing::warn!("[get_instructions] No agent_id set! Cannot get instructions.");
             Ok(vec![])
         }
     }
@@ -492,16 +499,23 @@ impl AgentClient {
     /// Start an instruction
     pub async fn start_instruction(&self, instruction_id: i64) -> Result<()> {
         let url = format!("{}/api/agents/instructions/{}/start", self.config.server_url, instruction_id);
+        tracing::info!("[start_instruction] POST to: {}", url);
+        
         let response = self.http_client
             .post(&url)
             .send()
             .await?;
         
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("Failed to start instruction: {}", error_text));
+        let status = response.status();
+        tracing::info!("[start_instruction] Response status: {}", status);
+        
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::error!("[start_instruction] Failed with status {}: {}", status, error_text);
+            return Err(anyhow::anyhow!("Failed to start instruction: {} - {}", status, error_text));
         }
         
+        tracing::info!("[start_instruction] Successfully started instruction {}", instruction_id);
         Ok(())
     }
 
@@ -512,17 +526,24 @@ impl AgentClient {
             "output": output,
         });
         
+        tracing::info!("[complete_instruction] POST to: {} with output length: {}", url, output.map(|s| s.len()).unwrap_or(0));
+        
         let response = self.http_client
             .post(&url)
             .json(&body)
             .send()
             .await?;
         
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow::anyhow!("Failed to complete instruction: {}", error_text));
+        let status = response.status();
+        tracing::info!("[complete_instruction] Response status: {}", status);
+        
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            tracing::error!("[complete_instruction] Failed with status {}: {}", status, error_text);
+            return Err(anyhow::anyhow!("Failed to complete instruction: {} - {}", status, error_text));
         }
         
+        tracing::info!("[complete_instruction] Successfully completed instruction {}", instruction_id);
         Ok(())
     }
 
@@ -551,8 +572,19 @@ impl AgentClient {
     pub async fn process_test_command(&self, instruction_id: i64, command: &str) -> Result<()> {
         use tokio::process::Command;
         
-        // Start the instruction
-        self.start_instruction(instruction_id).await?;
+        tracing::info!("[process_test_command] CALLED: instruction_id={}, command={}", instruction_id, command);
+        
+        // Start the instruction FIRST - this changes status from "assigned" to "processing"
+        tracing::info!("[process_test_command] Calling start_instruction for {}", instruction_id);
+        match self.start_instruction(instruction_id).await {
+            Ok(_) => {
+                tracing::info!("[process_test_command] Instruction {} successfully marked as started (status should be 'processing' now)", instruction_id);
+            }
+            Err(e) => {
+                tracing::error!("[process_test_command] FAILED to start instruction {}: {}", instruction_id, e);
+                return Err(anyhow::anyhow!("Failed to start instruction: {}", e));
+            }
+        }
         
         // Determine shell based on OS
         let (shell, args) = if cfg!(target_os = "windows") {
@@ -564,7 +596,7 @@ impl AgentClient {
             ("/bin/bash", vec!["-c", command])
         };
         
-        tracing::info!("Executing test command: {} {:?}", shell, args);
+        tracing::info!("Executing test command: {} {:?} (instruction {})", shell, args, instruction_id);
         
         // Execute the command
         let mut cmd = Command::new(shell);
@@ -599,27 +631,50 @@ impl AgentClient {
                 }
                 
                 if result.status.success() {
-                    tracing::info!("Test command completed successfully: {}", command);
-                    self.complete_instruction(instruction_id, Some(&combined_output)).await?;
+                    tracing::info!("Test command completed successfully: {} (instruction {})", command, instruction_id);
+                    tracing::debug!("Command output ({} bytes): {}", combined_output.len(), combined_output);
+                    match self.complete_instruction(instruction_id, Some(&combined_output)).await {
+                        Ok(_) => {
+                            tracing::info!("Instruction {} marked as completed with output", instruction_id);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to complete instruction {}: {}", instruction_id, e);
+                            return Err(anyhow::anyhow!("Failed to complete instruction: {}", e));
+                        }
+                    }
                 } else {
                     let error_msg = if combined_output.is_empty() {
                         format!("Command failed with exit code: {}", result.status.code().unwrap_or(-1))
                     } else {
                         combined_output
                     };
-                    tracing::warn!("Test command failed: {} - {}", command, error_msg);
-                    self.fail_instruction(instruction_id, &error_msg).await?;
+                    tracing::warn!("Test command failed: {} - {} (instruction {})", command, error_msg, instruction_id);
+                    match self.fail_instruction(instruction_id, &error_msg).await {
+                        Ok(_) => {
+                            tracing::info!("Instruction {} marked as failed", instruction_id);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to mark instruction {} as failed: {}", instruction_id, e);
+                            return Err(anyhow::anyhow!("Failed to mark instruction as failed: {}", e));
+                        }
+                    }
                 }
             }
             Ok(Err(e)) => {
                 let error_msg = format!("Failed to execute command: {}", e);
-                tracing::error!("Test command execution error: {}", error_msg);
-                self.fail_instruction(instruction_id, &error_msg).await?;
+                tracing::error!("Test command execution error: {} (instruction {})", error_msg, instruction_id);
+                if let Err(e2) = self.fail_instruction(instruction_id, &error_msg).await {
+                    tracing::error!("Failed to mark instruction {} as failed: {}", instruction_id, e2);
+                }
+                return Err(anyhow::anyhow!("Command execution failed: {}", e));
             }
             Err(_) => {
                 let error_msg = "Command execution timed out after 30 seconds".to_string();
-                tracing::error!("Test command timeout: {}", command);
-                self.fail_instruction(instruction_id, &error_msg).await?;
+                tracing::error!("Test command timeout: {} (instruction {})", command, instruction_id);
+                if let Err(e) = self.fail_instruction(instruction_id, &error_msg).await {
+                    tracing::error!("Failed to mark instruction {} as failed: {}", instruction_id, e);
+                }
+                return Err(anyhow::anyhow!("Command execution timed out"));
             }
         }
         

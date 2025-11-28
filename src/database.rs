@@ -1719,13 +1719,13 @@ impl Database {
             return Ok(vec![]); // Table doesn't exist yet, return empty list
         }
         
-        // Get pending instructions that are either:
+        // Get pending or assigned instructions that are either:
         // 1. Not assigned to any agent, OR
         // 2. Assigned to this specific agent
         let sql = if agent_id.is_some() {
             "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at
              FROM agent_instructions
-             WHERE status = 'pending' AND (assigned_to_agent_id IS NULL OR assigned_to_agent_id = ?1)
+             WHERE (status = 'pending' OR status = 'assigned') AND (assigned_to_agent_id IS NULL OR assigned_to_agent_id = ?1)
              ORDER BY created_at ASC
              LIMIT 1"
         } else {
@@ -2613,36 +2613,54 @@ impl Database {
         }
     }
 
-    /// Reset database - delete everything and reseed
+    /// Reset database - delete the file and let normal initialization recreate it
     pub fn reset_database(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let db_path = Self::get_db_path();
         
-        // Drop all tables
-        conn.execute("DROP TABLE IF EXISTS logs", [])?;
-        conn.execute("DROP TABLE IF EXISTS logs_fts", [])?;
-        conn.execute("DROP TABLE IF EXISTS issues", [])?;
-        conn.execute("DROP TABLE IF EXISTS issue_notes", [])?;
-        conn.execute("DROP TABLE IF EXISTS settings", [])?;
-        conn.execute("DROP TABLE IF EXISTS shows", [])?;
-        conn.execute("DROP TABLE IF EXISTS rip_history", [])?;
-        conn.execute("DROP TABLE IF EXISTS drive_stats", [])?;
-        conn.execute("DROP TABLE IF EXISTS rip_queue", [])?;
-        conn.execute("DROP TABLE IF EXISTS episode_match_results", [])?;
-        conn.execute("DROP TABLE IF EXISTS agents", [])?;
-        conn.execute("DROP TABLE IF EXISTS agent_instructions", [])?;
-        conn.execute("DROP TABLE IF EXISTS upscaling_jobs", [])?;
-        conn.execute("DROP TABLE IF EXISTS topaz_profiles", [])?;
-        conn.execute("DROP TABLE IF EXISTS show_topaz_profiles", [])?;
-        conn.execute("DROP TABLE IF EXISTS agent_file_transfers", [])?;
-        conn.execute("DROP TABLE IF EXISTS operation_history", [])?;
-        conn.execute("DROP TABLE IF EXISTS migrations", [])?;
+        // Close the connection by dropping the lock guard
+        // This ensures any pending transactions are committed and the connection is closed
+        {
+            let _conn_guard = self.conn.lock().unwrap();
+            // Connection will be closed when guard is dropped
+        }
         
-        // Reinitialize schema and run migrations
-        Self::initialize_schema_static(&conn)?;
-        Self::run_migrations_static(&conn)?;
-        Self::seed_initial_shows(&conn)?;
+        // Small delay to ensure file handles are released on all platforms
+        std::thread::sleep(std::time::Duration::from_millis(200));
         
-        info!("Database reset complete - all data deleted and schema reinitialized");
+        // Delete the database file if it exists
+        // On some platforms (Windows), we may need to retry if the file is still locked
+        let mut attempts = 0;
+        while db_path.exists() && attempts < 5 {
+            match std::fs::remove_file(&db_path) {
+                Ok(_) => {
+                    info!("Deleted database file: {:?}", db_path);
+                    break;
+                }
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= 5 {
+                        return Err(anyhow::anyhow!("Failed to delete database file after {} attempts: {}", attempts, e));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+        }
+        
+        // Reopen the connection and reinitialize
+        let new_conn = Connection::open(&db_path)?;
+        
+        // Reinitialize schema, run migrations, and seed data
+        Self::initialize_schema_static(&new_conn)?;
+        Self::run_migrations_static(&new_conn)?;
+        Self::seed_initial_shows(&new_conn)?;
+        
+        // Replace the connection in the Mutex
+        {
+            let mut conn_guard = self.conn.lock().unwrap();
+            *conn_guard = new_conn;
+        }
+        
+        info!("Database reset complete - file deleted and recreated with fresh schema");
         Ok(())
     }
 
