@@ -592,7 +592,7 @@ impl TuiApp {
             // Server IP input
             let editing_url = editing_field == EditingField::ServerUrl;
             let display_url = if server_url_input.is_empty() {
-                "192.168.1.100"
+                "127.0.0.1"
             } else {
                 server_url_input
             };
