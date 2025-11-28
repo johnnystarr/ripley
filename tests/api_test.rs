@@ -131,7 +131,13 @@ async fn test_broadcast_channel() {
 async fn test_config_read_write() {
     let state = create_test_state();
 
-    // Read initial config
+    // Set initial config value
+    {
+        let mut config = state.config.write().await;
+        config.speech_match.enabled = true;
+    }
+
+    // Read and verify initial config
     {
         let config = state.config.read().await;
         assert!(config.speech_match.enabled);

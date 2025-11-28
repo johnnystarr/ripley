@@ -31,7 +31,7 @@ async fn extract_subtitles_from_video(video_path: &Path) -> Result<String> {
     
     // Try to extract subtitles using ffmpeg
     let extract_result = Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-i", video_path.to_str().unwrap(),
             "-map", "0:s:0",  // First subtitle stream
             "-f", "srt",  // Force SRT format
@@ -98,7 +98,7 @@ async fn extract_and_transcribe_audio_segments(video_path: &Path) -> Result<Stri
     
     // Get video duration
     let duration_output = Command::new("ffprobe")
-        .args(&[
+        .args([
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
@@ -113,7 +113,7 @@ async fn extract_and_transcribe_audio_segments(video_path: &Path) -> Result<Stri
     // Extract 3 segments: right after intro, middle, and before credits
     // Intros are usually 30-60 seconds, credits at the very end
     let segment_duration = 90.0; // 1.5 minutes per segment for more context
-    let segments = vec![
+      let segments = [
         (90.0, "opening"),  // Right after intro - usually has unique episode setup
         (duration * 0.40, "early-middle"),  // Earlier middle for more plot
         (duration * 0.65, "late-middle"),  // Later middle for climax
@@ -128,7 +128,7 @@ async fn extract_and_transcribe_audio_segments(video_path: &Path) -> Result<Stri
         
         // Extract segment
         let extract_result = Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-ss", &start_time.to_string(),
                 "-i", video_path.to_str().unwrap(),
                 "-t", &segment_duration.to_string(),
@@ -179,7 +179,7 @@ async fn transcribe_with_openai_api(audio_path: &str) -> Result<String> {
     
     // Use curl to upload audio file to OpenAI Whisper API
     let output = Command::new("curl")
-        .args(&[
+        .args([
             "-X", "POST",
             "https://api.openai.com/v1/audio/transcriptions",
             "-H", &format!("Authorization: Bearer {}", api_key),
@@ -376,15 +376,15 @@ This is a test subtitle.
             ("S01E01\n95", 1, 1, 95.0),
         ];
 
+        let re = regex::Regex::new(r"S(\d+)E(\d+)").unwrap();
+        let confidence_re = regex::Regex::new(r"(\d+)").unwrap();
         for (response, expected_season, expected_episode, expected_confidence) in test_cases {
-            let re = regex::Regex::new(r"S(\d+)E(\d+)").unwrap();
             let caps = re.captures(response).unwrap();
             assert_eq!(caps[1].parse::<u32>().unwrap(), expected_season);
             assert_eq!(caps[2].parse::<u32>().unwrap(), expected_episode);
             
             // Extract confidence - find number after episode code
             let after_episode = &response[caps.get(0).unwrap().end()..];
-            let confidence_re = regex::Regex::new(r"(\d+)").unwrap();
             let confidence = if let Some(conf_caps) = confidence_re.captures(after_episode) {
                 conf_caps[1].parse::<f32>().unwrap_or(85.0)
             } else {

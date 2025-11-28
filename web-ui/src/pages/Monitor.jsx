@@ -19,6 +19,7 @@ import {
 import { api } from '../api';
 import { wsManager } from '../websocket';
 import toast from 'react-hot-toast';
+import Dropdown from '../components/Dropdown';
 
 export default function Monitor() {
   const [operations, setOperations] = useState([]);
@@ -283,18 +284,19 @@ export default function Monitor() {
               History
             </button>
           </div>
-          <select
+          <Dropdown
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
-          >
-            <option value="all">All Operations</option>
-            <option value="running">Running</option>
-            <option value="paused">Paused</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-            <option value="agent">Agent Operations</option>
-          </select>
+            onChange={(value) => setStatusFilter(value)}
+            options={[
+              { value: 'all', label: 'All Operations' },
+              { value: 'running', label: 'Running' },
+              { value: 'paused', label: 'Paused' },
+              { value: 'completed', label: 'Completed' },
+              { value: 'failed', label: 'Failed' },
+              { value: 'agent', label: 'Agent Operations' },
+            ]}
+            className="w-48"
+          />
         </div>
       </div>
 

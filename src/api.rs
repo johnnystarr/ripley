@@ -175,7 +175,7 @@ pub async fn start_server(
                     }
                     
                     // Find removed drives
-                    for (device, _drive_info) in &known_drives {
+                    for device in known_drives.keys() {
                         if !current_map.contains_key(device) {
                             info!("Drive removed: {}", device);
                             let _ = event_tx_poller.send(ApiEvent::DriveRemoved {
@@ -477,18 +477,10 @@ async fn fail_operation(
 
 /// Current ripping status (supports multiple drives)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RipStatus {
     pub active_rips: std::collections::HashMap<String, DriveRipStatus>,
     pub logs: Vec<String>,
-}
-
-impl Default for RipStatus {
-    fn default() -> Self {
-        Self {
-            active_rips: std::collections::HashMap::new(),
-            logs: Vec::new(),
-        }
-    }
 }
 
 /// Events broadcast to WebSocket clients
@@ -860,7 +852,7 @@ async fn pause_rip_handler(
             operation_id: None,
         });
         let _ = state.event_tx.send(ApiEvent::RipPaused {
-            drive: drive.clone(),
+            drive: drive.to_string(),
             operation_id: None,
         });
         
@@ -902,7 +894,7 @@ async fn resume_rip_handler(
             operation_id: None,
         });
         let _ = state.event_tx.send(ApiEvent::RipResumed {
-            drive: drive.clone(),
+            drive: drive.to_string(),
             operation_id: None,
         });
         
@@ -1069,7 +1061,7 @@ async fn run_rip_operation(
                 level: "warning".to_string(),
                 message: format!("Retrying rip (attempt {}/{} after {}s delay)...", attempt, max_attempts, delay),
                 drive: Some(drive.clone()),
-                operation_id: Some(operation_id.clone()),
+                operation_id: Some(operation_id.to_string()),
             });
             
             tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
@@ -1144,10 +1136,10 @@ async fn run_rip_operation(
 async fn run_single_rip_attempt(
     state: &ApiState,
     request: &StartRipRequest,
-    drive: &String,
+    drive: &str,
     start_time: chrono::DateTime<chrono::Utc>,
     is_final_attempt: bool,
-    operation_id: &String,
+    operation_id: &str,
 ) -> anyhow::Result<()> {
     use crate::database::{RipHistory, RipStatus};
     
@@ -1197,8 +1189,8 @@ async fn run_single_rip_attempt(
         
         let _ = state.event_tx.send(ApiEvent::RipCompleted {
             disc: title.clone().unwrap_or_else(|| "Unknown".to_string()),
-            drive: drive.clone(),
-            operation_id: Some(operation_id.clone()),
+            drive: drive.to_string(),
+            operation_id: Some(operation_id.to_string()),
         });
         
         // Calculate checksum if output path exists
@@ -1222,7 +1214,7 @@ async fn run_single_rip_attempt(
         let history = RipHistory {
             id: None,
             timestamp: start_time,
-            drive: drive.clone(),
+            drive: drive.to_string(),
             disc: None,
             title: title.clone(),
             disc_type: None,
@@ -2146,7 +2138,7 @@ async fn get_monitor_operations(State(state): State<ApiState>) -> Result<Json<Ve
                     
                     // Get started_at - use created_at if started_at is None
                     let started_at = job.started_at
-                        .unwrap_or_else(|| job.created_at);
+                        .unwrap_or(job.created_at);
                     
                     let operation = Operation {
                         operation_id: operation_id.clone(),
@@ -2251,6 +2243,7 @@ async fn register_agent(
         &request.agent_id,
         &request.name,
         &request.platform,
+        #[allow(clippy::needless_option_as_deref)]
         ip_address.as_deref(),
         request.capabilities.as_deref(),
         request.topaz_version.as_deref(),
@@ -2872,7 +2865,7 @@ async fn get_upscaling_jobs(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Vec<UpscalingJob>>, ErrorResponse> {
     let status_filter = params.get("status")
-        .and_then(|s| Some(JobStatus::from_string(s)));
+        .map(|s| JobStatus::from_string(s));
     
     match state.db.get_upscaling_jobs(status_filter) {
         Ok(jobs) => Ok(Json(jobs)),

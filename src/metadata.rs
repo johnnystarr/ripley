@@ -237,7 +237,7 @@ pub async fn get_disc_id(device: &str) -> Result<String> {
     hasher.update(leadout.to_string());
     
     let hash = hasher.finalize();
-    let disc_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash);
+    let disc_id = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
     
     debug!("Calculated disc ID: {}", disc_id);
     Ok(disc_id)

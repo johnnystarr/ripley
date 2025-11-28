@@ -140,7 +140,7 @@ pub async fn get_dvd_id(device: &str) -> Result<String> {
     if identifiers_used.is_empty() {
         // Fallback: use device path as identifier
         hasher.update(device.as_bytes());
-        hasher.update(&chrono::Utc::now().timestamp().to_be_bytes());
+        hasher.update(chrono::Utc::now().timestamp().to_be_bytes().as_slice());
         warn!("No identifiers found, using device path and timestamp for disc ID");
     } else {
         info!("Using {} identifiers for disc ID: {:?}", identifiers_used.len(), identifiers_used);
@@ -288,6 +288,7 @@ pub async fn fetch_dvd_metadata_with_episode(_disc_id: &str, volume_name: Option
     debug!("fetch_dvd_metadata called with volume_name: {:?}, start_episode: {:?}", volume_name, start_episode);
     
     // Check if TMDB API key is configured
+    #[allow(clippy::const_is_empty)]
     if TMDB_API_KEY.is_empty() {
         warn!("⚠️  TMDB API key is empty");
         warn!("⚠️  Update TMDB_API_KEY in src/dvd_metadata.rs to enable metadata lookup");
@@ -568,8 +569,7 @@ pub fn match_episodes_by_duration(
             .filter(|ep| ep.runtime_minutes.is_some())
             .min_by_key(|ep| {
                 let ep_runtime = ep.runtime_minutes.unwrap();
-                let diff = (*title_min as i32 - ep_runtime as i32).abs();
-                diff
+                (*title_min as i32 - ep_runtime as i32).abs()
             })
             .filter(|ep| {
                 let ep_runtime = ep.runtime_minutes.unwrap();

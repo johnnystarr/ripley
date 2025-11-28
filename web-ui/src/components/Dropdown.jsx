@@ -52,15 +52,22 @@ export default function Dropdown({ label, value, options, onChange, className = 
                 key={option.value}
                 type="button"
                 onClick={() => {
-                  onChange(option.value);
-                  setIsOpen(false);
+                  if (!option.disabled) {
+                    onChange(option.value);
+                    setIsOpen(false);
+                  }
                 }}
-                className={`w-full px-4 py-2.5 text-left hover:bg-slate-700 transition-colors flex items-center justify-between ${
-                  value === option.value ? 'bg-cyan-500/10 text-cyan-400' : 'text-slate-200'
+                disabled={option.disabled}
+                className={`w-full px-4 py-2.5 text-left transition-colors flex items-center justify-between ${
+                  option.disabled
+                    ? 'text-slate-500 cursor-not-allowed opacity-50'
+                    : value === option.value
+                    ? 'bg-cyan-500/10 text-cyan-400 hover:bg-slate-700'
+                    : 'text-slate-200 hover:bg-slate-700'
                 }`}
               >
                 <span>{option.label}</span>
-                {value === option.value && (
+                {value === option.value && !option.disabled && (
                   <FontAwesomeIcon icon={faCheck} className="text-cyan-400" />
                 )}
               </button>

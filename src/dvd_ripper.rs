@@ -175,6 +175,7 @@ where
                 // Only rip titles that look like individual episodes (18-50 min)
                 // Skip compilations/play-all (typically 90-200 min for multi-episode discs)
                 // For movies, we expect them to be clearly movie-length (> 70 min but handled separately)
+                #[allow(clippy::manual_range_contains)]
                 if minutes >= 18 && minutes <= 70 {
                     info!("Will rip title {} ({} min)", idx, minutes);
                     Some(*idx as u32)
@@ -348,7 +349,7 @@ async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_nu
     use tokio::fs;
     
     // Find the MKV file for this title (MakeMKV names them like title_t00.mkv, title_t01.mkv, etc.)
-    let expected_patterns = vec![
+    let expected_patterns = [
         format!("title_t{:02}.mkv", title_num),
         format!("title{:02}.mkv", title_num),
         format!("t{:02}.mkv", title_num),

@@ -6,6 +6,7 @@ const NTFY_URL: &str = "https://ntfy.sh";
 
 pub enum DiscType {
     CD,
+    #[allow(clippy::upper_case_acronyms)]
     DVD,
     BluRay,
 }

@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_rip_status_types() {
-        let statuses = vec![
+        let statuses = [
             ripper::RipStatus::Idle,
             ripper::RipStatus::FetchingMetadata,
             ripper::RipStatus::Ripping,

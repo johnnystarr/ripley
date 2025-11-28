@@ -485,100 +485,101 @@ async fn rip_dvd_disc(
             add_log(&tui_state, device, format!("✅ {} rip complete", media_name)).await;
             
             // Run OCR + Filebot by default (unless --skip-filebot) if we have metadata
-            if !args.skip_filebot && dvd_metadata.is_some() {
-                let metadata = dvd_metadata.as_ref().unwrap();
-                if metadata.media_type == crate::dvd_metadata::MediaType::TVShow {
-                    // Step 1: Use speech-to-text to identify episodes by dialogue
-                    add_rename_log(&tui_state, device, "🎤 Analyzing dialogue to identify episodes...".to_string()).await;
-                    
-                    let mut matched_count = 0;
-                    let mut read_dir = tokio::fs::read_dir(&dvd_dir).await?;
-                    let mut files = Vec::new();
-                    
-                    while let Some(entry) = read_dir.next_entry().await? {
-                        let path = entry.path();
-                        if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
-                            files.push(path);
-                        }
-                    }
-                    
-                    for (idx, path) in files.iter().enumerate() {
-                        // Use separate rename log window
-                        add_rename_log(&tui_state, device, format!("[{}/{}] Processing {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy())).await;
+            if !args.skip_filebot {
+                if let Some(metadata) = dvd_metadata.as_ref() {
+                    if metadata.media_type == crate::dvd_metadata::MediaType::TVShow {
+                        // Step 1: Use speech-to-text to identify episodes by dialogue
+                        add_rename_log(&tui_state, device, "🎤 Analyzing dialogue to identify episodes...".to_string()).await;
                         
-                        // Extract and transcribe audio
-                        match crate::speech_match::extract_and_transcribe_audio(&path).await {
-                            Ok(transcript) => {
-                                add_rename_log(&tui_state, device, format!("  Transcribed {} characters", transcript.len())).await;
-                                
-                                // Match against TMDB episodes
-                                match crate::speech_match::match_episode_by_transcript(
-                                    &metadata.title,
-                                    &transcript,
-                                    &metadata.episodes
-                                ).await {
-                                    Ok(ep_match) => {
-                                        // Only rename if confidence is high enough
-                                        if ep_match.confidence >= 85.0 {
-                                            let show_name = metadata.title.replace(' ', ".");
-                                            let episode_title = ep_match.title.replace(' ', ".");
-                                            let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
-                                                show_name, ep_match.season, ep_match.episode, 
-                                                episode_title);
-                                            let new_path = dvd_dir.join(&new_name);
-                                            
-                                            if let Err(e) = tokio::fs::rename(&path, &new_path).await {
-                                                add_rename_log(&tui_state, device, format!("  ⚠️  Failed to rename: {}", e)).await;
+                        let mut matched_count = 0;
+                        let mut read_dir = tokio::fs::read_dir(&dvd_dir).await?;
+                        let mut files = Vec::new();
+                        
+                        while let Some(entry) = read_dir.next_entry().await? {
+                            let path = entry.path();
+                            if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                                files.push(path);
+                            }
+                        }
+                        
+                        for (idx, path) in files.iter().enumerate() {
+                            // Use separate rename log window
+                            add_rename_log(&tui_state, device, format!("[{}/{}] Processing {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy())).await;
+                            
+                            // Extract and transcribe audio
+                            match crate::speech_match::extract_and_transcribe_audio(path).await {
+                                Ok(transcript) => {
+                                    add_rename_log(&tui_state, device, format!("  Transcribed {} characters", transcript.len())).await;
+                                    
+                                    // Match against TMDB episodes
+                                    match crate::speech_match::match_episode_by_transcript(
+                                        &metadata.title,
+                                        &transcript,
+                                        &metadata.episodes
+                                    ).await {
+                                        Ok(ep_match) => {
+                                            // Only rename if confidence is high enough
+                                            if ep_match.confidence >= 85.0 {
+                                                let show_name = metadata.title.replace(' ', ".");
+                                                let episode_title = ep_match.title.replace(' ', ".");
+                                                let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
+                                                    show_name, ep_match.season, ep_match.episode, 
+                                                    episode_title);
+                                                let new_path = dvd_dir.join(&new_name);
+                                                
+                                                if let Err(e) = tokio::fs::rename(&path, &new_path).await {
+                                                    add_rename_log(&tui_state, device, format!("  ⚠️  Failed to rename: {}", e)).await;
+                                                } else {
+                                                    add_rename_log(&tui_state, device, format!("  ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
+                                                        ep_match.season, ep_match.episode, ep_match.title, ep_match.confidence)).await;
+                                                    matched_count += 1;
+                                                }
                                             } else {
-                                                add_rename_log(&tui_state, device, format!("  ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
-                                                    ep_match.season, ep_match.episode, ep_match.title, ep_match.confidence)).await;
-                                                matched_count += 1;
+                                                add_rename_log(&tui_state, device, format!("  ⚠️  Low confidence ({:.0}%), skipping rename", ep_match.confidence)).await;
                                             }
-                                        } else {
-                                            add_rename_log(&tui_state, device, format!("  ⚠️  Low confidence ({:.0}%), skipping rename", ep_match.confidence)).await;
+                                        }
+                                        Err(e) => {
+                                            add_rename_log(&tui_state, device, format!("  ⚠️  Matching failed: {}", e)).await;
                                         }
                                     }
-                                    Err(e) => {
-                                        add_rename_log(&tui_state, device, format!("  ⚠️  Matching failed: {}", e)).await;
-                                    }
+                                }
+                                Err(e) => {
+                                    add_rename_log(&tui_state, device, format!("  ⚠️  Transcription failed: {}", e)).await;
                                 }
                             }
-                            Err(e) => {
-                                add_rename_log(&tui_state, device, format!("  ⚠️  Transcription failed: {}", e)).await;
+                        }
+                        
+                        if matched_count > 0 {
+                            add_rename_log(&tui_state, device, format!("✅ Matched {} episodes by dialogue", matched_count)).await;
+                        } else {
+                            add_rename_log(&tui_state, device, "⚠️  Speech matching unavailable (need Whisper + OpenAI API)".to_string()).await;
+                        }
+                        
+                        // Step 2: Run Filebot with OCR-enhanced filenames
+                        add_rename_log(&tui_state, device, "🤖 Running Filebot to match with database...".to_string()).await;
+                        
+                        let dvd_dir_clone = dvd_dir.clone();
+                        let show_title = metadata.title.clone();
+                        let tui_state_filebot = Arc::clone(&tui_state);
+                        let device_filebot = device.to_string();
+                        
+                        match crate::filebot::rename_with_filebot(
+                            &dvd_dir_clone,
+                            &show_title,
+                            move |log_msg| {
+                                let device = device_filebot.clone();
+                                let tui_state = Arc::clone(&tui_state_filebot);
+                                tokio::spawn(async move {
+                                    add_rename_log(&tui_state, &device, log_msg).await;
+                                });
                             }
-                        }
-                    }
-                    
-                    if matched_count > 0 {
-                        add_rename_log(&tui_state, device, format!("✅ Matched {} episodes by dialogue", matched_count)).await;
-                    } else {
-                        add_rename_log(&tui_state, device, "⚠️  Speech matching unavailable (need Whisper + OpenAI API)".to_string()).await;
-                    }
-                    
-                    // Step 2: Run Filebot with OCR-enhanced filenames
-                    add_rename_log(&tui_state, device, "🤖 Running Filebot to match with database...".to_string()).await;
-                    
-                    let dvd_dir_clone = dvd_dir.clone();
-                    let show_title = metadata.title.clone();
-                    let tui_state_filebot = Arc::clone(&tui_state);
-                    let device_filebot = device.to_string();
-                    
-                    match crate::filebot::rename_with_filebot(
-                        &dvd_dir_clone,
-                        &show_title,
-                        move |log_msg| {
-                            let device = device_filebot.clone();
-                            let tui_state = Arc::clone(&tui_state_filebot);
-                            tokio::spawn(async move {
-                                add_rename_log(&tui_state, &device, log_msg).await;
-                            });
-                        }
-                    ).await {
-                        Ok(_) => {
-                            add_rename_log(&tui_state, device, "✅ Filebot renaming complete".to_string()).await;
-                        }
-                        Err(e) => {
-                            add_rename_log(&tui_state, device, format!("⚠️  Filebot failed: {}", e)).await;
+                        ).await {
+                            Ok(_) => {
+                                add_rename_log(&tui_state, device, "✅ Filebot renaming complete".to_string()).await;
+                            }
+                            Err(e) => {
+                                add_rename_log(&tui_state, device, format!("⚠️  Filebot failed: {}", e)).await;
+                            }
                         }
                     }
                 }

@@ -115,6 +115,7 @@ impl JobWorker {
     }
     
     /// Shutdown the job worker gracefully
+    #[allow(dead_code)]
     pub async fn shutdown(&self) {
         self.shutdown.notify_one();
     }

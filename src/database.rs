@@ -1407,6 +1407,7 @@ impl Database {
     // Agent methods
 
     /// Register or update an agent
+    #[allow(clippy::too_many_arguments)]
     pub fn register_agent(
         &self,
         agent_id: &str,
@@ -1780,6 +1781,7 @@ impl Database {
     }
 
     /// Create a new instruction
+    #[allow(clippy::too_many_arguments)]
     pub fn create_instruction(
         &self,
         instruction_type: &str,
@@ -1926,7 +1928,7 @@ impl Database {
         
         // Check if table needs migration (has old schema)
         let table_info: Result<Vec<String>, _> = conn.prepare("PRAGMA table_info(topaz_profiles)")?
-            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .query_map([], |row| row.get::<_, String>(1))?
             .collect();
         
         let columns = table_info.unwrap_or_default();
@@ -1983,7 +1985,7 @@ impl Database {
         
         // Check if command column exists, fallback to old schema if needed
         let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
-            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<Vec<_>, _>>()?
             .contains(&"command".to_string());
         
@@ -2019,7 +2021,7 @@ impl Database {
         
         // Check if command column exists
         let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
-            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<Vec<_>, _>>()?
             .contains(&"command".to_string());
         
@@ -2121,7 +2123,7 @@ impl Database {
         
         // Check if command column exists
         let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
-            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<Vec<_>, _>>()?
             .contains(&"command".to_string());
         
@@ -2427,6 +2429,7 @@ impl Database {
     // Operation History methods
 
     /// Save an operation to history (when it completes or fails)
+    #[allow(clippy::too_many_arguments)]
     pub fn save_operation_to_history(
         &self,
         operation_id: &str,
@@ -2780,7 +2783,7 @@ impl Database {
         
         // Check if command column exists
         let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
-            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<Vec<_>, _>>()?
             .contains(&"command".to_string());
         

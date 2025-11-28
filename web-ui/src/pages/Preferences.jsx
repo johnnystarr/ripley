@@ -4,6 +4,7 @@ import { faSave, faSpinner, faCog } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import Tooltip from '../components/Tooltip';
+import Dropdown from '../components/Dropdown';
 
 export default function Preferences() {
   const [preferences, setPreferences] = useState(null);
@@ -97,17 +98,17 @@ export default function Preferences() {
               Logs per page
               <Tooltip text="Number of log entries to display per page on the Logs page" />
             </label>
-            <select
+            <Dropdown
               value={preferences.logs_per_page}
-              onChange={(e) => updatePreference('logs_per_page', parseInt(e.target.value))}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-              <option value={500}>500</option>
-            </select>
+              onChange={(value) => updatePreference('logs_per_page', parseInt(value))}
+              options={[
+                { value: 25, label: '25' },
+                { value: 50, label: '50' },
+                { value: 100, label: '100' },
+                { value: 200, label: '200' },
+                { value: 500, label: '500' },
+              ]}
+            />
           </div>
 
           {/* Polling interval */}
@@ -167,14 +168,14 @@ export default function Preferences() {
               Theme
               <Tooltip text="Visual theme for the interface. Light theme coming soon!" />
             </label>
-            <select
+            <Dropdown
               value={preferences.theme}
-              onChange={(e) => updatePreference('theme', e.target.value)}
-              className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="dark">Dark</option>
-              <option value="light" disabled>Light (Coming Soon)</option>
-            </select>
+              onChange={(value) => updatePreference('theme', value)}
+              options={[
+                { value: 'dark', label: 'Dark' },
+                { value: 'light', label: 'Light (Coming Soon)', disabled: true },
+              ]}
+            />
           </div>
         </div>
       </div>

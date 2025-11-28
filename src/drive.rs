@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MediaType {
     AudioCD,
+    #[allow(clippy::upper_case_acronyms)]
     DVD,
     BluRay,
     None,

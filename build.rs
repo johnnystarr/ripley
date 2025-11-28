@@ -37,7 +37,7 @@ fn main() {
     if !Path::new("web-ui/node_modules").exists() {
         println!("cargo:warning=Installing npm dependencies...");
         let install_status = Command::new("npm")
-            .args(&["install"])
+            .args(["install"])
             .current_dir("web-ui")
             .status()
             .expect("Failed to run npm install");
@@ -50,7 +50,7 @@ fn main() {
     // Build the UI
     println!("cargo:warning=Running npm run build...");
     let build_status = Command::new("npm")
-        .args(&["run", "build"])
+        .args(["run", "build"])
         .current_dir("web-ui")
         .status()
         .expect("Failed to run npm build");

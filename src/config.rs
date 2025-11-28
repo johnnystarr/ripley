@@ -86,21 +86,12 @@ pub enum ShowSeed {
 }
 
 /// Seed configuration for initial database setup
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SeedConfig {
     #[serde(default)]
     pub shows: Vec<ShowSeed>,
     #[serde(default)]
     pub topaz_profiles: Vec<TopazProfileSeed>,
-}
-
-impl Default for SeedConfig {
-    fn default() -> Self {
-        SeedConfig {
-            shows: vec![], // All seed data should come from config.yaml
-            topaz_profiles: vec![], // All seed data should come from config.yaml
-        }
-    }
 }
 
 impl Default for Config {
@@ -237,11 +228,11 @@ mod tests {
     fn test_config_defaults() {
         let config = Config::default();
         assert!(config.openai_api_key.is_none());
-        assert!(config.tmdb_api_key.is_some());
-        assert_eq!(config.speech_match.audio_duration, 180);
-        assert_eq!(config.filebot.database, "TheTVDB");
-        assert_eq!(config.notifications.enabled, true);
-        assert_eq!(config.rsync.enabled, true);
+        assert!(config.tmdb_api_key.is_none()); // All values should come from config.yaml
+        assert_eq!(config.speech_match.audio_duration, 0); // Empty defaults
+        assert_eq!(config.filebot.database, ""); // Empty defaults
+        assert!(!config.notifications.enabled); // Empty defaults
+        assert!(!config.rsync.enabled); // Empty defaults
     }
 
     #[test]
@@ -266,7 +257,7 @@ mod tests {
         };
 
         assert_eq!(speech_config.audio_duration, 240);
-        assert_eq!(speech_config.enabled, true);
+        assert!(speech_config.enabled);
         assert_eq!(speech_config.whisper_model, "base");
     }
 
@@ -281,8 +272,8 @@ mod tests {
 
         assert_eq!(filebot_config.database, "TVDB");
         assert_eq!(filebot_config.order, "Airdate");
-        assert_eq!(filebot_config.skip_by_default, false);
-        assert_eq!(filebot_config.use_for_music, true);
+        assert!(!filebot_config.skip_by_default);
+        assert!(filebot_config.use_for_music);
     }
 
     #[test]
