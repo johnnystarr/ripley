@@ -20,6 +20,7 @@ import {
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import { getErrorSuggestion, getErrorCategory } from '../utils/errorHelper';
+import ConfirmModal from '../components/ConfirmModal';
 
 export default function Issues() {
   const [issues, setIssues] = useState([]);
@@ -153,8 +154,15 @@ export default function Issues() {
     }
   }, [newNote, fetchIssueNotes]);
 
+  const [deleteNoteConfirm, setDeleteNoteConfirm] = useState({ isOpen: false, issueId: null, noteId: null });
+
   const handleDeleteNote = useCallback(async (issueId, noteId) => {
-    if (!confirm('Delete this note?')) return;
+    setDeleteNoteConfirm({ isOpen: true, issueId, noteId });
+  }, []);
+
+  const confirmDeleteNote = useCallback(async () => {
+    const { issueId, noteId } = deleteNoteConfirm;
+    setDeleteNoteConfirm({ isOpen: false, issueId: null, noteId: null });
     
     try {
       await api.deleteIssueNote(issueId, noteId);
@@ -701,6 +709,18 @@ export default function Issues() {
           ))}
         </div>
       )}
+
+      {/* Delete Note Confirmation Modal */}
+      <ConfirmModal
+        isOpen={deleteNoteConfirm.isOpen}
+        title="Delete Note"
+        type="danger"
+        message="Are you sure you want to delete this note?"
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmDeleteNote}
+        onCancel={() => setDeleteNoteConfirm({ isOpen: false, issueId: null, noteId: null })}
+      />
     </div>
   );
 }

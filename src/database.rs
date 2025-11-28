@@ -377,7 +377,11 @@ impl Database {
     /// Initialize database schema
     fn initialize_schema(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        Self::initialize_schema_static(&conn)
+    }
 
+    /// Static version of initialize_schema for use in reset
+    fn initialize_schema_static(conn: &Connection) -> Result<()> {
         // Create logs table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS logs (
@@ -534,15 +538,17 @@ impl Database {
 
         debug!("Database schema initialized");
         
-        // Seed initial shows if the table is empty
-        Self::seed_initial_shows(&conn)?;
-        
         Ok(())
     }
 
     /// Run database migrations
     pub fn run_migrations(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        Self::run_migrations_static(&conn)
+    }
+
+    /// Static version of run_migrations for use in reset
+    fn run_migrations_static(conn: &Connection) -> Result<()> {
         
         // Create migrations tracking table
         conn.execute(
@@ -1538,6 +1544,40 @@ impl Database {
         Ok(())
     }
 
+    /// Get recent completed instructions for an agent
+    pub fn get_recent_completed_instructions(&self, agent_id: &str, limit: i64) -> Result<Vec<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at, started_at, completed_at, error_message, output
+             FROM agent_instructions
+             WHERE assigned_to_agent_id = ?1 AND (status = 'completed' OR status = 'failed')
+             ORDER BY completed_at DESC
+             LIMIT ?2"
+        )?;
+        
+        let instructions = stmt.query_map(params![agent_id, limit], |row| {
+            let payload_str: String = row.get(2)?;
+            let payload: serde_json::Value = serde_json::from_str(&payload_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "instruction_type": row.get::<_, String>(1)?,
+                "payload": payload,
+                "status": row.get::<_, String>(3)?,
+                "assigned_to_agent_id": row.get::<_, Option<String>>(4)?,
+                "created_at": row.get::<_, String>(5)?,
+                "started_at": row.get::<_, Option<String>>(6)?,
+                "completed_at": row.get::<_, Option<String>>(7)?,
+                "error_message": row.get::<_, Option<String>>(8)?,
+                "output": row.get::<_, Option<String>>(9)?,
+            }))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(instructions)
+    }
+
     /// Get instruction by ID
     pub fn get_instruction(&self, instruction_id: i64) -> Result<Option<serde_json::Value>> {
         let conn = self.conn.lock().unwrap();
@@ -1733,6 +1773,7 @@ impl Database {
     }
 
     /// Mark an agent as offline (force disconnect)
+    #[allow(dead_code)]
     pub fn disconnect_agent(&self, agent_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
@@ -2435,6 +2476,11 @@ impl Database {
 
     /// Get database file path
     pub fn get_db_path() -> PathBuf {
+        // Check for test database environment variable
+        if let Ok(test_db) = std::env::var("RIPLEY_TEST_DB") {
+            return PathBuf::from(test_db);
+        }
+        
         if let Some(home) = dirs::home_dir() {
             home.join(".config").join("ripley").join("ripley.db")
         } else {
@@ -2442,15 +2488,47 @@ impl Database {
         }
     }
 
+    /// Reset database - delete everything and reseed
+    pub fn reset_database(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        // Drop all tables
+        conn.execute("DROP TABLE IF EXISTS logs", [])?;
+        conn.execute("DROP TABLE IF EXISTS logs_fts", [])?;
+        conn.execute("DROP TABLE IF EXISTS issues", [])?;
+        conn.execute("DROP TABLE IF EXISTS issue_notes", [])?;
+        conn.execute("DROP TABLE IF EXISTS settings", [])?;
+        conn.execute("DROP TABLE IF EXISTS shows", [])?;
+        conn.execute("DROP TABLE IF EXISTS rip_history", [])?;
+        conn.execute("DROP TABLE IF EXISTS drive_stats", [])?;
+        conn.execute("DROP TABLE IF EXISTS rip_queue", [])?;
+        conn.execute("DROP TABLE IF EXISTS episode_match_results", [])?;
+        conn.execute("DROP TABLE IF EXISTS agents", [])?;
+        conn.execute("DROP TABLE IF EXISTS agent_instructions", [])?;
+        conn.execute("DROP TABLE IF EXISTS upscaling_jobs", [])?;
+        conn.execute("DROP TABLE IF EXISTS topaz_profiles", [])?;
+        conn.execute("DROP TABLE IF EXISTS show_topaz_profiles", [])?;
+        conn.execute("DROP TABLE IF EXISTS agent_file_transfers", [])?;
+        conn.execute("DROP TABLE IF EXISTS operation_history", [])?;
+        conn.execute("DROP TABLE IF EXISTS migrations", [])?;
+        
+        // Reinitialize schema and run migrations
+        Self::initialize_schema_static(&conn)?;
+        Self::run_migrations_static(&conn)?;
+        Self::seed_initial_shows(&conn)?;
+        
+        info!("Database reset complete - all data deleted and schema reinitialized");
+        Ok(())
+    }
+
     /// Seed initial shows if the table is empty
     fn seed_initial_shows(conn: &Connection) -> Result<()> {
-        
-        // Check if shows table is empty
+        // Check if shows table exists and is empty
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM shows",
             [],
             |row| row.get(0),
-        )?;
+        ).unwrap_or(0);
         
         if count == 0 {
             let initial_shows = vec![
@@ -3353,14 +3431,21 @@ impl Database {
 mod tests {
     use super::*;
 
+    // Helper to set test database for all tests
+    fn setup_test_db() {
+        std::env::set_var("RIPLEY_TEST_DB", ":memory:");
+    }
+
     #[test]
     fn test_database_creation() {
+        setup_test_db();
         let db = Database::new().unwrap();
         assert!(db.get_recent_logs(10).is_ok());
     }
 
     #[test]
     fn test_add_log() {
+        setup_test_db();
         let db = Database::new().unwrap();
         let log = LogEntry {
             id: None,
@@ -3379,6 +3464,7 @@ mod tests {
 
     #[test]
     fn test_get_recent_logs() {
+        setup_test_db();
         let db = Database::new().unwrap();
         
         // Add multiple logs
@@ -3402,6 +3488,7 @@ mod tests {
 
     #[test]
     fn test_add_issue() {
+        setup_test_db();
         let db = Database::new().unwrap();
         let issue = Issue {
             id: None,
@@ -3423,6 +3510,7 @@ mod tests {
 
     #[test]
     fn test_resolve_issue() {
+        setup_test_db();
         let db = Database::new().unwrap();
         let issue = Issue {
             id: None,
@@ -3447,6 +3535,7 @@ mod tests {
 
     #[test]
     fn test_assign_issue() {
+        setup_test_db();
         let db = Database::new().unwrap();
         let issue = Issue {
             id: None,
@@ -3472,6 +3561,7 @@ mod tests {
 
     #[test]
     fn test_add_show() {
+        setup_test_db();
         let db = Database::new().unwrap();
         // Use a unique name with timestamp to avoid conflicts
         let unique_name = format!("Test Show {}", chrono::Utc::now().timestamp_millis());
@@ -3484,6 +3574,7 @@ mod tests {
 
     #[test]
     fn test_get_shows() {
+        setup_test_db();
         let db = Database::new().unwrap();
         
         // Use unique names with timestamp to avoid conflicts
@@ -3497,6 +3588,7 @@ mod tests {
 
     #[test]
     fn test_add_rip_history() {
+        setup_test_db();
         let db = Database::new().unwrap();
         let history = RipHistory {
             id: None,
@@ -3520,6 +3612,7 @@ mod tests {
 
     #[test]
     fn test_get_statistics() {
+        setup_test_db();
         let db = Database::new().unwrap();
         
         // Add some rip history
@@ -3548,6 +3641,7 @@ mod tests {
 
     #[test]
     fn test_episode_match_recording() {
+        setup_test_db();
         let db = Database::new().unwrap();
         let match_result = EpisodeMatchResult {
             id: None,
@@ -3568,6 +3662,7 @@ mod tests {
 
     #[test]
     fn test_queue_operations() {
+        setup_test_db();
         let db = Database::new().unwrap();
         
         let entry = RipQueueEntry {
@@ -3612,6 +3707,7 @@ mod tests {
 
     #[test]
     fn test_clear_logs() {
+        setup_test_db();
         let db = Database::new().unwrap();
         
         // Add a log

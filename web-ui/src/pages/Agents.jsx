@@ -28,6 +28,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
 import Dropdown from '../components/Dropdown';
+import ConfirmModal from '../components/ConfirmModal';
 import TestCommandModal from '../components/TestCommandModal';
 
 function formatRelativeTime(dateString) {
@@ -202,11 +203,16 @@ export default function Agents() {
     }
   }, [newProfile, fetchProfiles]);
 
-  const handleDeleteProfile = useCallback(async (id) => {
-    if (!window.confirm('Are you sure you want to delete this profile?')) {
-      return;
-    }
+  const [deleteProfileConfirm, setDeleteProfileConfirm] = useState({ isOpen: false, id: null });
 
+  const handleDeleteProfile = useCallback(async (id) => {
+    setDeleteProfileConfirm({ isOpen: true, id });
+  }, []);
+
+  const confirmDeleteProfile = useCallback(async () => {
+    const { id } = deleteProfileConfirm;
+    setDeleteProfileConfirm({ isOpen: false, id: null });
+    
     try {
       await api.deleteTopazProfile(id);
       toast.success('Profile deleted');
@@ -214,7 +220,7 @@ export default function Agents() {
     } catch (err) {
       toast.error('Failed to delete profile: ' + err.message);
     }
-  }, [fetchProfiles]);
+  }, [deleteProfileConfirm, fetchProfiles]);
 
   const handleEditProfile = useCallback((profile) => {
     setEditingProfile(profile.id);
@@ -280,11 +286,16 @@ export default function Agents() {
     setOutputLocationValue('');
   }, []);
 
-  const handleDisconnectAgent = useCallback(async (agentId) => {
-    if (!window.confirm('Are you sure you want to disconnect this agent? This will mark it as offline.')) {
-      return;
-    }
+  const [disconnectConfirm, setDisconnectConfirm] = useState({ isOpen: false, agentId: null });
 
+  const handleDisconnectAgent = useCallback(async (agentId) => {
+    setDisconnectConfirm({ isOpen: true, agentId });
+  }, []);
+
+  const confirmDisconnectAgent = useCallback(async () => {
+    const { agentId } = disconnectConfirm;
+    setDisconnectConfirm({ isOpen: false, agentId: null });
+    
     try {
       await api.disconnectAgent(agentId);
       toast.success('Agent disconnected');
@@ -292,13 +303,18 @@ export default function Agents() {
     } catch (err) {
       toast.error('Failed to disconnect agent: ' + err.message);
     }
-  }, [fetchAgents]);
+  }, [disconnectConfirm, fetchAgents]);
+
+  const [deleteAgentConfirm, setDeleteAgentConfirm] = useState({ isOpen: false, agentId: null });
 
   const handleDeleteAgent = useCallback(async (agentId) => {
-    if (!window.confirm('Are you sure you want to delete this agent? This action cannot be undone.')) {
-      return;
-    }
+    setDeleteAgentConfirm({ isOpen: true, agentId });
+  }, []);
 
+  const confirmDeleteAgent = useCallback(async () => {
+    const { agentId } = deleteAgentConfirm;
+    setDeleteAgentConfirm({ isOpen: false, agentId: null });
+    
     try {
       await api.deleteAgent(agentId);
       toast.success('Agent deleted');
@@ -306,7 +322,7 @@ export default function Agents() {
     } catch (err) {
       toast.error('Failed to delete agent: ' + err.message);
     }
-  }, [fetchAgents]);
+  }, [deleteAgentConfirm, fetchAgents]);
 
   const handleTestAgent = useCallback((agentId, agentName) => {
     setTestCommandModal({ isOpen: true, agentId, agentName });
@@ -1051,6 +1067,40 @@ export default function Agents() {
         agentName={testCommandModal.agentName}
         isOpen={testCommandModal.isOpen}
         onClose={() => setTestCommandModal({ isOpen: false, agentId: null, agentName: null })}
+      />
+
+      {/* Confirmation Modals */}
+      <ConfirmModal
+        isOpen={deleteProfileConfirm.isOpen}
+        title="Delete Profile"
+        type="danger"
+        message="Are you sure you want to delete this profile?"
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmDeleteProfile}
+        onCancel={() => setDeleteProfileConfirm({ isOpen: false, id: null })}
+      />
+
+      <ConfirmModal
+        isOpen={disconnectConfirm.isOpen}
+        title="Disconnect Agent"
+        type="warning"
+        message="Are you sure you want to disconnect this agent? This will mark it as offline."
+        confirmText="Disconnect"
+        cancelText="Cancel"
+        onConfirm={confirmDisconnectAgent}
+        onCancel={() => setDisconnectConfirm({ isOpen: false, agentId: null })}
+      />
+
+      <ConfirmModal
+        isOpen={deleteAgentConfirm.isOpen}
+        title="Delete Agent"
+        type="danger"
+        message="Are you sure you want to delete this agent? This action cannot be undone."
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmDeleteAgent}
+        onCancel={() => setDeleteAgentConfirm({ isOpen: false, agentId: null })}
       />
     </div>
   );

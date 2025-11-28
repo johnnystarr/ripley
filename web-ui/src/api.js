@@ -56,6 +56,13 @@ class ApiClient {
     return this.request('/config/path');
   }
 
+  // Reset database
+  async resetDatabase() {
+    return this.request('/config/database/reset', {
+      method: 'POST',
+    });
+  }
+
   // List optical drives
   async getDrives() {
     return this.request('/drives');

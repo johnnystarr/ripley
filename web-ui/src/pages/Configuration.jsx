@@ -16,12 +16,15 @@ import {
   faCog,
   faFileExport,
   faFileImport,
+  faTrash,
+  faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import Dropdown from '../components/Dropdown';
 import CollapsibleSection from '../components/CollapsibleSection';
 import Tooltip from '../components/Tooltip';
+import ConfirmModal from '../components/ConfirmModal';
 
 // Default configuration values matching backend defaults
 const DEFAULT_CONFIG = {
@@ -60,6 +63,9 @@ export default function Configuration() {
   const [openAIValid, setOpenAIValid] = useState(null);
   const [tmdbValid, setTMDBValid] = useState(null);
   const [configPath, setConfigPath] = useState(null);
+  const [resettingDatabase, setResettingDatabase] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showResetFinal, setShowResetFinal] = useState(false);
 
   useEffect(() => {
     fetchConfig();
@@ -72,6 +78,30 @@ export default function Configuration() {
       setConfigPath(data);
     } catch (err) {
       console.error('Failed to get config path:', err);
+    }
+  };
+
+  const handleResetDatabaseClick = () => {
+    setShowResetConfirm(true);
+  };
+
+  const handleResetConfirm = () => {
+    setShowResetConfirm(false);
+    setShowResetFinal(true);
+  };
+
+  const handleResetFinal = async () => {
+    setShowResetFinal(false);
+    try {
+      setResettingDatabase(true);
+      await api.resetDatabase();
+      toast.success('Database reset successfully! All data has been deleted and the database has been reinitialized.');
+      // Optionally reload the page or refresh data
+      window.location.reload();
+    } catch (err) {
+      toast.error('Failed to reset database: ' + err.message);
+    } finally {
+      setResettingDatabase(false);
     }
   };
 
@@ -129,11 +159,8 @@ export default function Configuration() {
     reader.readAsText(file);
   };
 
-  const handleResetToDefaults = () => {
-    if (!window.confirm('Reset all settings to default values? This cannot be undone.')) {
-      return;
-    }
-    
+  const confirmResetDefaults = () => {
+    setResetDefaultsConfirm(false);
     setConfig(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
     setOpenAIValid(null);
     setTMDBValid(null);
@@ -308,6 +335,51 @@ export default function Configuration() {
           </div>
         </div>
       )}
+
+      {/* Database Reset Section */}
+      <CollapsibleSection title="Database Management" icon={faExclamationTriangle} defaultOpen={false}>
+        <div className="space-y-4 mt-4">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <FontAwesomeIcon icon={faExclamationTriangle} className="text-red-400 text-xl mt-0.5" />
+              <div className="flex-1">
+                <h3 className="text-red-400 font-semibold mb-2">Reset Database</h3>
+                <p className="text-slate-300 text-sm mb-3">
+                  This will permanently delete ALL data from the database including:
+                </p>
+                <ul className="text-slate-400 text-sm list-disc list-inside mb-4 space-y-1">
+                  <li>All shows and their associations</li>
+                  <li>All logs and history</li>
+                  <li>All rip history and statistics</li>
+                  <li>All agents and their configurations</li>
+                  <li>All Topaz profiles and upscaling jobs</li>
+                  <li>All issues and notes</li>
+                </ul>
+                <p className="text-slate-300 text-sm mb-4">
+                  The database will be reset to a fresh state with only the default seeded shows. This action <strong className="text-red-400">CANNOT be undone</strong>.
+                </p>
+                <button
+                  onClick={handleResetDatabaseClick}
+                  disabled={resettingDatabase}
+                  className="flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg transition-colors"
+                >
+                  {resettingDatabase ? (
+                    <>
+                      <FontAwesomeIcon icon={faSpinner} className="mr-2 animate-spin" />
+                      Resetting...
+                    </>
+                  ) : (
+                    <>
+                      <FontAwesomeIcon icon={faTrash} className="mr-2" />
+                      Reset Database
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </CollapsibleSection>
 
       {/* API Keys Section */}
       <CollapsibleSection title="API Keys" icon={faKey} defaultOpen={true}>
@@ -660,6 +732,56 @@ export default function Configuration() {
           )}
         </button>
       </div>
+
+      {/* Reset Database Confirmation Modals */}
+      <ConfirmModal
+        isOpen={showResetConfirm}
+        title="Reset Database"
+        type="danger"
+        message={`⚠️ WARNING: This will DELETE ALL DATA including:
+
+• All shows
+• All logs
+• All rip history
+• All agents
+• All Topaz profiles
+• All upscaling jobs
+• All issues
+
+The database will be reset to a fresh state with only the default seeded shows.
+
+This action CANNOT be undone!
+
+Are you absolutely sure you want to continue?`}
+        confirmText="Continue"
+        cancelText="Cancel"
+        onConfirm={handleResetConfirm}
+        onCancel={() => setShowResetConfirm(false)}
+      />
+
+      <ConfirmModal
+        isOpen={showResetFinal}
+        title="Final Confirmation"
+        type="danger"
+        message="FINAL WARNING: This will permanently delete ALL data. This action cannot be undone.
+
+Are you absolutely certain you want to proceed?"
+        confirmText="Yes, Reset Database"
+        cancelText="Cancel"
+        onConfirm={handleResetFinal}
+        onCancel={() => setShowResetFinal(false)}
+      />
+
+      <ConfirmModal
+        isOpen={resetDefaultsConfirm}
+        title="Reset to Defaults"
+        type="warning"
+        message="Reset all settings to default values? This cannot be undone."
+        confirmText="Reset"
+        cancelText="Cancel"
+        onConfirm={confirmResetDefaults}
+        onCancel={() => setResetDefaultsConfirm(false)}
+      />
     </div>
   );
 }

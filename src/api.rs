@@ -547,6 +547,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/config", get(get_config))
         .route("/config", post(update_config))
         .route("/config/path", get(get_config_path_handler))
+        .route("/config/database/reset", post(reset_database_handler))
         .route("/rip/start", post(start_rip))
         .route("/rip/stop", post(stop_rip))
         .route("/drives", get(list_drives))
@@ -679,6 +680,24 @@ async fn update_config(
     }
     
     Ok(Json(new_config))
+}
+
+/// Reset database handler
+async fn reset_database_handler(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.reset_database() {
+        Ok(_) => {
+            info!("Database reset by user");
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "Database reset successfully. All data deleted and schema reinitialized."
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to reset database: {}", e),
+        }),
+    }
 }
 
 /// Start ripping operation (queues if drive is busy)
@@ -2306,11 +2325,12 @@ async fn get_agents(
     }
 }
 
-/// Get pending instructions for an agent
+/// Get pending instructions for an agent (including completed ones with output for display)
 async fn get_agent_instructions(
     State(state): State<ApiState>,
     axum::extract::Path(agent_id): axum::extract::Path<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, ErrorResponse> {
+    // Get pending instructions
     match state.db.get_pending_instructions(Some(&agent_id)) {
         Ok(mut instructions) => {
             // Auto-assign the first pending instruction to this agent if not already assigned
@@ -2328,6 +2348,15 @@ async fn get_agent_instructions(
                     }
                 }
             }
+            
+            // Also get recent completed instructions for this agent (last 5) to show output
+            let completed = match state.db.get_recent_completed_instructions(&agent_id, 5) {
+                Ok(insts) => insts,
+                Err(_) => vec![], // If query fails, just return pending instructions
+            };
+            
+            // Combine pending and recent completed
+            instructions.extend(completed);
             Ok(Json(instructions))
         }
         Err(e) => Err(ErrorResponse {

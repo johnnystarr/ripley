@@ -6,6 +6,7 @@ use tokio::sync::{broadcast, RwLock};
 
 /// Helper to create test API state
 fn create_test_state() -> ApiState {
+    std::env::set_var("RIPLEY_TEST_DB", ":memory:");
     let (event_tx, _) = broadcast::channel(100);
     let db = Arc::new(Database::new().unwrap());
     ApiState {

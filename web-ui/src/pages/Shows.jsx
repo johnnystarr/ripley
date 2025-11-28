@@ -20,6 +20,7 @@ import {
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import Dropdown from '../components/Dropdown';
+import ConfirmModal from '../components/ConfirmModal';
 
 // Helper function to format relative time
 function formatRelativeTime(dateString) {
@@ -193,11 +194,17 @@ export default function Shows() {
     }
   }, [editingName, editingProfiles, showProfiles, fetchShows, fetchShowProfiles]);
 
-  const handleDeleteShow = useCallback(async (id, name) => {
-    if (!confirm(`Delete "${name}"?`)) {
-      return;
-    }
+  const [deleteConfirm, setDeleteConfirm] = useState({ isOpen: false, id: null, name: '' });
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState({ isOpen: false, count: 0 });
 
+  const handleDeleteShow = useCallback(async (id, name) => {
+    setDeleteConfirm({ isOpen: true, id, name });
+  }, []);
+
+  const confirmDeleteShow = useCallback(async () => {
+    const { id } = deleteConfirm;
+    setDeleteConfirm({ isOpen: false, id: null, name: '' });
+    
     try {
       await api.deleteShow(id);
       toast.success('Show deleted');
@@ -208,7 +215,7 @@ export default function Shows() {
     } catch (err) {
       toast.error('Failed to delete show: ' + err.message);
     }
-  }, [selectedShowId, fetchShows]);
+  }, [deleteConfirm, selectedShowId, fetchShows]);
 
   const handleSelectShow = useCallback(async (id) => {
     try {
@@ -239,11 +246,13 @@ export default function Shows() {
 
   const handleBulkDelete = useCallback(async () => {
     if (selectedShows.size === 0) return;
-    
-    if (!confirm(`Delete ${selectedShows.size} show(s)?`)) {
-      return;
-    }
+    setBulkDeleteConfirm({ isOpen: true, count: selectedShows.size });
+  }, [selectedShows]);
 
+  const confirmBulkDelete = useCallback(async () => {
+    const { count } = bulkDeleteConfirm;
+    setBulkDeleteConfirm({ isOpen: false, count: 0 });
+    
     try {
       await Promise.all(
         Array.from(selectedShows).map(id => api.deleteShow(id))
@@ -255,7 +264,7 @@ export default function Shows() {
     } catch (err) {
       toast.error('Failed to delete shows: ' + err.message);
     }
-  }, [selectedShows, fetchShows]);
+  }, [bulkDeleteConfirm, selectedShows, fetchShows]);
 
   const handleExportShows = useCallback(() => {
     const dataStr = JSON.stringify(shows, null, 2);
@@ -866,6 +875,29 @@ export default function Shows() {
           )}
         </>
       )}
+
+      {/* Delete Confirmation Modals */}
+      <ConfirmModal
+        isOpen={deleteConfirm.isOpen}
+        title="Delete Show"
+        type="danger"
+        message={`Are you sure you want to delete "${deleteConfirm.name}"?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmDeleteShow}
+        onCancel={() => setDeleteConfirm({ isOpen: false, id: null, name: '' })}
+      />
+
+      <ConfirmModal
+        isOpen={bulkDeleteConfirm.isOpen}
+        title="Delete Shows"
+        type="danger"
+        message={`Are you sure you want to delete ${bulkDeleteConfirm.count} show(s)?`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={confirmBulkDelete}
+        onCancel={() => setBulkDeleteConfirm({ isOpen: false, count: 0 })}
+      />
     </div>
   );
 }

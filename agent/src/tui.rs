@@ -265,7 +265,24 @@ impl TuiApp {
                 match client.get_instructions().await {
                     Ok(instructions) => {
                         self.instructions = instructions.iter()
-                            .map(|i| format!("[{}] {} - {}", i.id, i.instruction_type, i.status))
+                            .map(|i| {
+                                let base = format!("[{}] {} - {}", i.id, i.instruction_type, i.status);
+                                // If completed/failed and has output, show a preview
+                                if (i.status == "completed" || i.status == "failed") && i.payload.get("output").and_then(|v| v.as_str()).is_some() {
+                                    let output = i.payload.get("output").and_then(|v| v.as_str()).unwrap_or("");
+                                    let preview = if output.len() > 50 {
+                                        format!("{}...", &output[..50])
+                                    } else {
+                                        output.to_string()
+                                    };
+                                    format!("{} | Output: {}", base, preview)
+                                } else if i.instruction_type == "test_command" {
+                                    let cmd = i.payload.get("command").and_then(|v| v.as_str()).unwrap_or("unknown");
+                                    format!("{} | Command: {}", base, cmd)
+                                } else {
+                                    base
+                                }
+                            })
                             .collect();
                         
                         // Process pending test_command instructions

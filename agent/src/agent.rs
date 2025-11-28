@@ -151,10 +151,17 @@ impl AgentClient {
                 let instructions: Vec<Instruction> = instructions_json
                     .into_iter()
                     .filter_map(|inst| {
+                        let mut payload = inst.get("payload")?.clone();
+                        
+                        // Include output in payload if available
+                        if let Some(output) = inst.get("output").and_then(|v| v.as_str()) {
+                            payload.as_object_mut()?.insert("output".to_string(), serde_json::Value::String(output.to_string()));
+                        }
+                        
                         Some(Instruction {
                             id: inst.get("id")?.as_i64()?,
                             instruction_type: inst.get("instruction_type")?.as_str()?.to_string(),
-                            payload: inst.get("payload")?.clone(),
+                            payload,
                             status: inst.get("status")?.as_str()?.to_string(),
                             assigned_to_agent_id: inst.get("assigned_to_agent_id")
                                 .and_then(|v| v.as_str())
@@ -547,22 +554,30 @@ impl AgentClient {
         // Start the instruction
         self.start_instruction(instruction_id).await?;
         
-        // Execute the command
-        let output = if cfg!(target_os = "windows") {
-            Command::new("cmd")
-                .args(&["/C", command])
-                .output()
-                .await
+        // Determine shell based on OS
+        let (shell, args) = if cfg!(target_os = "windows") {
+            ("powershell", vec!["-Command", command])
+        } else if cfg!(target_os = "macos") {
+            ("/bin/bash", vec!["-c", command])
         } else {
-            Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .output()
-                .await
+            // Linux - try bash first, fallback to sh
+            ("/bin/bash", vec!["-c", command])
         };
         
+        tracing::info!("Executing test command: {} {:?}", shell, args);
+        
+        // Execute the command
+        let mut cmd = Command::new(shell);
+        cmd.args(&args);
+        
+        // Set timeout to prevent hanging (30 seconds)
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            cmd.output()
+        ).await;
+        
         match output {
-            Ok(result) => {
+            Ok(Ok(result)) => {
                 // Combine stdout and stderr
                 let stdout = String::from_utf8_lossy(&result.stdout);
                 let stderr = String::from_utf8_lossy(&result.stderr);
@@ -578,7 +593,13 @@ impl AgentClient {
                     combined_output.push_str(&stderr);
                 }
                 
+                // If output is empty but command succeeded, indicate success
+                if combined_output.is_empty() && result.status.success() {
+                    combined_output = "(Command executed successfully with no output)".to_string();
+                }
+                
                 if result.status.success() {
+                    tracing::info!("Test command completed successfully: {}", command);
                     self.complete_instruction(instruction_id, Some(&combined_output)).await?;
                 } else {
                     let error_msg = if combined_output.is_empty() {
@@ -586,11 +607,19 @@ impl AgentClient {
                     } else {
                         combined_output
                     };
+                    tracing::warn!("Test command failed: {} - {}", command, error_msg);
                     self.fail_instruction(instruction_id, &error_msg).await?;
                 }
             }
-            Err(e) => {
-                self.fail_instruction(instruction_id, &format!("Failed to execute command: {}", e)).await?;
+            Ok(Err(e)) => {
+                let error_msg = format!("Failed to execute command: {}", e);
+                tracing::error!("Test command execution error: {}", error_msg);
+                self.fail_instruction(instruction_id, &error_msg).await?;
+            }
+            Err(_) => {
+                let error_msg = "Command execution timed out after 30 seconds".to_string();
+                tracing::error!("Test command timeout: {}", command);
+                self.fail_instruction(instruction_id, &error_msg).await?;
             }
         }
         

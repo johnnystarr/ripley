@@ -19,6 +19,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
 import Dropdown from '../components/Dropdown';
+import ConfirmModal from '../components/ConfirmModal';
 import { Link } from 'react-router-dom';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -359,10 +360,15 @@ export default function Dashboard() {
     }
   }, []);
 
+  const [stopRipConfirm, setStopRipConfirm] = useState(false);
+
   const handleStopRip = useCallback(async () => {
-    if (!window.confirm('Stop the current rip operation?')) {
-      return;
-    }
+    setStopRipConfirm(true);
+  }, []);
+
+  const confirmStopRip = useCallback(async () => {
+    setStopRipConfirm(false);
+    
     try {
       await api.stopRip();
       toast.success('Rip operation stopped');
@@ -675,11 +681,23 @@ export default function Dashboard() {
                         <span>Total:</span>
                         <span className="font-semibold">{(drive.total_bytes_ripped / 1073741824).toFixed(1)} GB</span>
                       </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+        )}
+      </div>
+
+      {/* Stop Rip Confirmation Modal */}
+      <ConfirmModal
+        isOpen={stopRipConfirm}
+        title="Stop Rip Operation"
+        type="warning"
+        message="Are you sure you want to stop the current rip operation?"
+        confirmText="Stop"
+        cancelText="Cancel"
+        onConfirm={confirmStopRip}
+        onCancel={() => setStopRipConfirm(false)}
+      />
+    </div>
+  );
+})}
           </div>
           <p className="text-slate-400 text-xs mt-3">
             Darker shades indicate more frequent usage. Hover for details.
@@ -1091,6 +1109,18 @@ export default function Dashboard() {
           </Link>
         </div>
       </div>
+
+      {/* Stop Rip Confirmation Modal */}
+      <ConfirmModal
+        isOpen={stopRipConfirm}
+        title="Stop Rip Operation"
+        type="warning"
+        message="Are you sure you want to stop the current rip operation?"
+        confirmText="Stop"
+        cancelText="Cancel"
+        onConfirm={confirmStopRip}
+        onCancel={() => setStopRipConfirm(false)}
+      />
     </div>
   );
 }
