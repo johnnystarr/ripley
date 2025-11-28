@@ -1553,9 +1553,14 @@ async fn rip_disc_web_ui(
                 tracing::warn!("Failed to send notification: {}", e);
             }
             
-            if eject_when_done {
-                crate::drive::eject_disc(device).await?;
-                send_log_to_web_ui(state, device, "info", format!("⏏️  Ejected {}", device), Some(operation_id)).await;
+            // Always eject disc when done
+            match crate::drive::eject_disc(device).await {
+                Ok(_) => {
+                    send_log_to_web_ui(state, device, "info", format!("⏏️  Ejected {}", device), Some(operation_id)).await;
+                }
+                Err(e) => {
+                    send_log_to_web_ui(state, device, "warning", format!("⚠️  Failed to eject {}: {}", device, e), Some(operation_id)).await;
+                }
             }
         }
         Err(e) => {
@@ -1756,44 +1761,125 @@ async fn rip_dvd_disc_web_ui(
                             send_log_to_web_ui(state, device, "info", format!("[{}/{}] Processing {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy()), Some(operation_id)).await;
                             
                             // Extract and transcribe audio
-                            match crate::speech_match::extract_and_transcribe_audio(path).await {
-                                Ok(transcript) => {
-                                    send_log_to_web_ui(state, device, "info", format!("  Transcribed {} characters", transcript.len()), Some(operation_id)).await;
-                                    
-                                    // Match against TMDB episodes
-                                    match crate::speech_match::match_episode_by_transcript(
-                                        &metadata.title,
-                                        &transcript,
-                                        &metadata.episodes
-                                    ).await {
-                                        Ok(ep_match) => {
-                                            // Only rename if confidence is high enough
-                                            if ep_match.confidence >= 85.0 {
-                                                let show_name = metadata.title.replace(' ', ".");
-                                                let episode_title = ep_match.title.replace(' ', ".");
-                                                let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
-                                                    show_name, ep_match.season, ep_match.episode, 
-                                                    episode_title);
-                                                let new_path = dvd_dir.join(&new_name);
+                            let mut transcript = match crate::speech_match::extract_and_transcribe_audio(path).await {
+                                Ok(t) => {
+                                    send_log_to_web_ui(state, device, "info", format!("  Transcribed {} characters", t.len()), Some(operation_id)).await;
+                                    t
+                                }
+                                Err(e) => {
+                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Transcription failed: {}", e), Some(operation_id)).await;
+                                    continue;
+                                }
+                            };
+                            
+                            // Try matching with retry logic if file already exists
+                            let mut exclude_episode: Option<(u32, u32)> = None;
+                            let mut retry_count = 0u32;
+                            const MAX_RETRIES: u32 = 2;
+                            
+                            loop {
+                                // Match against TMDB episodes
+                                match crate::speech_match::match_episode_by_transcript_with_exclusion(
+                                    &metadata.title,
+                                    &transcript,
+                                    &metadata.episodes,
+                                    exclude_episode,
+                                ).await {
+                                    Ok(matched) => {
+                                        // Only rename if confidence is high enough
+                                        if matched.confidence >= 85.0 {
+                                            let show_name = metadata.title.replace(' ', ".");
+                                            let episode_title = matched.title.replace(' ', ".");
+                                            let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
+                                                show_name, matched.season, matched.episode, 
+                                                episode_title);
+                                            let new_path = dvd_dir.join(&new_name);
+                                            
+                                            // Check if file already exists
+                                            if new_path.exists() {
+                                                if retry_count < MAX_RETRIES {
+                                                    // File exists - try again with different segment
+                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  File {} already exists, trying different segment...", new_name), Some(operation_id)).await;
+                                                    
+                                                    // Get video duration for alternative segment
+                                                    let duration_output = tokio::process::Command::new("ffprobe")
+                                                        .args([
+                                                            "-v", "error",
+                                                            "-show_entries", "format=duration",
+                                                            "-of", "default=noprint_wrappers=1:nokey=1",
+                                                            path.to_str().unwrap()
+                                                        ])
+                                                        .output()
+                                                        .await;
+                                                    
+                                                    if let Ok(output) = duration_output {
+                                                        if let Ok(duration_str) = String::from_utf8(output.stdout) {
+                                                            if let Ok(duration) = duration_str.trim().parse::<f64>() {
+                                                                // Try a different segment (later in the video)
+                                                                let alt_start = duration * (0.25 + retry_count as f64 * 0.15);
+                                                                match crate::speech_match::extract_and_transcribe_audio_segment(
+                                                                    path,
+                                                                    alt_start,
+                                                                    90.0,
+                                                                ).await {
+                                                                    Ok(alt_transcript) => {
+                                                                        transcript = alt_transcript;
+                                                                        exclude_episode = Some((matched.season, matched.episode));
+                                                                        retry_count += 1;
+                                                                        continue;
+                                                                    }
+                                                                    Err(e) => {
+                                                                        send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to extract alternative segment: {}", e), Some(operation_id)).await;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    
+                                                    // If retry failed, fall through to duplicate naming
+                                                }
                                                 
+                                                // File exists and we've exhausted retries - use duplicate naming
+                                                let mut duplicate_num = 1u32;
+                                                let mut final_path = new_path.clone();
+                                                while final_path.exists() {
+                                                    let stem = new_path.file_stem()
+                                                        .and_then(|s| s.to_str())
+                                                        .unwrap_or("episode");
+                                                    let ext = new_path.extension()
+                                                        .and_then(|s| s.to_str())
+                                                        .unwrap_or("mkv");
+                                                    let duplicate_name = format!("{}-DUPLICATE-{}.{}", stem, duplicate_num, ext);
+                                                    final_path = dvd_dir.join(duplicate_name);
+                                                    duplicate_num += 1;
+                                                }
+                                                
+                                                if let Err(e) = tokio::fs::rename(path, &final_path).await {
+                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(operation_id)).await;
+                                                } else {
+                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  S{:02}E{:02}: {} (confidence: {:.0}%) - renamed with DUPLICATE suffix to avoid overwrite", 
+                                                        matched.season, matched.episode, matched.title, matched.confidence), Some(operation_id)).await;
+                                                    matched_count += 1;
+                                                }
+                                            } else {
+                                                // File doesn't exist - safe to rename
                                                 if let Err(e) = tokio::fs::rename(path, &new_path).await {
                                                     send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(operation_id)).await;
                                                 } else {
                                                     send_log_to_web_ui(state, device, "success", format!("  ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
-                                                        ep_match.season, ep_match.episode, ep_match.title, ep_match.confidence), Some(operation_id)).await;
+                                                        matched.season, matched.episode, matched.title, matched.confidence), Some(operation_id)).await;
                                                     matched_count += 1;
                                                 }
-                                            } else {
-                                                send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Low confidence ({:.0}%), skipping rename", ep_match.confidence), Some(operation_id)).await;
                                             }
+                                        } else {
+                                            send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Low confidence ({:.0}%), skipping rename", matched.confidence), Some(operation_id)).await;
                                         }
-                                        Err(e) => {
-                                            send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Matching failed: {}", e), Some(operation_id)).await;
-                                        }
+                                        break;
                                     }
-                                }
-                                Err(e) => {
-                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Transcription failed: {}", e), Some(operation_id)).await;
+                                    Err(e) => {
+                                        send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Matching failed: {}", e), Some(operation_id)).await;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -1863,12 +1949,17 @@ async fn rip_dvd_disc_web_ui(
                 }
             });
             
-            if eject_when_done {
-                crate::drive::eject_disc(device).await?;
-                send_log_to_web_ui(state, device, "info", format!("⏏️  Ejected {}", device), Some(operation_id)).await;
-            }
-            
             update_operation_progress(state, operation_id, 100.0, "Rip completed successfully".to_string()).await;
+            
+            // Always eject disc when done
+            match crate::drive::eject_disc(device).await {
+                Ok(_) => {
+                    send_log_to_web_ui(state, device, "info", format!("⏏️  Ejected {}", device), Some(operation_id)).await;
+                }
+                Err(e) => {
+                    send_log_to_web_ui(state, device, "warning", format!("⚠️  Failed to eject {}: {}", device, e), Some(operation_id)).await;
+                }
+            }
         }
         Err(e) => {
             send_log_to_web_ui(state, device, "error", format!("❌ {} rip failed: {}", media_name, e), Some(operation_id)).await;

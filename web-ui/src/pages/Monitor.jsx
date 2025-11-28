@@ -62,6 +62,19 @@ export default function Monitor() {
 
     return () => clearInterval(interval);
   }, [viewMode, fetchOperationHistory]);
+  
+  // Auto-expand all operations when operations change (for initial load and new operations)
+  useEffect(() => {
+    if (operations.length > 0) {
+      setExpandedOperations(prev => {
+        const newSet = new Set(prev);
+        operations.forEach(op => {
+          newSet.add(op.operation_id);
+        });
+        return newSet;
+      });
+    }
+  }, [operations]);
 
   // Set up WebSocket listeners for real-time updates
   useEffect(() => {

@@ -168,6 +168,45 @@ async fn extract_and_transcribe_audio_segments(video_path: &Path) -> Result<Stri
     Ok(combined)
 }
 
+/// Extract audio from a specific segment (for retry attempts)
+pub async fn extract_and_transcribe_audio_segment(
+    video_path: &Path,
+    start_time: f64,
+    duration: f64,
+) -> Result<String> {
+    let audio_file = format!("/tmp/ripley_audio_retry_{}.wav", start_time as u64);
+    
+    // Extract segment
+    let extract_result = Command::new("ffmpeg")
+        .args([
+            "-ss", &start_time.to_string(),
+            "-i", video_path.to_str().unwrap(),
+            "-t", &duration.to_string(),
+            "-vn",  // No video
+            "-acodec", "pcm_s16le",  // PCM WAV format
+            "-ar", "16000",  // 16kHz sample rate (good for speech)
+            "-ac", "1",  // Mono
+            "-y",  // Overwrite
+            &audio_file
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    
+    if !extract_result.success() {
+        return Err(anyhow::anyhow!("Failed to extract audio segment"));
+    }
+    
+    // Transcribe segment
+    let transcript = transcribe_with_openai_api(&audio_file).await?;
+    
+    // Clean up temp file
+    let _ = tokio::fs::remove_file(&audio_file).await;
+    
+    Ok(transcript)
+}
+
 /// Transcribe audio using OpenAI Whisper API
 async fn transcribe_with_openai_api(audio_path: &str) -> Result<String> {
     // Load config and get API key
@@ -211,6 +250,16 @@ pub async fn match_episode_by_transcript(
     transcript: &str,
     episodes: &[crate::dvd_metadata::Episode],
 ) -> Result<EpisodeMatch> {
+    match_episode_by_transcript_with_exclusion(show_name, transcript, episodes, None).await
+}
+
+/// Match transcript against TMDB episodes using OpenAI, excluding a specific episode
+pub async fn match_episode_by_transcript_with_exclusion(
+    show_name: &str,
+    transcript: &str,
+    episodes: &[crate::dvd_metadata::Episode],
+    exclude_episode: Option<(u32, u32)>, // (season, episode) to exclude
+) -> Result<EpisodeMatch> {
     info!("Matching transcript against {} episodes", episodes.len());
     
     // Load config and get API key
@@ -229,6 +278,28 @@ pub async fn match_episode_by_transcript(
         })
         .collect();
     
+    // Filter out excluded episode if specified
+    let filtered_episodes: Vec<String> = if let Some((ex_season, ex_episode)) = exclude_episode {
+        episodes.iter()
+            .filter(|ep| !(ep.season == ex_season && ep.episode == ex_episode))
+            .map(|ep| {
+                if let Some(overview) = &ep.overview {
+                    format!("S{:02}E{:02}: {} - {}", ep.season, ep.episode, ep.title, overview)
+                } else {
+                    format!("S{:02}E{:02}: {}", ep.season, ep.episode, ep.title)
+                }
+            })
+            .collect()
+    } else {
+        episode_list
+    };
+    
+    let exclusion_note = if let Some((ex_season, ex_episode)) = exclude_episode {
+        format!("\n\nIMPORTANT: This transcript is NOT from S{:02}E{:02}. Do not match to that episode.", ex_season, ex_episode)
+    } else {
+        String::new()
+    };
+    
     let prompt = format!(
         r#"You are matching a TV episode transcript to the correct episode.
 
@@ -238,7 +309,7 @@ Available episodes (with plot summaries):
 {}
 
 Dialogue transcript from the episode:
-{}
+{}{}
 
 Task: Match this dialogue to the correct episode by:
 1. Identifying key plot points, character interactions, and story elements from the dialogue
@@ -249,8 +320,9 @@ Respond with episode code and confidence (0-100).
 Format: S##E## <confidence>
 Example: S01E13 95"#,
         show_name,
-        episode_list.join("\n"),
-        transcript.chars().take(3000).collect::<String>()
+        filtered_episodes.join("\n"),
+        transcript.chars().take(3000).collect::<String>(),
+        exclusion_note
     );
     
     debug!("Sending to OpenAI: {} chars", prompt.len());
