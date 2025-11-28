@@ -64,11 +64,20 @@ pub struct RipProfile {
     pub is_default: bool,
 }
 
+/// Topaz profile seed entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopazProfileSeed {
+    pub name: String,
+    pub command: String,
+}
+
 /// Seed configuration for initial database setup
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeedConfig {
     #[serde(default)]
     pub shows: Vec<String>,
+    #[serde(default)]
+    pub topaz_profiles: Vec<TopazProfileSeed>,
 }
 
 impl Default for SeedConfig {
@@ -85,6 +94,7 @@ impl Default for SeedConfig {
                 "Animaniacs".to_string(),
                 "Rocko's Modern Life".to_string(),
             ],
+            topaz_profiles: vec![], // Empty by default - users should configure their own
         }
     }
 }
@@ -156,6 +166,7 @@ impl Default for Config {
                     "Animaniacs".to_string(),
                     "Rocko's Modern Life".to_string(),
                 ],
+                topaz_profiles: vec![], // Empty by default
             },
         }
     }

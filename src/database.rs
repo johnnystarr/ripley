@@ -374,6 +374,7 @@ impl Database {
         // Seed initial data if tables are empty
         let conn = db.conn.lock().unwrap();
         Self::seed_initial_shows(&conn)?;
+        Self::seed_initial_topaz_profiles(&conn)?;
         drop(conn);
         
         Ok(db)
@@ -2653,6 +2654,7 @@ impl Database {
         Self::initialize_schema_static(&new_conn)?;
         Self::run_migrations_static(&new_conn)?;
         Self::seed_initial_shows(&new_conn)?;
+        Self::seed_initial_topaz_profiles(&new_conn)?;
         
         // Replace the connection in the Mutex
         {
@@ -2713,6 +2715,65 @@ impl Database {
         }
         
         Ok(())
+    }
+
+    /// Seed initial Topaz profiles if the table is empty
+    /// Reads seed data from config.yaml
+    fn seed_initial_topaz_profiles(conn: &Connection) -> Result<()> {
+        // Check if topaz_profiles table exists and is empty
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM topaz_profiles",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        if count == 0 {
+            // Load config to get seed Topaz profiles
+            let config = crate::config::Config::load()
+                .unwrap_or_else(|e| {
+                    warn!("Failed to load config for seeding Topaz profiles: {}, using defaults", e);
+                    crate::config::Config::default()
+                });
+            
+            let initial_profiles = if config.seed.topaz_profiles.is_empty() {
+                // Empty by default - users should configure their own
+                vec![]
+            } else {
+                config.seed.topaz_profiles
+            };
+            
+            let profile_count = initial_profiles.len();
+            
+            for profile in initial_profiles {
+                match Self::create_topaz_profile_static(conn, &profile.name, &profile.command) {
+                    Ok(_) => {
+                        info!("Seeded Topaz profile: {}", profile.name);
+                    }
+                    Err(e) => {
+                        warn!("Failed to seed Topaz profile {}: {}", profile.name, e);
+                    }
+                }
+            }
+            
+            if profile_count > 0 {
+                info!("Seeded {} initial Topaz profiles from config.yaml", profile_count);
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Static version of create_topaz_profile for use in seeding
+    fn create_topaz_profile_static(conn: &Connection, name: &str, command: &str) -> Result<i64> {
+        let now = Utc::now().to_rfc3339();
+        
+        conn.execute(
+            "INSERT INTO topaz_profiles (name, command, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![name, command, now, now],
+        )?;
+        
+        Ok(conn.last_insert_rowid())
     }
 
     /// Add a log entry
