@@ -372,9 +372,10 @@ impl Database {
         db.run_migrations()?;
         
         // Seed initial data if tables are empty
+        // IMPORTANT: Profiles must be seeded before shows so associations can be created
         let conn = db.conn.lock().unwrap();
-        Self::seed_initial_shows(&conn)?;
         Self::seed_initial_topaz_profiles(&conn)?;
+        Self::seed_initial_shows(&conn)?;
         drop(conn);
         
         Ok(db)
@@ -2651,10 +2652,11 @@ impl Database {
         let new_conn = Connection::open(&db_path)?;
         
         // Reinitialize schema, run migrations, and seed data
+        // IMPORTANT: Profiles must be seeded before shows so associations can be created
         Self::initialize_schema_static(&new_conn)?;
         Self::run_migrations_static(&new_conn)?;
-        Self::seed_initial_shows(&new_conn)?;
         Self::seed_initial_topaz_profiles(&new_conn)?;
+        Self::seed_initial_shows(&new_conn)?;
         
         // Replace the connection in the Mutex
         {
@@ -2667,7 +2669,7 @@ impl Database {
     }
 
     /// Seed initial shows if the table is empty
-    /// Reads seed data from config.yaml
+    /// Reads seed data from config.yaml and creates profile associations
     fn seed_initial_shows(conn: &Connection) -> Result<()> {
         // Check if shows table exists and is empty
         let count: i64 = conn.query_row(
@@ -2684,37 +2686,92 @@ impl Database {
                     crate::config::Config::default()
                 });
             
-            let initial_shows = if config.seed.shows.is_empty() {
-                // Fallback to default shows if config doesn't have any
-                vec![
-                    "Foster's Home For Imaginary Friends",
-                    "Power Puff Girls",
-                    "Johnny Bravo",
-                    "Pinky And The Brain",
-                    "Batman Begins",
-                    "Batman The Animated Series",
-                    "King Of The Hill",
-                    "Animaniacs",
-                    "Rocko's Modern Life"
-                ]
-            } else {
-                config.seed.shows.iter().map(|s| s.as_str()).collect()
-            };
+            // All seed data must come from config.yaml - no hardcoded fallbacks
+            let show_seeds = config.seed.shows;
             
             let now = Utc::now().to_rfc3339();
-            let show_count = initial_shows.len();
+            let show_count = show_seeds.len();
             
-            for show_name in initial_shows {
+            // First, get all profiles by name for lookup
+            let all_profiles = Self::get_all_topaz_profiles_static(conn)?;
+            let profile_map: std::collections::HashMap<String, i64> = all_profiles
+                .iter()
+                .filter_map(|p| p.id.map(|id| (p.name.clone(), id)))
+                .collect();
+            
+            // Create shows and associations
+            for show_seed in show_seeds {
+                let (show_name, profile_names) = match show_seed {
+                    crate::config::ShowSeed::Simple(name) => (name, vec![]),
+                    crate::config::ShowSeed::WithProfiles { name, topaz_profiles } => (name, topaz_profiles),
+                };
+                
+                // Insert the show
                 conn.execute(
                     "INSERT INTO shows (name, created_at) VALUES (?1, ?2)",
                     params![show_name, now],
                 )?;
+                
+                let show_id = conn.last_insert_rowid();
+                
+                // Associate profiles if specified
+                for profile_name in profile_names {
+                    if let Some(&profile_id) = profile_map.get(&profile_name) {
+                        match conn.execute(
+                            "INSERT OR IGNORE INTO show_topaz_profiles (show_id, topaz_profile_id) VALUES (?1, ?2)",
+                            params![show_id, profile_id],
+                        ) {
+                            Ok(_) => {
+                                info!("Associated Topaz profile '{}' with show '{}'", profile_name, show_name);
+                            }
+                            Err(e) => {
+                                warn!("Failed to associate profile '{}' with show '{}': {}", profile_name, show_name, e);
+                            }
+                        }
+                    } else {
+                        warn!("Topaz profile '{}' not found when seeding show '{}' - make sure profiles are defined before shows", profile_name, show_name);
+                    }
+                }
             }
             
             info!("Seeded {} initial shows from config.yaml", show_count);
         }
         
         Ok(())
+    }
+
+    /// Static version of get_topaz_profiles for use in seeding
+    fn get_all_topaz_profiles_static(conn: &Connection) -> Result<Vec<TopazProfile>> {
+        // Check if command column exists
+        let has_command = conn.prepare("PRAGMA table_info(topaz_profiles)")?
+            .query_map([], |row| Ok(row.get::<_, String>(1)?))?
+            .collect::<Result<Vec<_>, _>>()?
+            .contains(&"command".to_string());
+        
+        let sql = if has_command {
+            "SELECT id, name, command, created_at, updated_at FROM topaz_profiles ORDER BY name ASC"
+        } else {
+            "SELECT id, name, COALESCE(description, ''), created_at, updated_at FROM topaz_profiles ORDER BY name ASC"
+        };
+        
+        let mut stmt = conn.prepare(sql)?;
+        
+        let profiles = stmt.query_map([], |row| {
+            Ok(TopazProfile {
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                command: row.get(2)?,
+                created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .unwrap()
+                    .with_timezone(&Utc),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(profiles)
     }
 
     /// Seed initial Topaz profiles if the table is empty

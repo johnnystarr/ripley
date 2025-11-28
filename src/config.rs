@@ -71,11 +71,25 @@ pub struct TopazProfileSeed {
     pub command: String,
 }
 
+/// Show seed entry with optional Topaz profile associations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ShowSeed {
+    /// Simple string format (backward compatible)
+    Simple(String),
+    /// Object format with profile associations
+    WithProfiles {
+        name: String,
+        #[serde(default)]
+        topaz_profiles: Vec<String>, // Profile names to associate
+    },
+}
+
 /// Seed configuration for initial database setup
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeedConfig {
     #[serde(default)]
-    pub shows: Vec<String>,
+    pub shows: Vec<ShowSeed>,
     #[serde(default)]
     pub topaz_profiles: Vec<TopazProfileSeed>,
 }
@@ -83,18 +97,8 @@ pub struct SeedConfig {
 impl Default for SeedConfig {
     fn default() -> Self {
         SeedConfig {
-            shows: vec![
-                "Foster's Home For Imaginary Friends".to_string(),
-                "Power Puff Girls".to_string(),
-                "Johnny Bravo".to_string(),
-                "Pinky And The Brain".to_string(),
-                "Batman Begins".to_string(),
-                "Batman The Animated Series".to_string(),
-                "King Of The Hill".to_string(),
-                "Animaniacs".to_string(),
-                "Rocko's Modern Life".to_string(),
-            ],
-            topaz_profiles: vec![], // Empty by default - users should configure their own
+            shows: vec![], // All seed data should come from config.yaml
+            topaz_profiles: vec![], // All seed data should come from config.yaml
         }
     }
 }
@@ -103,71 +107,36 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             openai_api_key: None,
-            tmdb_api_key: Some("fef1285fb85a74350b3292b5fac37fce".to_string()),
+            tmdb_api_key: None, // All values should come from config.yaml
             notifications: NotificationConfig {
-                enabled: true,
-                topic: "staryavsky_alerts".to_string(),
+                enabled: false,
+                topic: String::new(), // All values should come from config.yaml
             },
             rsync: RsyncConfig {
-                enabled: true,
-                destination: "/Volumes/video/RawRips".to_string(),
+                enabled: false,
+                destination: String::new(), // All values should come from config.yaml
             },
             speech_match: SpeechMatchConfig {
-                enabled: true,
-                audio_duration: 180,  // 3 minutes for better accuracy
-                whisper_model: "base".to_string(),
-                use_openai_api: true,
+                enabled: false,
+                audio_duration: 0,
+                whisper_model: String::new(),
+                use_openai_api: false,
             },
             filebot: FilebotConfig {
-                skip_by_default: false,
-                database: "TheTVDB".to_string(),
-                order: "Airdate".to_string(),
-                use_for_music: true,  // Enable Filebot for music standardization by default
+                skip_by_default: true,
+                database: String::new(),
+                order: String::new(),
+                use_for_music: false,
             },
             retry: RetryConfig {
-                enabled: true,
-                max_attempts: 3,
-                initial_delay_seconds: 1,
-                max_delay_seconds: 60,
-                backoff_multiplier: 2.0,
+                enabled: false,
+                max_attempts: 0,
+                initial_delay_seconds: 0,
+                max_delay_seconds: 0,
+                backoff_multiplier: 0.0,
             },
-            rip_profiles: vec![
-                RipProfile {
-                    name: "High Quality".to_string(),
-                    description: Some("Best quality, larger file sizes".to_string()),
-                    audio_quality: Some(8),
-                    makemkv_profile: Some("default".to_string()),
-                    is_default: false,
-                },
-                RipProfile {
-                    name: "Standard".to_string(),
-                    description: Some("Balanced quality and file size".to_string()),
-                    audio_quality: Some(5),
-                    makemkv_profile: Some("default".to_string()),
-                    is_default: true,
-                },
-                RipProfile {
-                    name: "Fast".to_string(),
-                    description: Some("Faster ripping, smaller files".to_string()),
-                    audio_quality: Some(3),
-                    makemkv_profile: Some("default".to_string()),
-                    is_default: false,
-                },
-            ],
-            seed: SeedConfig {
-                shows: vec![
-                    "Foster's Home For Imaginary Friends".to_string(),
-                    "Power Puff Girls".to_string(),
-                    "Johnny Bravo".to_string(),
-                    "Pinky And The Brain".to_string(),
-                    "Batman Begins".to_string(),
-                    "Batman The Animated Series".to_string(),
-                    "King Of The Hill".to_string(),
-                    "Animaniacs".to_string(),
-                    "Rocko's Modern Life".to_string(),
-                ],
-                topaz_profiles: vec![], // Empty by default
-            },
+            rip_profiles: vec![], // All values should come from config.yaml
+            seed: SeedConfig::default(),
         }
     }
 }
