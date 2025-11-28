@@ -2712,7 +2712,10 @@ impl Database {
             for show_seed in show_seeds {
                 let (show_name, profile_names) = match show_seed {
                     crate::config::ShowSeed::Simple(name) => (name, vec![]),
-                    crate::config::ShowSeed::WithProfiles { name, topaz_profiles } => (name, topaz_profiles),
+                    crate::config::ShowSeed::WithProfiles { name, topaz_profiles } => {
+                        info!("Show '{}' has {} profiles to associate: {:?}", name, topaz_profiles.len(), topaz_profiles);
+                        (name, topaz_profiles)
+                    },
                 };
                 
                 // Insert the show
@@ -2722,23 +2725,35 @@ impl Database {
                 )?;
                 
                 let show_id = conn.last_insert_rowid();
+                info!("Created show '{}' with id {}", show_name, show_id);
                 
                 // Associate profiles if specified
+                if !profile_names.is_empty() {
+                    info!("Attempting to associate {} profiles with show '{}' (id: {})", profile_names.len(), show_name, show_id);
+                    info!("Available profiles in map: {:?}", profile_map.keys().collect::<Vec<_>>());
+                }
+                
                 for profile_name in profile_names {
                     if let Some(&profile_id) = profile_map.get(&profile_name) {
+                        info!("Found profile '{}' with id {}, associating with show '{}' (id: {})", profile_name, profile_id, show_name, show_id);
                         match conn.execute(
                             "INSERT OR IGNORE INTO show_topaz_profiles (show_id, topaz_profile_id) VALUES (?1, ?2)",
                             params![show_id, profile_id],
                         ) {
-                            Ok(_) => {
-                                info!("Associated Topaz profile '{}' with show '{}'", profile_name, show_name);
+                            Ok(rows_affected) => {
+                                if rows_affected > 0 {
+                                    info!("✅ Successfully associated Topaz profile '{}' (id: {}) with show '{}' (id: {})", profile_name, profile_id, show_name, show_id);
+                                } else {
+                                    info!("Profile '{}' already associated with show '{}' (INSERT OR IGNORE)", profile_name, show_name);
+                                }
                             }
                             Err(e) => {
-                                warn!("Failed to associate profile '{}' with show '{}': {}", profile_name, show_name, e);
+                                warn!("❌ Failed to associate profile '{}' with show '{}': {}", profile_name, show_name, e);
                             }
                         }
                     } else {
-                        warn!("Topaz profile '{}' not found when seeding show '{}' - make sure profiles are defined before shows", profile_name, show_name);
+                        warn!("❌ Topaz profile '{}' not found in profile map when seeding show '{}'. Available profiles: {:?}", 
+                            profile_name, show_name, profile_map.keys().collect::<Vec<_>>());
                     }
                 }
             }
