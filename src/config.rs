@@ -13,6 +13,8 @@ pub struct Config {
     pub filebot: FilebotConfig,
     pub retry: RetryConfig,
     pub rip_profiles: Vec<RipProfile>,
+    #[serde(default)]
+    pub seed: SeedConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +62,31 @@ pub struct RipProfile {
     pub audio_quality: Option<u8>, // 0-9 for FLAC quality (audio CDs)
     pub makemkv_profile: Option<String>, // MakeMKV profile name (DVDs/Blu-rays)
     pub is_default: bool,
+}
+
+/// Seed configuration for initial database setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeedConfig {
+    #[serde(default)]
+    pub shows: Vec<String>,
+}
+
+impl Default for SeedConfig {
+    fn default() -> Self {
+        SeedConfig {
+            shows: vec![
+                "Foster's Home For Imaginary Friends".to_string(),
+                "Power Puff Girls".to_string(),
+                "Johnny Bravo".to_string(),
+                "Pinky And The Brain".to_string(),
+                "Batman Begins".to_string(),
+                "Batman The Animated Series".to_string(),
+                "King Of The Hill".to_string(),
+                "Animaniacs".to_string(),
+                "Rocko's Modern Life".to_string(),
+            ],
+        }
+    }
 }
 
 impl Default for Config {
@@ -117,6 +144,19 @@ impl Default for Config {
                     is_default: false,
                 },
             ],
+            seed: SeedConfig {
+                shows: vec![
+                    "Foster's Home For Imaginary Friends".to_string(),
+                    "Power Puff Girls".to_string(),
+                    "Johnny Bravo".to_string(),
+                    "Pinky And The Brain".to_string(),
+                    "Batman Begins".to_string(),
+                    "Batman The Animated Series".to_string(),
+                    "King Of The Hill".to_string(),
+                    "Animaniacs".to_string(),
+                    "Rocko's Modern Life".to_string(),
+                ],
+            },
         }
     }
 }

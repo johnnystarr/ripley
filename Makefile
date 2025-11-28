@@ -5,6 +5,8 @@
 
 # Build the project in release mode (includes web UI)
 build:
+	@echo "🔨 Cleaning Web UI build artifacts..."
+	@rm -rf web-ui/dist
 	@echo "🔨 Building Web UI..."
 	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (release mode)..."
@@ -13,6 +15,8 @@ build:
 
 # Build debug version (includes web UI)
 debug:
+	@echo "🔨 Cleaning Web UI build artifacts..."
+	@rm -rf web-ui/dist
 	@echo "🔨 Building Web UI..."
 	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (debug mode)..."
@@ -48,6 +52,7 @@ clean:
 	@echo "🧹 Cleaning build artifacts..."
 	@cargo clean
 	@rm -rf target/
+	@rm -rf web-ui/dist
 	@echo "✅ Clean complete"
 
 # Install the binary to ~/.cargo/bin

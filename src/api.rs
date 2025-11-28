@@ -2352,7 +2352,10 @@ async fn get_agent_instructions(
             // Also get recent completed instructions for this agent (last 5) to show output
             let completed = match state.db.get_recent_completed_instructions(&agent_id, 5) {
                 Ok(insts) => insts,
-                Err(_) => vec![], // If query fails, just return pending instructions
+                Err(e) => {
+                    tracing::warn!("Failed to get recent completed instructions for agent {}: {}", agent_id, e);
+                    vec![] // If query fails, just return pending instructions
+                }
             };
             
             // Combine pending and recent completed

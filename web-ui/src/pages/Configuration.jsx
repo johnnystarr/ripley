@@ -66,6 +66,7 @@ export default function Configuration() {
   const [resettingDatabase, setResettingDatabase] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showResetFinal, setShowResetFinal] = useState(false);
+  const [resetDefaultsConfirm, setResetDefaultsConfirm] = useState(false);
 
   useEffect(() => {
     fetchConfig();
@@ -157,6 +158,10 @@ export default function Configuration() {
       }
     };
     reader.readAsText(file);
+  };
+
+  const handleResetToDefaults = () => {
+    setResetDefaultsConfirm(true);
   };
 
   const confirmResetDefaults = () => {

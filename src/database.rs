@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Log entry stored in database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -370,6 +370,12 @@ impl Database {
 
         db.initialize_schema()?;
         db.run_migrations()?;
+        
+        // Seed initial data if tables are empty
+        let conn = db.conn.lock().unwrap();
+        Self::seed_initial_shows(&conn)?;
+        drop(conn);
+        
         Ok(db)
     }
 
@@ -1208,6 +1214,24 @@ impl Database {
     pub fn get_episode_match_statistics(&self) -> Result<serde_json::Value> {
         let conn = self.conn.lock().unwrap();
         
+        // Check if episode_match_results table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='episode_match_results'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(serde_json::json!({
+                "total_matches": 0,
+                "average_confidence": None::<f64>,
+                "by_method": {},
+                "confidence_distribution": {},
+                "over_time": [],
+                "top_shows": [],
+            }));
+        }
+        
         // Total matches
         let total_matches: i64 = conn.query_row(
             "SELECT COUNT(*) FROM episode_match_results",
@@ -1457,6 +1481,18 @@ impl Database {
     /// Get all agents
     pub fn get_agents(&self) -> Result<Vec<AgentInfo>> {
         let conn = self.conn.lock().unwrap();
+        
+        // Check if agents table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agents'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(vec![]); // Table doesn't exist yet, return empty list
+        }
+        
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at, os_version, os_arch
              FROM agents
@@ -1547,18 +1583,52 @@ impl Database {
     /// Get recent completed instructions for an agent
     pub fn get_recent_completed_instructions(&self, agent_id: &str, limit: i64) -> Result<Vec<serde_json::Value>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        
+        // Check if agent_instructions table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_instructions'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(vec![]); // Table doesn't exist yet, return empty list
+        }
+        
+        // Check if output column exists (migration 12)
+        let output_column_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('agent_instructions') WHERE name='output'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        let query = if output_column_exists {
             "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at, started_at, completed_at, error_message, output
              FROM agent_instructions
              WHERE assigned_to_agent_id = ?1 AND (status = 'completed' OR status = 'failed')
-             ORDER BY completed_at DESC
+             ORDER BY COALESCE(completed_at, created_at) DESC
              LIMIT ?2"
-        )?;
+        } else {
+            "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at, started_at, completed_at, error_message, NULL as output
+             FROM agent_instructions
+             WHERE assigned_to_agent_id = ?1 AND (status = 'completed' OR status = 'failed')
+             ORDER BY COALESCE(completed_at, created_at) DESC
+             LIMIT ?2"
+        };
+        
+        let mut stmt = conn.prepare(query)?;
         
         let instructions = stmt.query_map(params![agent_id, limit], |row| {
             let payload_str: String = row.get(2)?;
             let payload: serde_json::Value = serde_json::from_str(&payload_str)
                 .unwrap_or_else(|_| serde_json::json!({}));
+            
+            // Handle output column - may not exist in older databases
+            let output: Option<String> = if output_column_exists {
+                row.get(9).ok()
+            } else {
+                None
+            };
             
             Ok(serde_json::json!({
                 "id": row.get::<_, i64>(0)?,
@@ -1570,7 +1640,7 @@ impl Database {
                 "started_at": row.get::<_, Option<String>>(6)?,
                 "completed_at": row.get::<_, Option<String>>(7)?,
                 "error_message": row.get::<_, Option<String>>(8)?,
-                "output": row.get::<_, Option<String>>(9)?,
+                "output": output,
             }))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1582,16 +1652,36 @@ impl Database {
     pub fn get_instruction(&self, instruction_id: i64) -> Result<Option<serde_json::Value>> {
         let conn = self.conn.lock().unwrap();
         
-        let mut stmt = conn.prepare(
+        // Check if output column exists (migration 12)
+        let output_column_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('agent_instructions') WHERE name='output'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        let query = if output_column_exists {
             "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at, started_at, completed_at, error_message, output
              FROM agent_instructions
              WHERE id = ?1"
-        )?;
+        } else {
+            "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at, started_at, completed_at, error_message, NULL as output
+             FROM agent_instructions
+             WHERE id = ?1"
+        };
+        
+        let mut stmt = conn.prepare(query)?;
         
         let instruction = match stmt.query_row(params![instruction_id], |row| {
             let payload_str: String = row.get(2)?;
             let payload: serde_json::Value = serde_json::from_str(&payload_str)
                 .unwrap_or_else(|_| serde_json::json!({}));
+            
+            // Handle output column - may not exist in older databases
+            let output: Option<String> = if output_column_exists {
+                row.get(9).ok()
+            } else {
+                None
+            };
             
             Ok(serde_json::json!({
                 "id": row.get::<_, i64>(0)?,
@@ -1603,7 +1693,7 @@ impl Database {
                 "started_at": row.get::<_, Option<String>>(6)?,
                 "completed_at": row.get::<_, Option<String>>(7)?,
                 "error_message": row.get::<_, Option<String>>(8)?,
-                "output": row.get::<_, Option<String>>(9)?,
+                "output": output,
             }))
         }) {
             Ok(inst) => Some(inst),
@@ -1617,6 +1707,17 @@ impl Database {
     /// Get pending instructions for an agent (or any available agent)
     pub fn get_pending_instructions(&self, agent_id: Option<&str>) -> Result<Vec<serde_json::Value>> {
         let conn = self.conn.lock().unwrap();
+        
+        // Check if agent_instructions table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_instructions'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(vec![]); // Table doesn't exist yet, return empty list
+        }
         
         // Get pending instructions that are either:
         // 1. Not assigned to any agent, OR
@@ -1698,6 +1799,18 @@ impl Database {
     /// Assign an instruction to an agent
     pub fn assign_instruction_to_agent(&self, instruction_id: i64, agent_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        
+        // Check if agent_instructions table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_instructions'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Err(anyhow::anyhow!("agent_instructions table does not exist"));
+        }
+        
         let now = chrono::Utc::now().to_rfc3339();
         
         conn.execute(
@@ -1758,6 +1871,18 @@ impl Database {
     /// Mark agents as offline if they haven't sent heartbeat in X minutes
     pub fn cleanup_stale_agents(&self, minutes_threshold: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
+        
+        // Check if agents table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agents'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(0); // Table doesn't exist yet, nothing to clean up
+        }
+        
         let threshold = chrono::Utc::now() - chrono::Duration::minutes(minutes_threshold);
         
         // More aggressive cleanup: mark as offline if no heartbeat in threshold
@@ -2522,6 +2647,7 @@ impl Database {
     }
 
     /// Seed initial shows if the table is empty
+    /// Reads seed data from config.yaml
     fn seed_initial_shows(conn: &Connection) -> Result<()> {
         // Check if shows table exists and is empty
         let count: i64 = conn.query_row(
@@ -2531,17 +2657,29 @@ impl Database {
         ).unwrap_or(0);
         
         if count == 0 {
-            let initial_shows = vec![
-                "Foster's Home For Imaginary Friends",
-                "Power Puff Girls",
-                "Johnny Bravo",
-                "Pinky And The Brain",
-                "Batman Begins",
-                "Batman The Animated Series",
-                "King Of The Hill",
-                "Animaniacs",
-                "Rocko's Modern Life"
-            ];
+            // Load config to get seed shows
+            let config = crate::config::Config::load()
+                .unwrap_or_else(|e| {
+                    warn!("Failed to load config for seeding: {}, using defaults", e);
+                    crate::config::Config::default()
+                });
+            
+            let initial_shows = if config.seed.shows.is_empty() {
+                // Fallback to default shows if config doesn't have any
+                vec![
+                    "Foster's Home For Imaginary Friends",
+                    "Power Puff Girls",
+                    "Johnny Bravo",
+                    "Pinky And The Brain",
+                    "Batman Begins",
+                    "Batman The Animated Series",
+                    "King Of The Hill",
+                    "Animaniacs",
+                    "Rocko's Modern Life"
+                ]
+            } else {
+                config.seed.shows.iter().map(|s| s.as_str()).collect()
+            };
             
             let now = Utc::now().to_rfc3339();
             let show_count = initial_shows.len();
@@ -2553,7 +2691,7 @@ impl Database {
                 )?;
             }
             
-            info!("Seeded {} initial shows", show_count);
+            info!("Seeded {} initial shows from config.yaml", show_count);
         }
         
         Ok(())
@@ -3093,6 +3231,23 @@ impl Database {
     pub fn get_statistics(&self) -> Result<serde_json::Value> {
         let conn = self.conn.lock().unwrap();
         
+        // Check if rip_history table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rip_history'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(serde_json::json!({
+                "total_rips": 0,
+                "successful_rips": 0,
+                "failed_rips": 0,
+                "success_rate": 0.0,
+                "total_storage_bytes": 0,
+            }));
+        }
+        
         // Total rips
         let total_rips: i64 = conn.query_row(
             "SELECT COUNT(*) FROM rip_history",
@@ -3140,6 +3295,18 @@ impl Database {
     /// Get drive statistics
     pub fn get_drive_statistics(&self) -> Result<Vec<DriveStats>> {
         let conn = self.conn.lock().unwrap();
+        
+        // Check if rip_history table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='rip_history'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(vec![]); // Table doesn't exist yet, return empty list
+        }
+        
         let mut stmt = conn.prepare(
             "SELECT 
                 drive,
@@ -3171,6 +3338,18 @@ impl Database {
     /// Get error frequency statistics by issue type
     pub fn get_error_frequency(&self) -> Result<serde_json::Value> {
         let conn = self.conn.lock().unwrap();
+        
+        // Check if issues table exists
+        let table_exists: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='issues'",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+        
+        if !table_exists {
+            return Ok(serde_json::json!([])); // Table doesn't exist yet, return empty array
+        }
+        
         let mut stmt = conn.prepare(
             "SELECT 
                 issue_type,
