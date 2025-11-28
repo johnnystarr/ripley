@@ -19,12 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: [stable, 1.70, 1.75]
-        exclude:
-          - os: macos-latest
-            rust: 1.70
-          - os: macos-latest
-            rust: 1.75
+        rust: [stable, 1.83]
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ matrix.rust }}
@@ -94,6 +89,7 @@ jobs:
             udisks2 \
             eject \
             libudev-dev \
+            libasound2-dev \
             pkg-config \
             podman
       
