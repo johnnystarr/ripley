@@ -4,7 +4,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use crate::audio;
 use crate::cli::RipArgs;
 use crate::drive::{self, DriveInfo};
 use crate::metadata;
@@ -19,9 +18,6 @@ pub async fn run(args: RipArgs) -> Result<()> {
     if !output_folder.exists() {
         tokio::fs::create_dir_all(&output_folder).await?;
     }
-
-    // Initialize sounds directory
-    audio::initialize_sounds_dir().await?;
 
     // Create TUI
     let mut tui = Tui::new()?;
@@ -158,7 +154,6 @@ async fn rip_disc(
             if args.skip_metadata {
                 "unknown".to_string()
             } else {
-                audio::play_notification("error").await?;
                 return Err(e);
             }
         }
@@ -177,7 +172,6 @@ async fn rip_disc(
             Err(e) => {
                 add_log(&tui_state, device, format!("⚠️  Metadata lookup failed: {}", e)).await;
                 add_log(&tui_state, device, "Using generic track names. You can rename files after ripping.".to_string()).await;
-                audio::play_notification("error").await?;
                 
                 // Use dummy metadata - abcde will still rip the tracks
                 create_dummy_metadata()
@@ -266,7 +260,6 @@ async fn rip_disc(
                 }
             }
             
-            audio::play_notification("complete").await?;
             
             // Send notification
             let disc_info = crate::notifications::DiscInfo {
@@ -285,7 +278,6 @@ async fn rip_disc(
         }
         Err(e) => {
             add_log(&tui_state, device, format!("❌ Failed: {} - {}", album_info, e)).await;
-            audio::play_notification("error").await?;
             
             // Send failure notification
             let disc_info = crate::notifications::DiscInfo {
@@ -491,7 +483,6 @@ async fn rip_dvd_disc(
     match result {
         Ok(_) => {
             add_log(&tui_state, device, format!("✅ {} rip complete", media_name)).await;
-            audio::play_notification("complete").await?;
             
             // Run OCR + Filebot by default (unless --skip-filebot) if we have metadata
             if !args.skip_filebot && dvd_metadata.is_some() {
@@ -625,7 +616,6 @@ async fn rip_dvd_disc(
         }
         Err(e) => {
             add_log(&tui_state, device, format!("❌ {} rip failed: {}", media_name, e)).await;
-            audio::play_notification("error").await?;
             
             // Send failure notification
             let disc_type = match media_type {

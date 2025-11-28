@@ -32,8 +32,6 @@ serde_yaml = "0.9"
 rusqlite = { version = "0.32", features = ["bundled"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# Audio playback (optional - can be disabled for CI)
-rodio = { version = "0.19", optional = true }
 
 # Error handling
 anyhow = "1.0"
@@ -59,9 +57,6 @@ regex = "1.10"
 urlencoding = "2.1"
 walkdir = "2.5"
 
-[features]
-default = ["audio"]
-audio = ["rodio"]
 
 [dev-dependencies]
 tempfile = "3.10"

@@ -8,7 +8,6 @@ mod dvd_metadata;
 mod dvd_ripper;
 mod metadata;
 mod ripper;
-mod audio;
 mod tui;
 mod app;
 mod notifications;
