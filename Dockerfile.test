@@ -1,9 +1,9 @@
 # Dockerfile for Linux testing environment
-FROM rust:1.75-slim
+FROM rust:latest
 
 # Install dependencies for testing
 RUN apt-get update && apt-get install -y \
-    lsblk \
+    util-linux \
     udisks2 \
     eject \
     curl \
@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     pkg-config \
     libssl-dev \
+    libasound2-dev \
     nodejs \
     npm \
     sqlite3 \
@@ -27,9 +28,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY tests ./tests
 
-# Build dependencies first for better caching
-RUN cargo fetch
+# Copy web-ui for build (if needed)
+COPY web-ui ./web-ui
 
-# Default command runs tests
-CMD ["cargo", "test", "--target", "x86_64-unknown-linux-gnu", "--", "--nocapture"]
+# Default command runs tests in release mode to reduce memory usage
+CMD ["cargo", "test", "--release", "--", "--nocapture"]
 

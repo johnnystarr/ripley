@@ -13,6 +13,6 @@ podman run --rm \
     -v "$(pwd):/app:Z" \
     -w /app \
     ripley-test:linux \
-    cargo test --target x86_64-unknown-linux-gnu -- --nocapture
+    cargo test --release -j 1 -- --nocapture
 
 echo "✅ Linux tests complete!"

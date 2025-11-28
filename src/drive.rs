@@ -114,7 +114,7 @@ async fn detect_drives_linux() -> Result<Vec<DriveInfo>> {
                 
                 // Try to get a friendly name from udev or use device name
                 let name = get_drive_name_linux(&device_path).await
-                    .unwrap_or_else(|| format!("Drive {}", device_name));
+                    .unwrap_or_else(|_| format!("Drive {}", device_name));
                 
                 drives.push(DriveInfo {
                     device: device_path.clone(),
