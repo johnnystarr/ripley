@@ -75,7 +75,7 @@ jobs:
           tar -czf dist/ripley-macos.tar.gz -C dist ripley
       
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ripley-macos
           path: dist/ripley-macos.tar.gz
@@ -138,7 +138,7 @@ jobs:
           tar -czf dist/ripley-linux.tar.gz -C dist ripley
       
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ripley-linux
           path: dist/ripley-linux.tar.gz
@@ -184,7 +184,7 @@ jobs:
           powershell Compress-Archive -Path dist\ripley-agent.exe -DestinationPath dist\ripley-agent-windows.zip
       
       - name: Upload Windows agent artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ripley-agent-windows
           path: dist/ripley-agent-windows.zip
