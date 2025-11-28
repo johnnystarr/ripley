@@ -1694,7 +1694,15 @@ async fn rip_dvd_disc_web_ui(
         };
         format!("{}_{}", prefix, timestamp)
     };
-    let dvd_dir = media_output.join(folder_name);
+    let dvd_dir = media_output.join(folder_name.clone());
+    
+    // Create completed subfolder
+    let completed_dir = dvd_dir.join("completed");
+    if let Err(e) = tokio::fs::create_dir_all(&completed_dir).await {
+        send_log_to_web_ui(state, device, "warning", format!("⚠️  Failed to create completed folder: {}", e), Some(operation_id)).await;
+    } else {
+        send_log_to_web_ui(state, device, "info", format!("📁 Created completed subfolder: {}", completed_dir.display()), Some(operation_id)).await;
+    }
     
     send_log_to_web_ui(state, device, "info", format!("Output: {}", dvd_dir.display()), Some(operation_id)).await;
     update_operation_progress(state, operation_id, 5.0, format!("Starting rip to: {}", dvd_dir.display())).await;
@@ -1737,187 +1745,379 @@ async fn rip_dvd_disc_web_ui(
     match result {
         Ok(_) => {
             send_log_to_web_ui(state, device, "success", format!("✅ {} rip complete", media_name), Some(operation_id)).await;
-            update_operation_progress(state, operation_id, 90.0, format!("{} rip complete, processing files...", media_name)).await;
+            update_operation_progress(state, operation_id, 100.0, format!("{} rip complete", media_name)).await;
             
-            // Run OCR + Filebot by default (unless --skip-filebot) if we have metadata
+            // Spawn background post-processing task (rename, filebot, move to completed)
+            // This runs in parallel and doesn't block the next rip
             if !request.skip_filebot {
                 if let Some(metadata) = dvd_metadata.as_ref() {
                     if metadata.media_type == crate::dvd_metadata::MediaType::TVShow {
-                        // Step 1: Use speech-to-text to identify episodes by dialogue
-                        send_log_to_web_ui(state, device, "info", "🎤 Analyzing dialogue to identify episodes...".to_string(), Some(operation_id)).await;
+                        let dvd_dir_for_post = dvd_dir.clone();
+                        let completed_dir_for_post = completed_dir.clone();
+                        let metadata_for_post = metadata.clone();
+                        let state_for_post = state.clone();
+                        let device_for_post = device.to_string();
+                        let folder_name_for_post = folder_name.clone();
                         
-                        let mut matched_count = 0;
-                        let mut read_dir = tokio::fs::read_dir(&dvd_dir).await?;
-                        let mut files = Vec::new();
-                        
-                        while let Some(entry) = read_dir.next_entry().await? {
-                            let path = entry.path();
-                            if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
-                                files.push(path);
-                            }
-                        }
-                        
-                        for (idx, path) in files.iter().enumerate() {
-                            send_log_to_web_ui(state, device, "info", format!("[{}/{}] Processing {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy()), Some(operation_id)).await;
+                        tokio::spawn(async move {
+                            // Create a new operation for post-processing
+                            let post_op_id = create_operation(
+                                &state_for_post,
+                                OperationType::Rename,
+                                Some(device_for_post.clone()),
+                                Some(format!("Post-process: {}", metadata_for_post.title)),
+                                format!("Post-processing {} files", folder_name_for_post),
+                            ).await;
                             
-                            // Extract and transcribe audio
-                            let mut transcript = match crate::speech_match::extract_and_transcribe_audio(path).await {
-                                Ok(t) => {
-                                    send_log_to_web_ui(state, device, "info", format!("  Transcribed {} characters", t.len()), Some(operation_id)).await;
-                                    t
-                                }
+                            send_log_to_web_ui(&state_for_post, &device_for_post, "info", format!("🔄 Starting post-processing for {}", folder_name_for_post), Some(&post_op_id)).await;
+                            update_operation_progress(&state_for_post, &post_op_id, 5.0, "Starting post-processing...".to_string()).await;
+                            
+                            // Step 1: Use speech-to-text to identify episodes by dialogue
+                            send_log_to_web_ui(&state_for_post, &device_for_post, "info", "🎤 Analyzing dialogue to identify episodes...".to_string(), Some(&post_op_id)).await;
+                            update_operation_progress(&state_for_post, &post_op_id, 10.0, "Analyzing dialogue...".to_string()).await;
+                            
+                            let mut matched_count = 0;
+                            let mut read_dir = match tokio::fs::read_dir(&dvd_dir_for_post).await {
+                                Ok(dir) => dir,
                                 Err(e) => {
-                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Transcription failed: {}", e), Some(operation_id)).await;
-                                    continue;
+                                    send_log_to_web_ui(&state_for_post, &device_for_post, "error", format!("❌ Failed to read directory: {}", e), Some(&post_op_id)).await;
+                                    fail_operation(&state_for_post, &post_op_id, format!("Failed to read directory: {}", e)).await;
+                                    return;
                                 }
                             };
+                            let mut files = Vec::new();
                             
-                            // Try matching with retry logic if file already exists
-                            let mut exclude_episode: Option<(u32, u32)> = None;
-                            let mut retry_count = 0u32;
-                            const MAX_RETRIES: u32 = 2;
+                            while let Ok(Some(entry)) = read_dir.next_entry().await {
+                                let path = entry.path();
+                                if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                                    files.push(path);
+                                }
+                            }
                             
-                            loop {
-                                // Match against TMDB episodes
-                                match crate::speech_match::match_episode_by_transcript_with_exclusion(
-                                    &metadata.title,
-                                    &transcript,
-                                    &metadata.episodes,
-                                    exclude_episode,
-                                ).await {
-                                    Ok(matched) => {
-                                        // Only rename if confidence is high enough
-                                        if matched.confidence >= 85.0 {
-                                            let show_name = metadata.title.replace(' ', ".");
-                                            let episode_title = matched.title.replace(' ', ".");
-                                            let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
-                                                show_name, matched.season, matched.episode, 
-                                                episode_title);
-                                            let new_path = dvd_dir.join(&new_name);
-                                            
-                                            // Check if file already exists
-                                            if new_path.exists() {
-                                                if retry_count < MAX_RETRIES {
-                                                    // File exists - try again with different segment
-                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  File {} already exists, trying different segment...", new_name), Some(operation_id)).await;
-                                                    
-                                                    // Get video duration for alternative segment
-                                                    let duration_output = tokio::process::Command::new("ffprobe")
-                                                        .args([
-                                                            "-v", "error",
-                                                            "-show_entries", "format=duration",
-                                                            "-of", "default=noprint_wrappers=1:nokey=1",
-                                                            path.to_str().unwrap()
-                                                        ])
-                                                        .output()
-                                                        .await;
-                                                    
-                                                    if let Ok(output) = duration_output {
-                                                        if let Ok(duration_str) = String::from_utf8(output.stdout) {
-                                                            if let Ok(duration) = duration_str.trim().parse::<f64>() {
-                                                                // Try a different segment (later in the video)
-                                                                let alt_start = duration * (0.25 + retry_count as f64 * 0.15);
-                                                                match crate::speech_match::extract_and_transcribe_audio_segment(
-                                                                    path,
-                                                                    alt_start,
-                                                                    90.0,
-                                                                ).await {
-                                                                    Ok(alt_transcript) => {
-                                                                        transcript = alt_transcript;
-                                                                        exclude_episode = Some((matched.season, matched.episode));
-                                                                        retry_count += 1;
-                                                                        continue;
-                                                                    }
-                                                                    Err(e) => {
-                                                                        send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to extract alternative segment: {}", e), Some(operation_id)).await;
+                            for (idx, path) in files.iter().enumerate() {
+                                send_log_to_web_ui(&state_for_post, &device_for_post, "info", format!("[{}/{}] Processing {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy()), Some(&post_op_id)).await;
+                                update_operation_progress(&state_for_post, &post_op_id, 10.0 + (idx as f32 / files.len() as f32) * 30.0, format!("Processing file {}/{}", idx + 1, files.len())).await;
+                                
+                                // Extract and transcribe audio
+                                let mut transcript = match crate::speech_match::extract_and_transcribe_audio(path).await {
+                                    Ok(t) => {
+                                        send_log_to_web_ui(&state_for_post, &device_for_post, "info", format!("  Transcribed {} characters", t.len()), Some(&post_op_id)).await;
+                                        t
+                                    }
+                                    Err(e) => {
+                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Transcription failed: {}", e), Some(&post_op_id)).await;
+                                        continue;
+                                    }
+                                };
+                                
+                                // Try matching with retry logic if file already exists
+                                let mut exclude_episode: Option<(u32, u32)> = None;
+                                let mut retry_count = 0u32;
+                                const MAX_RETRIES: u32 = 2;
+                                
+                                loop {
+                                    // Match against TMDB episodes
+                                    match crate::speech_match::match_episode_by_transcript_with_exclusion(
+                                        &metadata_for_post.title,
+                                        &transcript,
+                                        &metadata_for_post.episodes,
+                                        exclude_episode,
+                                    ).await {
+                                        Ok(matched) => {
+                                            // Only rename if confidence is high enough
+                                            if matched.confidence >= 85.0 {
+                                                let show_name = metadata_for_post.title.replace(' ', ".");
+                                                let episode_title = matched.title.replace(' ', ".");
+                                                let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
+                                                    show_name, matched.season, matched.episode, 
+                                                    episode_title);
+                                                let new_path = dvd_dir_for_post.join(&new_name);
+                                                
+                                                // Check if file already exists
+                                                if new_path.exists() {
+                                                    if retry_count < MAX_RETRIES {
+                                                        // File exists - try again with different segment
+                                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  File {} already exists, trying different segment...", new_name), Some(&post_op_id)).await;
+                                                        
+                                                        // Get video duration for alternative segment
+                                                        let duration_output = tokio::process::Command::new("ffprobe")
+                                                            .args([
+                                                                "-v", "error",
+                                                                "-show_entries", "format=duration",
+                                                                "-of", "default=noprint_wrappers=1:nokey=1",
+                                                                path.to_str().unwrap()
+                                                            ])
+                                                            .output()
+                                                            .await;
+                                                        
+                                                        if let Ok(output) = duration_output {
+                                                            if let Ok(duration_str) = String::from_utf8(output.stdout) {
+                                                                if let Ok(duration) = duration_str.trim().parse::<f64>() {
+                                                                    // Try a different segment (later in the video)
+                                                                    let alt_start = duration * (0.25 + retry_count as f64 * 0.15);
+                                                                    match crate::speech_match::extract_and_transcribe_audio_segment(
+                                                                        path,
+                                                                        alt_start,
+                                                                        90.0,
+                                                                    ).await {
+                                                                        Ok(alt_transcript) => {
+                                                                            transcript = alt_transcript;
+                                                                            exclude_episode = Some((matched.season, matched.episode));
+                                                                            retry_count += 1;
+                                                                            continue;
+                                                                        }
+                                                                        Err(e) => {
+                                                                            send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Failed to extract alternative segment: {}", e), Some(&post_op_id)).await;
+                                                                        }
                                                                     }
                                                                 }
                                                             }
                                                         }
+                                                        
+                                                        // If retry failed, fall through to duplicate naming
                                                     }
                                                     
-                                                    // If retry failed, fall through to duplicate naming
-                                                }
-                                                
-                                                // File exists and we've exhausted retries - use duplicate naming
-                                                let mut duplicate_num = 1u32;
-                                                let mut final_path = new_path.clone();
-                                                while final_path.exists() {
-                                                    let stem = new_path.file_stem()
-                                                        .and_then(|s| s.to_str())
-                                                        .unwrap_or("episode");
-                                                    let ext = new_path.extension()
-                                                        .and_then(|s| s.to_str())
-                                                        .unwrap_or("mkv");
-                                                    let duplicate_name = format!("{}-DUPLICATE-{}.{}", stem, duplicate_num, ext);
-                                                    final_path = dvd_dir.join(duplicate_name);
-                                                    duplicate_num += 1;
-                                                }
-                                                
-                                                if let Err(e) = tokio::fs::rename(path, &final_path).await {
-                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(operation_id)).await;
+                                                    // File exists and we've exhausted retries - use duplicate naming
+                                                    let mut duplicate_num = 1u32;
+                                                    let mut final_path = new_path.clone();
+                                                    while final_path.exists() {
+                                                        let stem = new_path.file_stem()
+                                                            .and_then(|s| s.to_str())
+                                                            .unwrap_or("episode");
+                                                        let ext = new_path.extension()
+                                                            .and_then(|s| s.to_str())
+                                                            .unwrap_or("mkv");
+                                                        let duplicate_name = format!("{}-DUPLICATE-{}.{}", stem, duplicate_num, ext);
+                                                        final_path = dvd_dir_for_post.join(duplicate_name);
+                                                        duplicate_num += 1;
+                                                    }
+                                                    
+                                                    if let Err(e) = tokio::fs::rename(path, &final_path).await {
+                                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(&post_op_id)).await;
+                                                    } else {
+                                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  S{:02}E{:02}: {} (confidence: {:.0}%) - renamed with DUPLICATE suffix to avoid overwrite", 
+                                                            matched.season, matched.episode, matched.title, matched.confidence), Some(&post_op_id)).await;
+                                                        matched_count += 1;
+                                                    }
                                                 } else {
-                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  S{:02}E{:02}: {} (confidence: {:.0}%) - renamed with DUPLICATE suffix to avoid overwrite", 
-                                                        matched.season, matched.episode, matched.title, matched.confidence), Some(operation_id)).await;
-                                                    matched_count += 1;
+                                                    // File doesn't exist - safe to rename
+                                                    if let Err(e) = tokio::fs::rename(path, &new_path).await {
+                                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(&post_op_id)).await;
+                                                    } else {
+                                                        send_log_to_web_ui(&state_for_post, &device_for_post, "success", format!("  ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
+                                                            matched.season, matched.episode, matched.title, matched.confidence), Some(&post_op_id)).await;
+                                                        matched_count += 1;
+                                                    }
                                                 }
                                             } else {
-                                                // File doesn't exist - safe to rename
-                                                if let Err(e) = tokio::fs::rename(path, &new_path).await {
-                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(operation_id)).await;
-                                                } else {
-                                                    send_log_to_web_ui(state, device, "success", format!("  ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
-                                                        matched.season, matched.episode, matched.title, matched.confidence), Some(operation_id)).await;
-                                                    matched_count += 1;
-                                                }
+                                                send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Low confidence ({:.0}%), skipping rename", matched.confidence), Some(&post_op_id)).await;
                                             }
-                                        } else {
-                                            send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Low confidence ({:.0}%), skipping rename", matched.confidence), Some(operation_id)).await;
+                                            break;
                                         }
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Matching failed: {}", e), Some(operation_id)).await;
-                                        break;
+                                        Err(e) => {
+                                            send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Matching failed: {}", e), Some(&post_op_id)).await;
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        
-                        if matched_count > 0 {
-                            send_log_to_web_ui(state, device, "success", format!("✅ Matched {} episodes by dialogue", matched_count), Some(operation_id)).await;
-                        } else {
-                            send_log_to_web_ui(state, device, "warning", "⚠️  Speech matching unavailable (need Whisper + OpenAI API)".to_string(), Some(operation_id)).await;
-                        }
-                        
-                        // Step 2: Run Filebot with OCR-enhanced filenames
-                        send_log_to_web_ui(state, device, "info", "🤖 Running Filebot to match with database...".to_string(), Some(operation_id)).await;
-                        
-                        let dvd_dir_clone = dvd_dir.clone();
-                        let show_title = metadata.title.clone();
-                        let state_filebot = state.clone();
-                        let device_filebot = device.to_string();
-                        let operation_id_filebot = operation_id.to_string();
-                        
-                        match crate::filebot::rename_with_filebot(
-                            &dvd_dir_clone,
-                            &show_title,
-                            move |log_msg| {
-                                let state = state_filebot.clone();
-                                let device = device_filebot.clone();
-                                let operation_id = operation_id_filebot.clone();
-                                tokio::spawn(async move {
-                                    send_log_to_web_ui(&state, &device, "info", log_msg, Some(&operation_id)).await;
-                                });
+                            
+                            if matched_count > 0 {
+                                send_log_to_web_ui(&state_for_post, &device_for_post, "success", format!("✅ Matched {} episodes by dialogue", matched_count), Some(&post_op_id)).await;
+                            } else {
+                                send_log_to_web_ui(&state_for_post, &device_for_post, "warning", "⚠️  Speech matching unavailable (need Whisper + OpenAI API)".to_string(), Some(&post_op_id)).await;
                             }
-                        ).await {
-                            Ok(_) => {
-                                send_log_to_web_ui(state, device, "success", "✅ Filebot renaming complete".to_string(), Some(operation_id)).await;
+                            
+                            // Step 2: Run Filebot with OCR-enhanced filenames
+                            send_log_to_web_ui(&state_for_post, &device_for_post, "info", "🤖 Running Filebot to match with database...".to_string(), Some(&post_op_id)).await;
+                            update_operation_progress(&state_for_post, &post_op_id, 50.0, "Running Filebot...".to_string()).await;
+                            
+                            let show_title = metadata_for_post.title.clone();
+                            let state_filebot = state_for_post.clone();
+                            let device_filebot = device_for_post.clone();
+                            let operation_id_filebot = post_op_id.clone();
+                            
+                            match crate::filebot::rename_with_filebot(
+                                &dvd_dir_for_post,
+                                &show_title,
+                                move |log_msg| {
+                                    let state = state_filebot.clone();
+                                    let device = device_filebot.clone();
+                                    let operation_id = operation_id_filebot.clone();
+                                    tokio::spawn(async move {
+                                        send_log_to_web_ui(&state, &device, "info", log_msg, Some(&operation_id)).await;
+                                    });
+                                }
+                            ).await {
+                                Ok(_) => {
+                                    send_log_to_web_ui(&state_for_post, &device_for_post, "success", "✅ Filebot renaming complete".to_string(), Some(&post_op_id)).await;
+                                }
+                                Err(e) => {
+                                    send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("⚠️  Filebot failed: {}", e), Some(&post_op_id)).await;
+                                }
                             }
-                            Err(e) => {
-                                send_log_to_web_ui(state, device, "warning", format!("⚠️  Filebot failed: {}", e), Some(operation_id)).await;
+                            
+                            // Step 3: Move all MKV files to completed subfolder
+                            // Check each file and handle duplicates in completed folder
+                            send_log_to_web_ui(&state_for_post, &device_for_post, "info", "📦 Moving files to completed folder...".to_string(), Some(&post_op_id)).await;
+                            update_operation_progress(&state_for_post, &post_op_id, 80.0, "Moving files to completed...".to_string()).await;
+                            
+                            let mut read_dir = match tokio::fs::read_dir(&dvd_dir_for_post).await {
+                                Ok(dir) => dir,
+                                Err(e) => {
+                                    send_log_to_web_ui(&state_for_post, &device_for_post, "error", format!("❌ Failed to read directory: {}", e), Some(&post_op_id)).await;
+                                    fail_operation(&state_for_post, &post_op_id, format!("Failed to read directory: {}", e)).await;
+                                    return;
+                                }
+                            };
+                            let mut files_to_move = Vec::new();
+                            
+                            while let Ok(Some(entry)) = read_dir.next_entry().await {
+                                let path = entry.path();
+                                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                                    files_to_move.push(path);
+                                }
                             }
-                        }
+                            
+                            let mut moved_count = 0;
+                            
+                            for (idx, path) in files_to_move.iter().enumerate() {
+                                let mut current_path = path.clone();
+                                let file_name = current_path.file_name().unwrap().to_string_lossy().to_string();
+                                let mut dest_path = completed_dir_for_post.join(&file_name);
+                                
+                                // Check if file already exists in completed folder
+                                if dest_path.exists() {
+                                    send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  File {} already exists in completed folder, checking for alternative match...", file_name), Some(&post_op_id)).await;
+                                    
+                                    // Try to re-match with a different segment to get a different episode
+                                    let mut retry_success = false;
+                                    for retry_attempt in 0..2 {
+                                        // Get video duration for alternative segment
+                                        let duration_output = tokio::process::Command::new("ffprobe")
+                                            .args([
+                                                "-v", "error",
+                                                "-show_entries", "format=duration",
+                                                "-of", "default=noprint_wrappers=1:nokey=1",
+                                                current_path.to_str().unwrap()
+                                            ])
+                                            .output()
+                                            .await;
+                                        
+                                        if let Ok(output) = duration_output {
+                                            if let Ok(duration_str) = String::from_utf8(output.stdout) {
+                                                if let Ok(duration) = duration_str.trim().parse::<f64>() {
+                                                    // Try a different segment (varying positions)
+                                                    let alt_start = duration * (0.20 + retry_attempt as f64 * 0.20);
+                                                    match crate::speech_match::extract_and_transcribe_audio_segment(
+                                                        &current_path,
+                                                        alt_start,
+                                                        90.0,
+                                                    ).await {
+                                                        Ok(alt_transcript) => {
+                                                            send_log_to_web_ui(&state_for_post, &device_for_post, "info", format!("  🔄 Retry {}: Transcribed alternative segment...", retry_attempt + 1), Some(&post_op_id)).await;
+                                                            
+                                                            // Extract current episode from filename if possible (S##E##)
+                                                            let exclude_episode = if let Some(ep_match) = extract_episode_from_filename(&file_name) {
+                                                                Some((ep_match.0, ep_match.1))
+                                                            } else {
+                                                                None
+                                                            };
+                                                            
+                                                            // Try matching again with exclusion
+                                                            match crate::speech_match::match_episode_by_transcript_with_exclusion(
+                                                                &metadata_for_post.title,
+                                                                &alt_transcript,
+                                                                &metadata_for_post.episodes,
+                                                                exclude_episode,
+                                                            ).await {
+                                                                Ok(matched) => {
+                                                                    if matched.confidence >= 85.0 {
+                                                                        let show_name = metadata_for_post.title.replace(' ', ".");
+                                                                        let episode_title = matched.title.replace(' ', ".");
+                                                                        let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
+                                                                            show_name, matched.season, matched.episode, 
+                                                                            episode_title);
+                                                                        let new_dest_path = completed_dir_for_post.join(&new_name);
+                                                                        
+                                                                        // Check if this new name also exists
+                                                                        if !new_dest_path.exists() {
+                                                                            // Rename file to new name before moving
+                                                                            let temp_path = dvd_dir_for_post.join(&new_name);
+                                                                            if let Err(e) = tokio::fs::rename(&current_path, &temp_path).await {
+                                                                                send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Failed to rename to {}: {}", new_name, e), Some(&post_op_id)).await;
+                                                                            } else {
+                                                                                send_log_to_web_ui(&state_for_post, &device_for_post, "success", format!("  ✓ Re-matched to S{:02}E{:02}: {}", matched.season, matched.episode, matched.title), Some(&post_op_id)).await;
+                                                                                retry_success = true;
+                                                                                // Update path to the renamed file
+                                                                                current_path = temp_path;
+                                                                                dest_path = new_dest_path;
+                                                                                break;
+                                                                            }
+                                                                        } else {
+                                                                            send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Alternative match {} also exists, will use DUPLICATE naming", new_name), Some(&post_op_id)).await;
+                                                                        }
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Re-matching failed: {}", e), Some(&post_op_id)).await;
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Failed to extract alternative segment: {}", e), Some(&post_op_id)).await;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // If retry didn't work or new name also exists, use DUPLICATE naming
+                                    if !retry_success && dest_path.exists() {
+                                        let mut duplicate_num = 1u32;
+                                        let original_name = file_name.clone();
+                                        while dest_path.exists() {
+                                            let stem = std::path::Path::new(&original_name)
+                                                .file_stem()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or("episode");
+                                            let ext = std::path::Path::new(&original_name)
+                                                .extension()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or("mkv");
+                                            let duplicate_name = format!("{}-DUPLICATE-{}.{}", stem, duplicate_num, ext);
+                                            dest_path = completed_dir_for_post.join(duplicate_name);
+                                            duplicate_num += 1;
+                                        }
+                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Using DUPLICATE naming: {}", dest_path.file_name().unwrap().to_string_lossy()), Some(&post_op_id)).await;
+                                    }
+                                }
+                                
+                                // Move the file (or renamed file) to completed
+                                match tokio::fs::rename(&current_path, &dest_path).await {
+                                    Ok(_) => {
+                                        send_log_to_web_ui(&state_for_post, &device_for_post, "info", format!("  ✓ Moved: {}", dest_path.file_name().unwrap().to_string_lossy()), Some(&post_op_id)).await;
+                                        moved_count += 1;
+                                    }
+                                    Err(e) => {
+                                        send_log_to_web_ui(&state_for_post, &device_for_post, "warning", format!("  ⚠️  Failed to move {}: {}", file_name, e), Some(&post_op_id)).await;
+                                    }
+                                }
+                                
+                                update_operation_progress(&state_for_post, &post_op_id, 80.0 + (idx as f32 / files_to_move.len() as f32) * 20.0, format!("Moving files to completed ({}/{})", idx + 1, files_to_move.len())).await;
+                            }
+                            
+                            if moved_count > 0 {
+                                send_log_to_web_ui(&state_for_post, &device_for_post, "success", format!("✅ Moved {} files to completed folder", moved_count), Some(&post_op_id)).await;
+                                update_operation_progress(&state_for_post, &post_op_id, 100.0, format!("Post-processing complete - {} files moved", moved_count)).await;
+                                complete_operation(&state_for_post, &post_op_id, Some(format!("Post-processing complete - {} files moved to completed", moved_count))).await;
+                            } else {
+                                send_log_to_web_ui(&state_for_post, &device_for_post, "warning", "⚠️  No files moved to completed folder".to_string(), Some(&post_op_id)).await;
+                                update_operation_progress(&state_for_post, &post_op_id, 100.0, "Post-processing complete (no files to move)".to_string()).await;
+                                complete_operation(&state_for_post, &post_op_id, Some("Post-processing complete (no files to move)".to_string())).await;
+                            }
+                        });
                     }
                 }
             }
@@ -2057,6 +2257,17 @@ async fn get_dvd_volume_name_linux(device: &str) -> anyhow::Result<String> {
     }
     
     Err(anyhow::anyhow!("No volume name found for device {}", device))
+}
+
+/// Extract season/episode from filename like "Show.S01E02.Title.mkv"
+fn extract_episode_from_filename(filename: &str) -> Option<(u32, u32)> {
+    let re = regex::Regex::new(r"S(\d+)E(\d+)").ok()?;
+    if let Some(caps) = re.captures(filename) {
+        if let (Ok(season), Ok(episode)) = (caps[1].parse::<u32>(), caps[2].parse::<u32>()) {
+            return Some((season, episode));
+        }
+    }
+    None
 }
 
 fn create_dummy_metadata() -> crate::metadata::DiscMetadata {
