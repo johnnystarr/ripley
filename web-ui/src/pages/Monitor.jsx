@@ -77,6 +77,17 @@ export default function Monitor() {
           }
           return updated;
         });
+        // Auto-expand new operations so logs are visible immediately
+        setExpandedOperations(prev => {
+          const newSet = new Set(prev);
+          newSet.add(data.operation.operation_id);
+          return newSet;
+        });
+        // Initialize empty logs array for this operation
+        setOperationLogs(prev => ({
+          ...prev,
+          [data.operation.operation_id]: []
+        }));
       }
     });
 
@@ -118,6 +129,12 @@ export default function Monitor() {
               drive: data.drive,
             }],
           };
+        });
+        // Auto-expand operations when logs arrive so users see them immediately
+        setExpandedOperations(prev => {
+          const newSet = new Set(prev);
+          newSet.add(data.operation_id);
+          return newSet;
         });
       }
     });
@@ -379,34 +396,50 @@ export default function Monitor() {
                       </div>
                     </div>
 
-                    {/* Expanded logs view */}
-                    {isExpanded && (
+                    {/* Logs view - always visible for active operations, expandable for completed/failed */}
+                    {(operation.status === 'running' || operation.status === 'paused' || isExpanded) && (
                       <div className="mt-4 pt-4 border-t border-slate-700">
-                        <h4 className="text-sm font-semibold text-slate-300 mb-2">Logs</h4>
-                        <div className="bg-slate-900/50 rounded p-3 max-h-64 overflow-y-auto font-mono text-xs">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="text-sm font-semibold text-slate-300">Logs {logs.length > 0 && `(${logs.length})`}</h4>
+                          {operation.status !== 'running' && operation.status !== 'paused' && (
+                            <button
+                              onClick={() => toggleOperationExpansion(operation.operation_id)}
+                              className="text-slate-400 hover:text-slate-300 text-xs"
+                            >
+                              {isExpanded ? 'Collapse' : 'Expand'}
+                            </button>
+                          )}
+                        </div>
+                        <div className="bg-slate-900/50 rounded p-3 max-h-96 overflow-y-auto font-mono text-xs">
                           {logs.length === 0 ? (
-                            <p className="text-slate-500">No logs available</p>
+                            <p className="text-slate-500">No logs available yet...</p>
                           ) : (
                             logs.map((log, idx) => (
-                              <div key={idx} className="mb-1">
-                                <span className="text-slate-500">
-                                  [{new Date(log.timestamp).toLocaleTimeString()}]
+                              <div key={idx} className="mb-1.5 leading-relaxed">
+                                <span className="text-slate-500 text-[10px]">
+                                  [{new Date(log.timestamp || new Date()).toLocaleTimeString()}]
                                 </span>
                                 {log.drive && (
-                                  <span className="text-slate-600 ml-1">[{log.drive}]</span>
+                                  <span className="text-slate-600 ml-1 text-[10px]">[{log.drive}]</span>
                                 )}
-                                <span className={`ml-1 ${
+                                <span className={`ml-2 ${
                                   log.level === 'error' ? 'text-red-400' :
                                   log.level === 'warning' ? 'text-yellow-400' :
                                   log.level === 'success' ? 'text-green-400' :
-                                  'text-cyan-400'
+                                  'text-slate-200'
                                 }`}>
                                   {log.message}
                                 </span>
                               </div>
                             ))
                           )}
-                          <div ref={el => logEndRefs.current[operation.operation_id] = el} />
+                          <div ref={el => {
+                            if (el && (operation.status === 'running' || operation.status === 'paused')) {
+                              // Auto-scroll to bottom for active operations
+                              setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'end' }), 100);
+                            }
+                            logEndRefs.current[operation.operation_id] = el;
+                          }} />
                         </div>
                       </div>
                     )}

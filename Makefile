@@ -79,9 +79,11 @@ uninstall:
 	@echo "✅ Ripley uninstalled"
 
 # Run the application with default settings
-run:
+run: clean build
 	@echo "🎵 Running Ripley..."
-	@cargo run --release
+	@open -a "Google Chrome" http://localhost:8080 2>/dev/null || echo "⚠️  Failed to open Chrome (may not be installed)"
+	@target/release/ripley serve --port 8080
+
 
 # Check code without building
 check:

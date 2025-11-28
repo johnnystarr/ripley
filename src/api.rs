@@ -146,6 +146,7 @@ pub async fn start_server(
     
     // Spawn background task to poll for drive changes
     let event_tx_poller = event_tx.clone();
+    let state_for_poller = state.clone();
     tokio::spawn(async move {
         use std::collections::HashMap;
         use crate::drive::{self, DriveInfo};
@@ -164,13 +165,65 @@ pub async fn start_server(
                         .map(|d| (d.device.clone(), d))
                         .collect();
                     
-                    // Find newly detected drives
+                    // Find newly detected drives or drives with newly inserted media
                     for (device, drive_info) in &current_map {
-                        if !known_drives.contains_key(device) {
+                        let was_known = known_drives.contains_key(device);
+                        let had_media = known_drives.get(device)
+                            .map(|d| !matches!(d.media_type, crate::drive::MediaType::None))
+                            .unwrap_or(false);
+                        let has_media = !matches!(drive_info.media_type, crate::drive::MediaType::None);
+                        
+                        if !was_known {
                             info!("Drive detected: {}", device);
                             let _ = event_tx_poller.send(ApiEvent::DriveDetected {
                                 drive: drive_info.clone(),
                             });
+                        } else if !had_media && has_media {
+                            info!("Media inserted in drive: {} (type: {:?})", device, drive_info.media_type);
+                            let _ = event_tx_poller.send(ApiEvent::DriveDetected {
+                                drive: drive_info.clone(),
+                            });
+                        }
+                        
+                        // Auto-start rip if media is detected and drive is not already ripping
+                        if has_media && (!was_known || !had_media) {
+                            let state_for_rip = state_for_poller.clone();
+                            let device_for_rip = device.clone();
+                            
+                            // Check if already ripping this drive
+                            let is_ripping = {
+                                let status = state_for_poller.rip_status.read().await;
+                                status.active_rips.contains_key(device)
+                            };
+                            
+                            if !is_ripping {
+                                info!("Auto-starting rip for drive {} with media type {:?}", device, drive_info.media_type);
+                                let state_clone = state_for_rip.clone();
+                                tokio::spawn(async move {
+                                    // Small delay to ensure drive is ready
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                    
+                                    let rip_request = StartRipRequest {
+                                        drive: Some(device_for_rip.clone()),
+                                        output_path: None,
+                                        title: None,
+                                        skip_metadata: false,
+                                        skip_filebot: false,
+                                        profile: None,
+                                        priority: None,
+                                    };
+                                    
+                                    // Call the internal start_rip logic
+                                    match start_rip_internal(&state_clone, &rip_request, &device_for_rip).await {
+                                        Ok(_) => {
+                                            info!("Successfully auto-started rip for {}", device_for_rip);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to auto-start rip for {}: {}", device_for_rip, e);
+                                        }
+                                    }
+                                });
+                            }
                         }
                     }
                     
@@ -508,7 +561,7 @@ pub enum ApiEvent {
 }
 
 /// Request body for starting a rip operation
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct StartRipRequest {
     pub drive: Option<String>,
     pub output_path: Option<String>,
@@ -692,6 +745,76 @@ async fn reset_database_handler(
     }
 }
 
+/// Internal function to start a rip operation (used by both HTTP handler and auto-rip)
+async fn start_rip_internal(
+    state: &ApiState,
+    request: &StartRipRequest,
+    drive_id: &str,
+) -> Result<(), String> {
+    let mut status = state.rip_status.write().await;
+    
+    // Check if this drive is already ripping
+    if status.active_rips.contains_key(drive_id) {
+        drop(status);
+        return Err(format!("Drive {} is already ripping", drive_id));
+    }
+    
+    // Create operation for this rip
+    let operation_id = create_operation(
+        state,
+        OperationType::Rip,
+        Some(drive_id.to_string()),
+        request.title.clone(),
+        format!("Starting rip on drive {}", drive_id),
+    ).await;
+    
+    // Mark this drive as active
+    status.active_rips.insert(drive_id.to_string(), DriveRipStatus {
+        current_disc: None,
+        current_title: request.title.clone(),
+        progress: 0.0,
+        paused: false,
+        paused_at: None,
+    });
+    drop(status);
+    
+    // Clone state for async task
+    let state_clone = state.clone();
+    let request_clone = request.clone();
+    let output_path_clone = request_clone.output_path.clone();
+    let title_clone = request_clone.title.clone();
+    let drive_clone = drive_id.to_string();
+    let operation_id_clone = operation_id.clone();
+    
+    // Spawn rip operation in background
+    tokio::spawn(async move {
+        let result = run_rip_operation(state_clone.clone(), request_clone, drive_clone.clone(), operation_id_clone.clone()).await;
+        
+        // Remove from active rips when done
+        let mut status = state_clone.rip_status.write().await;
+        status.active_rips.remove(&drive_clone);
+        
+        // Complete or fail the operation
+        if let Err(ref e) = result {
+            tracing::error!("Rip operation failed: {:?}", e);
+            fail_operation(&state_clone, &operation_id_clone, format!("{}", e)).await;
+        } else {
+            // Try to create upscaling job if this was a video rip
+            if let Some(ref output_path) = output_path_clone {
+                if let Err(e) = create_upscaling_job_for_rip(&state_clone, output_path, title_clone.as_deref()).await {
+                    tracing::warn!("Failed to create upscaling job after rip: {}", e);
+                }
+            }
+            
+            complete_operation(&state_clone, &operation_id_clone, Some("Rip completed successfully".to_string())).await;
+        }
+        
+        // Process queue after rip completes
+    });
+    
+    Ok(())
+}
+
 /// Start ripping operation (queues if drive is busy)
 async fn start_rip(
     State(state): State<ApiState>,
@@ -749,64 +872,19 @@ async fn start_rip(
     // Drive is available, start immediately
     let drive_id = drive.clone().unwrap_or_else(|| "default".to_string());
     
-    // Create operation for this rip
-    let operation_id = create_operation(
-        &state,
-        OperationType::Rip,
-        Some(drive_id.clone()),
-        request.title.clone(),
-        format!("Starting rip on drive {}", drive_id),
-    ).await;
-    
-    // Mark this drive as active
-    status.active_rips.insert(drive_id.clone(), DriveRipStatus {
-        current_disc: None,
-        current_title: request.title.clone(),
-        progress: 0.0,
-        paused: false,
-        paused_at: None,
-    });
-    drop(status);
-    
-    // Clone state for async task
-    let state_clone = state.clone();
-    let request_clone = request;
-    let output_path_clone = request_clone.output_path.clone();
-    let title_clone = request_clone.title.clone();
-    let drive_clone = drive_id.clone();
-    let operation_id_clone = operation_id.clone();
-    
-    // Spawn rip operation in background
-    tokio::spawn(async move {
-        let result = run_rip_operation(state_clone.clone(), request_clone, drive_clone.clone(), operation_id_clone.clone()).await;
-        
-        // Remove from active rips when done
-        let mut status = state_clone.rip_status.write().await;
-        status.active_rips.remove(&drive_clone);
-        
-        // Complete or fail the operation
-        if let Err(ref e) = result {
-            tracing::error!("Rip operation failed: {:?}", e);
-            fail_operation(&state_clone, &operation_id_clone, format!("{}", e)).await;
-        } else {
-            // Try to create upscaling job if this was a video rip
-            if let Some(ref output_path) = output_path_clone {
-                if let Err(e) = create_upscaling_job_for_rip(&state_clone, output_path, title_clone.as_deref()).await {
-                    tracing::warn!("Failed to create upscaling job after rip: {}", e);
-                }
-            }
-            
-            complete_operation(&state_clone, &operation_id_clone, Some("Rip completed successfully".to_string())).await;
+    match start_rip_internal(&state, &request, &drive_id).await {
+        Ok(_) => {
+            Ok(Json(serde_json::json!({
+                "status": "started",
+                "drive": drive_id
+            })))
         }
-        
-        // Process queue after rip completes (use tokio::task::spawn_local or check queue on next start_rip)
-        // Note: Queue processing happens automatically when checking for available drives
-    });
-    
-    Ok(Json(serde_json::json!({
-        "status": "started",
-        "drive": drive_id
-    })))
+        Err(e) => {
+            Err(ErrorResponse {
+                error: format!("Failed to start rip: {}", e),
+            })
+        }
+    }
 }
 
 /// Stop ripping operation (stops all active rips)
@@ -1143,38 +1221,47 @@ async fn run_single_rip_attempt(
 ) -> anyhow::Result<()> {
     use crate::database::{RipHistory, RipStatus};
     
-    // Use provided title or fall back to last saved title
+    // Get title: use provided, or selected show name, or last saved title
     let title = if request.title.is_some() {
         request.title.clone()
     } else {
-        state.db.get_last_title().ok().flatten()
-    };
-    
-    // Get quality from profile or use default
-    let quality = {
-        let config = state.config.read().await;
-        let profile = if let Some(ref profile_name) = request.profile {
-            config.get_profile(profile_name)
+        // Try to get selected show name from database
+        if let Ok(Some(show_id)) = state.db.get_last_show_id() {
+            if let Ok(Some(show)) = state.db.get_show(show_id) {
+                info!("Using selected show: {}", show.name);
+                // Send log after we have the title
+                Some(show.name)
+            } else {
+                state.db.get_last_title().ok().flatten()
+            }
         } else {
-            config.get_default_profile()
-        };
-        
-        profile
-            .and_then(|p| p.audio_quality)
-            .unwrap_or(5) // Default quality if no profile found
+            state.db.get_last_title().ok().flatten()
+        }
     };
     
-    let args = RipArgs {
-        output_folder: request.output_path.clone().map(PathBuf::from),
-        title: title.clone(),
-        skip_metadata: request.skip_metadata,
-        skip_filebot: request.skip_filebot,
-        quality,
-        eject_when_done: is_final_attempt,
+    // Detect media type - get from current drives
+    let media_type = {
+        match crate::drive::detect_drives().await {
+            Ok(drives) => {
+                drives.iter()
+                    .find(|d| d.device == drive)
+                    .map(|d| d.media_type.clone())
+                    .unwrap_or(crate::drive::MediaType::None)
+            }
+            Err(_) => crate::drive::MediaType::None,
+        }
     };
     
-    // Run the actual rip operation
-    let result = crate::app::run(args).await;
+    // Run web-UI-only rip operation (no TUI)
+    let result = rip_disc_web_ui(
+        state,
+        drive,
+        media_type,
+        title.clone(),
+        request,
+        operation_id,
+        is_final_attempt,
+    ).await;
     
     // On success, log to history
     if result.is_ok() {
@@ -1239,6 +1326,666 @@ async fn run_single_rip_attempt(
     }
     
     result
+}
+
+// Helper functions for web UI logging (defined at module level so they can be shared)
+async fn send_log_to_web_ui(
+    state: &ApiState,
+    drive: &str,
+    level: &str,
+    message: String,
+    operation_id: Option<&str>,
+) {
+    let _ = state.event_tx.send(ApiEvent::Log {
+        level: level.to_string(),
+        message: message.clone(),
+        drive: Some(drive.to_string()),
+        operation_id: operation_id.map(|s| s.to_string()),
+    });
+    
+    // Also log to database
+    use crate::database::{LogEntry, LogLevel};
+    let log_level = match level {
+        "error" => LogLevel::Error,
+        "warning" => LogLevel::Warning,
+        "success" => LogLevel::Success,
+        _ => LogLevel::Info,
+    };
+    
+    let entry = LogEntry {
+        id: None,
+        timestamp: chrono::Utc::now(),
+        level: log_level,
+        message,
+        drive: Some(drive.to_string()),
+        disc: None,
+        title: None,
+        context: None,
+    };
+    
+    let _ = state.db.add_log(&entry);
+}
+
+async fn update_operation_progress(
+    state: &ApiState,
+    operation_id: &str,
+    progress: f32,
+    message: String,
+) {
+    update_operation(state, operation_id, progress, message.clone()).await;
+    let _ = state.event_tx.send(ApiEvent::OperationProgress {
+        operation_id: operation_id.to_string(),
+        progress,
+        message,
+    });
+}
+
+/// Web-UI-only rip function (no TUI, all logs go to web UI)
+async fn rip_disc_web_ui(
+    state: &ApiState,
+    device: &str,
+    media_type: crate::drive::MediaType,
+    title: Option<String>,
+    request: &StartRipRequest,
+    operation_id: &str,
+    eject_when_done: bool,
+) -> anyhow::Result<()> {
+    // Log that we're using the selected show if we have a title
+    if let Some(ref show_name) = title {
+        send_log_to_web_ui(state, device, "info", format!("📺 Using selected show: {}", show_name), Some(operation_id)).await;
+    }
+    
+    // Handle DVD/Blu-ray ripping
+    if matches!(media_type, crate::drive::MediaType::DVD | crate::drive::MediaType::BluRay) {
+        return rip_dvd_disc_web_ui(state, device, media_type, title, request, operation_id, eject_when_done).await;
+    }
+    
+    // Handle audio CD ripping
+    send_log_to_web_ui(state, device, "info", format!("📀 Detected audio CD in {}", device), Some(operation_id)).await;
+    send_log_to_web_ui(state, device, "info", "💿 Preparing disc for reading...".to_string(), Some(operation_id)).await;
+    
+    // Unmount disc before reading
+    for attempt in 1..=3 {
+        match crate::drive::unmount_disc(device).await {
+            Ok(_) => {
+                info!("Unmounted {} for disc ID reading (attempt {})", device, attempt);
+                break;
+            }
+            Err(e) => {
+                tracing::warn!("Unmount attempt {}: {}", attempt, e);
+                if attempt < 3 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    
+    // Fetch metadata
+    send_log_to_web_ui(state, device, "info", format!("🔍 Fetching metadata for {}...", device), Some(operation_id)).await;
+    update_operation_progress(state, operation_id, 5.0, "Fetching disc metadata...".to_string()).await;
+    
+    let disc_id = match crate::metadata::get_disc_id(device).await {
+        Ok(id) => {
+            send_log_to_web_ui(state, device, "info", format!("📀 Disc ID: {}", id), Some(operation_id)).await;
+            id
+        }
+        Err(e) => {
+            send_log_to_web_ui(state, device, "warning", format!("⚠️  Could not get disc ID: {}", e), Some(operation_id)).await;
+            if request.skip_metadata {
+                "unknown".to_string()
+            } else {
+                return Err(e);
+            }
+        }
+    };
+    
+    let metadata = if request.skip_metadata {
+        create_dummy_metadata()
+    } else {
+        match crate::metadata::fetch_metadata(&disc_id, 3).await {
+            Ok(meta) => {
+                send_log_to_web_ui(state, device, "success", format!("✅ Found: {} - {} ({} tracks)", 
+                    meta.artist, meta.album, meta.tracks.len()), Some(operation_id)).await;
+                meta
+            }
+            Err(e) => {
+                send_log_to_web_ui(state, device, "warning", format!("⚠️  Metadata lookup failed: {}", e), Some(operation_id)).await;
+                send_log_to_web_ui(state, device, "info", "Using generic track names. You can rename files after ripping.".to_string(), Some(operation_id)).await;
+                create_dummy_metadata()
+            }
+        }
+    };
+    
+    let album_info = format!("{} - {}", metadata.artist, metadata.album);
+    send_log_to_web_ui(state, device, "info", format!("🎵 Ripping {} from {}...", album_info, device), Some(operation_id)).await;
+    update_operation_progress(state, operation_id, 10.0, format!("Ripping: {}", album_info)).await;
+    
+    let output_folder = if let Some(ref path) = request.output_path {
+        std::path::PathBuf::from(path)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home).join("Desktop").join("Rips").join("Music")
+    };
+    
+    if !output_folder.exists() {
+        tokio::fs::create_dir_all(&output_folder).await?;
+    }
+    
+    let device_progress = device.to_string();
+    let state_progress = state.clone();
+    let operation_id_progress = operation_id.to_string();
+    let device_log = device.to_string();
+    let state_log = state.clone();
+    let operation_id_log = operation_id.to_string();
+    
+    let result = crate::ripper::rip_cd(
+        device,
+        &metadata,
+        &output_folder,
+        5, // Default quality
+        move |progress| {
+            let state = state_progress.clone();
+            let operation_id = operation_id_progress.clone();
+            
+            tokio::spawn(async move {
+                let progress_pct = progress.percentage;
+                let message = format!("Track {}/{}: {} ({:.1}%)", 
+                    progress.current_track, 
+                    progress.total_tracks,
+                    progress.track_name,
+                    progress_pct);
+                update_operation_progress(&state, &operation_id, progress_pct, message).await;
+            });
+        },
+        move |log_line| {
+            let state = state_log.clone();
+            let operation_id = operation_id_log.clone();
+            let device = device_log.clone();
+            
+            tokio::spawn(async move {
+                send_log_to_web_ui(&state, &device, "info", log_line, Some(&operation_id)).await;
+            });
+        },
+    ).await;
+    
+    match result {
+        Ok(_) => {
+            send_log_to_web_ui(state, device, "success", format!("✅ Completed: {}", album_info), Some(operation_id)).await;
+            update_operation_progress(state, operation_id, 100.0, "Rip completed successfully".to_string()).await;
+            
+            // Filebot music processing if enabled
+            let config = state.config.read().await;
+            if config.filebot.use_for_music {
+                send_log_to_web_ui(state, device, "info", "🎵 Running Filebot to standardize filenames...".to_string(), Some(operation_id)).await;
+                
+                let album_dir = output_folder
+                    .join(crate::ripper::sanitize_filename(&metadata.artist))
+                    .join(crate::ripper::sanitize_filename(&metadata.album));
+                
+                let state_clone = state.clone();
+                let device_clone = device.to_string();
+                let operation_id_clone = operation_id.to_string();
+                
+                if let Err(e) = crate::filebot::rename_music_with_filebot(
+                    &album_dir,
+                    move |log_msg| {
+                        let state = state_clone.clone();
+                        let device = device_clone.clone();
+                        let operation_id = operation_id_clone.clone();
+                        tokio::spawn(async move {
+                            send_log_to_web_ui(&state, &device, "info", log_msg, Some(&operation_id)).await;
+                        });
+                    }
+                ).await {
+                    tracing::warn!("Filebot music processing failed: {}", e);
+                    send_log_to_web_ui(state, device, "warning", format!("⚠️  Filebot failed: {}", e), Some(operation_id)).await;
+                }
+            }
+            
+            // Send notification
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type: crate::notifications::DiscType::CD,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, true).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
+            
+            if eject_when_done {
+                crate::drive::eject_disc(device).await?;
+                send_log_to_web_ui(state, device, "info", format!("⏏️  Ejected {}", device), Some(operation_id)).await;
+            }
+        }
+        Err(e) => {
+            send_log_to_web_ui(state, device, "error", format!("❌ Failed: {} - {}", album_info, e), Some(operation_id)).await;
+            update_operation_progress(state, operation_id, 0.0, format!("Rip failed: {}", e)).await;
+            
+            // Send failure notification
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type: crate::notifications::DiscType::CD,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, false).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
+            return Err(e);
+        }
+    }
+    
+    Ok(())
+}
+
+/// Web-UI-only DVD/Blu-ray rip function (no TUI, all logs go to web UI)
+async fn rip_dvd_disc_web_ui(
+    state: &ApiState,
+    device: &str,
+    media_type: crate::drive::MediaType,
+    title: Option<String>,
+    request: &StartRipRequest,
+    operation_id: &str,
+    eject_when_done: bool,
+) -> anyhow::Result<()> {
+    let media_name = match media_type {
+        crate::drive::MediaType::BluRay => "Blu-ray",
+        crate::drive::MediaType::DVD => "DVD",
+        _ => "disc",
+    };
+    
+    send_log_to_web_ui(state, device, "info", format!("📀 Detected {} in {}", media_name, device), Some(operation_id)).await;
+    update_operation_progress(state, operation_id, 1.0, format!("Detected {} in {}", media_name, device)).await;
+    
+    // Try to get disc volume name
+    send_log_to_web_ui(state, device, "info", format!("🔍 Fetching {} metadata...", media_name), Some(operation_id)).await;
+    update_operation_progress(state, operation_id, 2.0, "Fetching disc metadata...".to_string()).await;
+    
+    let volume_name = match get_dvd_volume_name(device).await {
+        Ok(name) => {
+            send_log_to_web_ui(state, device, "info", format!("💿 Volume name: {}", name), Some(operation_id)).await;
+            Some(name)
+        }
+        Err(e) => {
+            send_log_to_web_ui(state, device, "warning", format!("⚠️  Could not get volume name: {}", e), Some(operation_id)).await;
+            None
+        }
+    };
+    
+    // Use provided title, or selected show name, or volume name
+    let title_to_search = if !request.skip_metadata {
+        let final_title = title
+            .or_else(|| volume_name.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+        
+        if final_title != "Unknown" {
+            send_log_to_web_ui(state, device, "info", format!("📺 Using title: '{}'", final_title), Some(operation_id)).await;
+            Some(final_title)
+        } else {
+            send_log_to_web_ui(state, device, "warning", "❌ No title available, skipping metadata".to_string(), Some(operation_id)).await;
+            None
+        }
+    } else {
+        send_log_to_web_ui(state, device, "info", "⏭️  Skipping metadata (--skip-metadata)".to_string(), Some(operation_id)).await;
+        None
+    };
+    
+    let dvd_metadata = if let Some(ref title_str) = title_to_search {
+        send_log_to_web_ui(state, device, "info", format!("🔍 Searching TMDB for '{}'...", title_str), Some(operation_id)).await;
+        update_operation_progress(state, operation_id, 3.0, format!("Searching TMDB for '{}'...", title_str)).await;
+        
+        match crate::dvd_metadata::fetch_dvd_metadata("", Some(title_str)).await {
+            Ok(meta) => {
+                send_log_to_web_ui(state, device, "success", format!("📺 Found: {}", meta.title), Some(operation_id)).await;
+                if meta.media_type == crate::dvd_metadata::MediaType::TVShow && !meta.episodes.is_empty() {
+                    send_log_to_web_ui(state, device, "info", format!("📝 {} episodes available for matching", meta.episodes.len()), Some(operation_id)).await;
+                }
+                Some(meta)
+            }
+            Err(e) => {
+                send_log_to_web_ui(state, device, "warning", format!("⚠️  Could not fetch metadata: {}", e), Some(operation_id)).await;
+                None
+            }
+        }
+    } else {
+        None
+    };
+    
+    let default_label = match media_type {
+        crate::drive::MediaType::BluRay => "Blu-ray Video",
+        crate::drive::MediaType::DVD => "DVD Video",
+        _ => "Video Disc",
+    };
+    
+    let album_info = if let Some(ref meta) = dvd_metadata {
+        if let Some(year) = &meta.year {
+            format!("{} ({})", meta.title, year)
+        } else {
+            meta.title.clone()
+        }
+    } else {
+        volume_name.unwrap_or_else(|| default_label.to_string())
+    };
+    
+    // Determine output directory
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let base_rips = std::path::PathBuf::from(home).join("Desktop").join("Rips");
+    
+    let media_output = match media_type {
+        crate::drive::MediaType::BluRay => base_rips.join("BluRays"),
+        crate::drive::MediaType::DVD => base_rips.join("DVDs"),
+        _ => base_rips.join("Videos"),
+    };
+    
+    // Create output folder with title or timestamp
+    let folder_name = if let Some(ref meta) = dvd_metadata {
+        crate::ripper::sanitize_filename(&meta.title)
+    } else {
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let prefix = match media_type {
+            crate::drive::MediaType::BluRay => "BluRay",
+            crate::drive::MediaType::DVD => "DVD",
+            _ => "Video",
+        };
+        format!("{}_{}", prefix, timestamp)
+    };
+    let dvd_dir = media_output.join(folder_name);
+    
+    send_log_to_web_ui(state, device, "info", format!("Output: {}", dvd_dir.display()), Some(operation_id)).await;
+    update_operation_progress(state, operation_id, 5.0, format!("Starting rip to: {}", dvd_dir.display())).await;
+    
+    let device_clone = device.to_string();
+    let state_clone = state.clone();
+    let operation_id_clone = operation_id.to_string();
+    let state_progress = state.clone();
+    let operation_id_progress = operation_id.to_string();
+    
+    let result = crate::dvd_ripper::rip_dvd(
+        device,
+        &dvd_dir,
+        dvd_metadata.as_ref(),
+        move |progress| {
+            let state = state_progress.clone();
+            let operation_id = operation_id_progress.clone();
+            
+            tokio::spawn(async move {
+                let progress_pct = progress.percentage;
+                let message = format!("Track {}/{}: {} ({:.1}%)", 
+                    progress.current_track, 
+                    progress.total_tracks,
+                    progress.track_name,
+                    progress_pct);
+                update_operation_progress(&state, &operation_id, progress_pct, message).await;
+            });
+        },
+        move |log_line| {
+            let state = state_clone.clone();
+            let operation_id = operation_id_clone.clone();
+            let device = device_clone.clone();
+            
+            tokio::spawn(async move {
+                send_log_to_web_ui(&state, &device, "info", log_line, Some(&operation_id)).await;
+            });
+        },
+    ).await;
+    
+    match result {
+        Ok(_) => {
+            send_log_to_web_ui(state, device, "success", format!("✅ {} rip complete", media_name), Some(operation_id)).await;
+            update_operation_progress(state, operation_id, 90.0, format!("{} rip complete, processing files...", media_name)).await;
+            
+            // Run OCR + Filebot by default (unless --skip-filebot) if we have metadata
+            if !request.skip_filebot {
+                if let Some(metadata) = dvd_metadata.as_ref() {
+                    if metadata.media_type == crate::dvd_metadata::MediaType::TVShow {
+                        // Step 1: Use speech-to-text to identify episodes by dialogue
+                        send_log_to_web_ui(state, device, "info", "🎤 Analyzing dialogue to identify episodes...".to_string(), Some(operation_id)).await;
+                        
+                        let mut matched_count = 0;
+                        let mut read_dir = tokio::fs::read_dir(&dvd_dir).await?;
+                        let mut files = Vec::new();
+                        
+                        while let Some(entry) = read_dir.next_entry().await? {
+                            let path = entry.path();
+                            if path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                                files.push(path);
+                            }
+                        }
+                        
+                        for (idx, path) in files.iter().enumerate() {
+                            send_log_to_web_ui(state, device, "info", format!("[{}/{}] Processing {}...", idx + 1, files.len(), path.file_name().unwrap().to_string_lossy()), Some(operation_id)).await;
+                            
+                            // Extract and transcribe audio
+                            match crate::speech_match::extract_and_transcribe_audio(path).await {
+                                Ok(transcript) => {
+                                    send_log_to_web_ui(state, device, "info", format!("  Transcribed {} characters", transcript.len()), Some(operation_id)).await;
+                                    
+                                    // Match against TMDB episodes
+                                    match crate::speech_match::match_episode_by_transcript(
+                                        &metadata.title,
+                                        &transcript,
+                                        &metadata.episodes
+                                    ).await {
+                                        Ok(ep_match) => {
+                                            // Only rename if confidence is high enough
+                                            if ep_match.confidence >= 85.0 {
+                                                let show_name = metadata.title.replace(' ', ".");
+                                                let episode_title = ep_match.title.replace(' ', ".");
+                                                let new_name = format!("{}.S{:02}E{:02}.{}.mkv", 
+                                                    show_name, ep_match.season, ep_match.episode, 
+                                                    episode_title);
+                                                let new_path = dvd_dir.join(&new_name);
+                                                
+                                                if let Err(e) = tokio::fs::rename(path, &new_path).await {
+                                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Failed to rename: {}", e), Some(operation_id)).await;
+                                                } else {
+                                                    send_log_to_web_ui(state, device, "success", format!("  ✓ S{:02}E{:02}: {} (confidence: {:.0}%)", 
+                                                        ep_match.season, ep_match.episode, ep_match.title, ep_match.confidence), Some(operation_id)).await;
+                                                    matched_count += 1;
+                                                }
+                                            } else {
+                                                send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Low confidence ({:.0}%), skipping rename", ep_match.confidence), Some(operation_id)).await;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Matching failed: {}", e), Some(operation_id)).await;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    send_log_to_web_ui(state, device, "warning", format!("  ⚠️  Transcription failed: {}", e), Some(operation_id)).await;
+                                }
+                            }
+                        }
+                        
+                        if matched_count > 0 {
+                            send_log_to_web_ui(state, device, "success", format!("✅ Matched {} episodes by dialogue", matched_count), Some(operation_id)).await;
+                        } else {
+                            send_log_to_web_ui(state, device, "warning", "⚠️  Speech matching unavailable (need Whisper + OpenAI API)".to_string(), Some(operation_id)).await;
+                        }
+                        
+                        // Step 2: Run Filebot with OCR-enhanced filenames
+                        send_log_to_web_ui(state, device, "info", "🤖 Running Filebot to match with database...".to_string(), Some(operation_id)).await;
+                        
+                        let dvd_dir_clone = dvd_dir.clone();
+                        let show_title = metadata.title.clone();
+                        let state_filebot = state.clone();
+                        let device_filebot = device.to_string();
+                        let operation_id_filebot = operation_id.to_string();
+                        
+                        match crate::filebot::rename_with_filebot(
+                            &dvd_dir_clone,
+                            &show_title,
+                            move |log_msg| {
+                                let state = state_filebot.clone();
+                                let device = device_filebot.clone();
+                                let operation_id = operation_id_filebot.clone();
+                                tokio::spawn(async move {
+                                    send_log_to_web_ui(&state, &device, "info", log_msg, Some(&operation_id)).await;
+                                });
+                            }
+                        ).await {
+                            Ok(_) => {
+                                send_log_to_web_ui(state, device, "success", "✅ Filebot renaming complete".to_string(), Some(operation_id)).await;
+                            }
+                            Err(e) => {
+                                send_log_to_web_ui(state, device, "warning", format!("⚠️  Filebot failed: {}", e), Some(operation_id)).await;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Send notification
+            let disc_type = match media_type {
+                crate::drive::MediaType::BluRay => crate::notifications::DiscType::BluRay,
+                crate::drive::MediaType::DVD => crate::notifications::DiscType::DVD,
+                _ => crate::notifications::DiscType::DVD,
+            };
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, true).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
+            
+            // Start rsync in background for DVD/Blu-ray
+            send_log_to_web_ui(state, device, "info", "📤 Starting rsync to /Volumes/video/RawRips...".to_string(), Some(operation_id)).await;
+            let dvd_dir_clone = dvd_dir.clone();
+            let state_rsync = state.clone();
+            let device_rsync = device.to_string();
+            let operation_id_rsync = operation_id.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = crate::rsync::rsync_to_rawrips_web_ui(&dvd_dir_clone, &state_rsync, &device_rsync, Some(&operation_id_rsync)).await {
+                    tracing::warn!("Rsync failed: {}", e);
+                }
+            });
+            
+            if eject_when_done {
+                crate::drive::eject_disc(device).await?;
+                send_log_to_web_ui(state, device, "info", format!("⏏️  Ejected {}", device), Some(operation_id)).await;
+            }
+            
+            update_operation_progress(state, operation_id, 100.0, "Rip completed successfully".to_string()).await;
+        }
+        Err(e) => {
+            send_log_to_web_ui(state, device, "error", format!("❌ {} rip failed: {}", media_name, e), Some(operation_id)).await;
+            update_operation_progress(state, operation_id, 0.0, format!("Rip failed: {}", e)).await;
+            
+            // Send failure notification
+            let disc_type = match media_type {
+                crate::drive::MediaType::BluRay => crate::notifications::DiscType::BluRay,
+                crate::drive::MediaType::DVD => crate::notifications::DiscType::DVD,
+                _ => crate::notifications::DiscType::DVD,
+            };
+            let disc_info = crate::notifications::DiscInfo {
+                disc_type,
+                title: album_info.clone(),
+                device: device.to_string(),
+            };
+            if let Err(e) = crate::notifications::send_completion_notification(disc_info, false).await {
+                tracing::warn!("Failed to send notification: {}", e);
+            }
+            return Err(e);
+        }
+    }
+    
+    Ok(())
+}
+
+/// Helper to get DVD volume name (extracted from app.rs)
+async fn get_dvd_volume_name(device: &str) -> anyhow::Result<String> {
+    tracing::debug!("Getting volume name for device: {}", device);
+    
+    #[cfg(target_os = "macos")]
+    {
+        get_dvd_volume_name_macos(device).await
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        get_dvd_volume_name_linux(device).await
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        Err(anyhow::anyhow!("Getting volume name not supported on this platform"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn get_dvd_volume_name_macos(device: &str) -> anyhow::Result<String> {
+    let output = tokio::process::Command::new("diskutil")
+        .arg("info")
+        .arg(device)
+        .output()
+        .await?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    tracing::debug!("diskutil info output for volume name extraction:\n{}", stdout);
+    
+    let volume_name = stdout.lines()
+        .find(|line| line.trim().starts_with("Volume Name:"))
+        .and_then(|line| line.split(':').nth(1))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "Not applicable (no file system)")
+        .ok_or_else(|| {
+            tracing::warn!("No 'Volume Name:' field found in diskutil output");
+            anyhow::anyhow!("No volume name found")
+        })?;
+    
+    tracing::debug!("Extracted volume name: {}", volume_name);
+    Ok(volume_name)
+}
+
+#[cfg(target_os = "linux")]
+async fn get_dvd_volume_name_linux(device: &str) -> anyhow::Result<String> {
+    if let Ok(output) = tokio::process::Command::new("lsblk")
+        .arg("-n")
+        .arg("-o")
+        .arg("MOUNTPOINT,LABEL")
+        .arg(device)
+        .output()
+        .await
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let mount = parts[0];
+                let label = parts[1];
+                
+                if mount != "null" && !mount.is_empty() && label != "null" && !label.is_empty() {
+                    tracing::debug!("Found volume label via lsblk: {}", label);
+                    return Ok(label.to_string());
+                }
+            }
+        }
+    }
+    
+    Err(anyhow::anyhow!("No volume name found for device {}", device))
+}
+
+fn create_dummy_metadata() -> crate::metadata::DiscMetadata {
+    let track_count = 10;
+    let tracks: Vec<crate::metadata::Track> = (1..=track_count)
+        .map(|n| crate::metadata::Track {
+            number: n,
+            title: format!("Track {:02}", n),
+            artist: None,
+            duration: None,
+        })
+        .collect();
+
+    crate::metadata::DiscMetadata {
+        artist: "Unknown Artist".to_string(),
+        album: format!("Unknown Album {}", chrono::Local::now().format("%Y-%m-%d")),
+        year: Some(chrono::Local::now().format("%Y").to_string()),
+        genre: None,
+        tracks,
+    }
 }
 
 /// Create upscaling job(s) for ripped video files

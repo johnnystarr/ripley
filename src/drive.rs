@@ -43,43 +43,187 @@ pub async fn detect_drives() -> Result<Vec<DriveInfo>> {
 /// Detect drives on macOS using diskutil and drutil
 #[cfg(target_os = "macos")]
 async fn detect_drives_macos() -> Result<Vec<DriveInfo>> {
-    let output = Command::new("diskutil")
-        .arg("list")
-        .output()
-        .context("Failed to execute diskutil")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut drives = Vec::new();
 
-    // Parse diskutil output to find optical drives
-    for line in stdout.lines() {
-        if line.contains("/dev/disk") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if let Some(device) = parts.first() {
-                let device = device.trim();
-                if is_optical_drive(device).await? {
-                    let media_type = detect_media_type(device).await?;
-                    let has_audio = matches!(media_type, MediaType::AudioCD);
-                    drives.push(DriveInfo {
-                        device: device.to_string(),
-                        name: format!("Drive {}", device),
-                        has_audio_cd: has_audio,
-                        media_type,
-                    });
-                }
-            }
-        }
-    }
-
-    // Also check drutil for more accurate optical drive detection
+    // First, try to use drutil to detect optical drives (more reliable)
+    // drutil can detect drives even when no media is inserted
     let drutil_output = Command::new("drutil")
         .arg("status")
         .output();
 
     if let Ok(output) = drutil_output {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("Type: CD-ROM") || stdout.contains("Type: Audio") {
-            debug!("Found optical drive via drutil");
+        debug!("drutil status output: {}", stdout);
+        
+        // Check if drutil found an optical drive
+        // drutil will show "Vendor" and "Product" headers, and if a drive exists, there will be a data line
+        // The presence of "No Media Inserted" also confirms a drive exists
+        let has_vendor_header = stdout.contains("Vendor");
+        let has_data_line = stdout.lines().any(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() 
+                && !trimmed.starts_with("Vendor") 
+                && !trimmed.starts_with("Product")
+                && !trimmed.starts_with("Type:")
+                && trimmed.len() > 5 // Has actual content
+        });
+        
+        // drutil found an optical drive if it has vendor header AND a data line, OR if it shows "No Media Inserted"
+        if (has_vendor_header && has_data_line) || stdout.contains("No Media Inserted") {
+            // drutil found an optical drive - now find its device path
+            // Try to get device path from diskutil list first
+            let diskutil_output = Command::new("diskutil")
+                .arg("list")
+                .output()
+                .context("Failed to execute diskutil")?;
+
+            let diskutil_stdout = String::from_utf8_lossy(&diskutil_output.stdout);
+            let mut found_drive = false;
+            
+            // Parse diskutil output to find optical drives
+            for line in diskutil_stdout.lines() {
+                if line.contains("/dev/disk") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(device) = parts.first() {
+                        let device = device.trim();
+                        if is_optical_drive(device).await? {
+                            let media_type = detect_media_type(device).await?;
+                            let has_audio = matches!(media_type, MediaType::AudioCD);
+                            
+                            // Try to get a better name from drutil output
+                            let name = if stdout.contains("Product") {
+                                if let Some(product_line) = stdout.lines().find(|l| l.contains("Product")) {
+                                    let parts: Vec<&str> = product_line.split_whitespace().collect();
+                                    if parts.len() >= 2 {
+                                        format!("{} {}", parts[0], parts[1..].join(" "))
+                                    } else {
+                                        format!("Drive {}", device)
+                                    }
+                                } else {
+                                    format!("Drive {}", device)
+                                }
+                            } else {
+                                format!("Drive {}", device)
+                            };
+                            
+                            info!("Detected optical drive: {} ({})", device, name);
+                            drives.push(DriveInfo {
+                                device: device.to_string(),
+                                name,
+                                has_audio_cd: has_audio,
+                                media_type,
+                            });
+                            found_drive = true;
+                        }
+                    }
+                }
+            }
+            
+            // If diskutil didn't find it (no media inserted), create a drive entry anyway
+            // On macOS, optical drives don't appear in diskutil list until media is inserted
+            // But drutil can detect them, so we'll create an entry with a placeholder device path
+            if !found_drive {
+                // Extract product name from drutil output
+                // drutil output format:
+                // Vendor   Product           Rev 
+                // HL-DT-ST BD-RE  WH16NS60   1.02
+                let name = {
+                    let lines: Vec<&str> = stdout.lines().collect();
+                    // Find the line after "Vendor   Product" header (usually line 2)
+                    if lines.len() >= 2 {
+                        let product_line = lines[1].trim();
+                        // Skip empty lines
+                        if !product_line.is_empty() && !product_line.starts_with("Vendor") && !product_line.starts_with("Product") {
+                            // This should be the vendor/product line
+                            let parts: Vec<&str> = product_line.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                // Combine vendor and product (first 2-3 parts)
+                                let product_parts: Vec<String> = parts[1..].iter().take(2).map(|s| s.to_string()).collect();
+                                format!("{} {}", parts[0], product_parts.join(" "))
+                            } else if !parts.is_empty() {
+                                format!("{} Optical Drive", parts[0])
+                            } else {
+                                "Optical Drive".to_string()
+                            }
+                        } else {
+                            "Optical Drive".to_string()
+                        }
+                    } else {
+                        "Optical Drive".to_string()
+                    }
+                };
+                
+                // Use drutil's device identifier if available, otherwise use a placeholder
+                // drutil list shows: "1  HL-DT-ST BD-RE  WH16NS60   1.02  USB       Unsupported"
+                // The first number is the drive ID, but we need the actual /dev/disk path
+                // Since diskutil doesn't show it without media, we'll use a placeholder
+                // When media is inserted, the real device will appear in diskutil list
+                let device = {
+                    // Try to extract drive number from drutil list if available
+                    let drutil_list = Command::new("drutil")
+                        .arg("list")
+                        .output();
+                    
+                    if let Ok(list_output) = drutil_list {
+                        let list_stdout = String::from_utf8_lossy(&list_output.stdout);
+                        // drutil list format: "1  HL-DT-ST BD-RE  WH16NS60   1.02  USB       Unsupported"
+                        if let Some(first_line) = list_stdout.lines().skip(1).next() {
+                            if let Some(drive_num) = first_line.split_whitespace().next() {
+                                if let Ok(num) = drive_num.parse::<u32>() {
+                                    // Try /dev/disk{num} as a guess (often works for external drives)
+                                    format!("/dev/disk{}", num)
+                                } else {
+                                    "/dev/disk999".to_string() // Fallback placeholder
+                                }
+                            } else {
+                                "/dev/disk999".to_string()
+                            }
+                        } else {
+                            "/dev/disk999".to_string()
+                        }
+                    } else {
+                        "/dev/disk999".to_string()
+                    }
+                };
+                
+                info!("Detected optical drive (no media, using placeholder): {} ({})", device, name);
+                drives.push(DriveInfo {
+                    device,
+                    name,
+                    has_audio_cd: false,
+                    media_type: MediaType::None,
+                });
+            }
+        }
+    }
+
+    // Fallback: if drutil didn't work, try the original diskutil-only approach
+    if drives.is_empty() {
+        let output = Command::new("diskutil")
+            .arg("list")
+            .output()
+            .context("Failed to execute diskutil")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        // Parse diskutil output to find optical drives
+        for line in stdout.lines() {
+            if line.contains("/dev/disk") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(device) = parts.first() {
+                    let device = device.trim();
+                    if is_optical_drive(device).await? {
+                        let media_type = detect_media_type(device).await?;
+                        let has_audio = matches!(media_type, MediaType::AudioCD);
+                        drives.push(DriveInfo {
+                            device: device.to_string(),
+                            name: format!("Drive {}", device),
+                            has_audio_cd: has_audio,
+                            media_type,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -190,16 +334,28 @@ async fn is_optical_drive(device: &str) -> Result<bool> {
 /// Check if a device is an optical drive on macOS
 #[cfg(target_os = "macos")]
 async fn is_optical_drive_macos(device: &str) -> Result<bool> {
+    // Special case: if device is our placeholder, it's an optical drive (detected via drutil)
+    if device == "/dev/disk999" {
+        return Ok(true);
+    }
+    
     let output = Command::new("diskutil")
         .arg("info")
         .arg(device)
-        .output()
-        .context("Failed to get disk info")?;
+        .output();
+    
+    // If diskutil fails (device doesn't exist), it's not an optical drive (unless it's our placeholder)
+    let output = match output {
+        Ok(o) => o,
+        Err(_) => return Ok(false),
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.contains("CD-ROM") || 
        stdout.contains("DVD") || 
-       stdout.contains("Optical"))
+       stdout.contains("Optical") ||
+       stdout.contains("BD-RE") ||
+       stdout.contains("Blu-ray"))
 }
 
 /// Check if a device is an optical drive on Linux
