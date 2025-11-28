@@ -242,6 +242,8 @@ pub struct AgentInfo {
     pub topaz_version: Option<String>,
     pub output_location: Option<String>,
     pub created_at: String,
+    pub os_version: Option<String>,
+    pub os_arch: Option<String>,
 }
 
 /// Topaz Video AI profile
@@ -1109,7 +1111,66 @@ impl Database {
                 params![10, "add_retry_count_to_upscaling_jobs", chrono::Utc::now().to_rfc3339()],
             )?;
         }
-        
+
+        // Migration 11: Add OS details to agents table
+        if current_version < 11 {
+            info!("Applying migration 11: add_os_details_to_agents");
+            
+            let os_version_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='os_version'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if os_version_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN os_version TEXT",
+                    [],
+                )?;
+            }
+            
+            let os_arch_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agents') WHERE name='os_arch'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if os_arch_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN os_arch TEXT",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![11, "add_os_details_to_agents", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
+        // Migration 12: Add output column to agent_instructions table
+        if current_version < 12 {
+            info!("Applying migration 12: add_output_to_agent_instructions");
+            
+            let output_exists: Result<i64, _> = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('agent_instructions') WHERE name='output'",
+                [],
+                |row| row.get(0),
+            );
+            
+            if output_exists.unwrap_or(0) == 0 {
+                conn.execute(
+                    "ALTER TABLE agent_instructions ADD COLUMN output TEXT",
+                    [],
+                )?;
+            }
+            
+            conn.execute(
+                "INSERT INTO migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![12, "add_output_to_agent_instructions", chrono::Utc::now().to_rfc3339()],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -1323,6 +1384,8 @@ impl Database {
         capabilities: Option<&str>,
         topaz_version: Option<&str>,
         api_key: Option<&str>,
+        os_version: Option<&str>,
+        os_arch: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
@@ -1338,8 +1401,8 @@ impl Database {
             // Update existing agent
             conn.execute(
                 "UPDATE agents SET name = ?1, platform = ?2, ip_address = ?3, status = 'online', 
-                 last_seen = ?4, capabilities = ?5, topaz_version = ?6, api_key = ?7
-                 WHERE agent_id = ?8",
+                 last_seen = ?4, capabilities = ?5, topaz_version = ?6, api_key = ?7, os_version = ?8, os_arch = ?9
+                 WHERE agent_id = ?10",
                 params![
                     name,
                     platform,
@@ -1348,15 +1411,17 @@ impl Database {
                     capabilities,
                     topaz_version,
                     api_key,
+                    os_version,
+                    os_arch,
                     agent_id
                 ],
             )?;
         } else {
             // Insert new agent
             conn.execute(
-                "INSERT INTO agents (agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, api_key, created_at)
-                 VALUES (?1, ?2, ?3, ?4, 'online', ?5, ?6, ?7, ?8, ?9)",
-                params![agent_id, name, platform, ip_address, now, capabilities, topaz_version, api_key, now],
+                "INSERT INTO agents (agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, api_key, os_version, os_arch, created_at)
+                 VALUES (?1, ?2, ?3, ?4, 'online', ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![agent_id, name, platform, ip_address, now, capabilities, topaz_version, api_key, os_version, os_arch, now],
             )?;
         }
 
@@ -1387,7 +1452,7 @@ impl Database {
     pub fn get_agents(&self) -> Result<Vec<AgentInfo>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at
+            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at, os_version, os_arch
              FROM agents
              ORDER BY last_seen DESC"
         )?;
@@ -1405,6 +1470,8 @@ impl Database {
                 topaz_version: row.get(8)?,
                 output_location: row.get(9)?,
                 created_at: row.get(10)?,
+                os_version: row.get(11)?,
+                os_arch: row.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1417,7 +1484,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         
         let mut stmt = conn.prepare(
-            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at
+            "SELECT id, agent_id, name, platform, ip_address, status, last_seen, capabilities, topaz_version, output_location, created_at, os_version, os_arch
              FROM agents
              WHERE agent_id = ?1"
         )?;
@@ -1435,6 +1502,8 @@ impl Database {
                 topaz_version: row.get(8)?,
                 output_location: row.get(9)?,
                 created_at: row.get(10)?,
+                os_version: row.get(11)?,
+                os_arch: row.get(12)?,
             })
         }) {
             Ok(agent) => Some(agent),
@@ -1443,6 +1512,18 @@ impl Database {
         };
 
         Ok(agent)
+    }
+
+    /// Delete an agent
+    pub fn delete_agent(&self, agent_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        
+        conn.execute(
+            "DELETE FROM agents WHERE agent_id = ?1",
+            params![agent_id],
+        )?;
+        
+        Ok(())
     }
 
     /// Update agent output location
@@ -1455,6 +1536,42 @@ impl Database {
         )?;
         
         Ok(())
+    }
+
+    /// Get instruction by ID
+    pub fn get_instruction(&self, instruction_id: i64) -> Result<Option<serde_json::Value>> {
+        let conn = self.conn.lock().unwrap();
+        
+        let mut stmt = conn.prepare(
+            "SELECT id, instruction_type, payload, status, assigned_to_agent_id, created_at, started_at, completed_at, error_message, output
+             FROM agent_instructions
+             WHERE id = ?1"
+        )?;
+        
+        let instruction = match stmt.query_row(params![instruction_id], |row| {
+            let payload_str: String = row.get(2)?;
+            let payload: serde_json::Value = serde_json::from_str(&payload_str)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            
+            Ok(serde_json::json!({
+                "id": row.get::<_, i64>(0)?,
+                "instruction_type": row.get::<_, String>(1)?,
+                "payload": payload,
+                "status": row.get::<_, String>(3)?,
+                "assigned_to_agent_id": row.get::<_, Option<String>>(4)?,
+                "created_at": row.get::<_, String>(5)?,
+                "started_at": row.get::<_, Option<String>>(6)?,
+                "completed_at": row.get::<_, Option<String>>(7)?,
+                "error_message": row.get::<_, Option<String>>(8)?,
+                "output": row.get::<_, Option<String>>(9)?,
+            }))
+        }) {
+            Ok(inst) => Some(inst),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(anyhow::anyhow!("Database error: {}", e)),
+        };
+        
+        Ok(instruction)
     }
 
     /// Get pending instructions for an agent (or any available agent)
@@ -1493,6 +1610,7 @@ impl Database {
                     "status": row.get::<_, String>(3)?,
                     "assigned_to_agent_id": row.get::<_, Option<String>>(4)?,
                     "created_at": row.get::<_, String>(5)?,
+                    "output": None::<String>, // Output not included in pending instructions query
                 }))
             })?
             .collect::<Result<Vec<_>, _>>()?
@@ -1509,6 +1627,7 @@ impl Database {
                     "status": row.get::<_, String>(3)?,
                     "assigned_to_agent_id": row.get::<_, Option<String>>(4)?,
                     "created_at": row.get::<_, String>(5)?,
+                    "output": None::<String>, // Output not included in pending instructions query
                 }))
             })?
             .collect::<Result<Vec<_>, _>>()?
@@ -1567,15 +1686,15 @@ impl Database {
     }
 
     /// Mark instruction as completed
-    pub fn complete_instruction(&self, instruction_id: i64) -> Result<()> {
+    pub fn complete_instruction(&self, instruction_id: i64, output: Option<&str>) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         
         conn.execute(
             "UPDATE agent_instructions 
-             SET status = 'completed', completed_at = ?1
-             WHERE id = ?2",
-            params![now, instruction_id],
+             SET status = 'completed', completed_at = ?1, output = ?2
+             WHERE id = ?3",
+            params![now, output, instruction_id],
         )?;
         
         Ok(())

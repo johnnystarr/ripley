@@ -260,13 +260,30 @@ impl TuiApp {
                 }
             }
             
-            // Update instructions if connected
+            // Update instructions if connected and process test commands
             if let Some(ref client) = self.agent_client {
                 match client.get_instructions().await {
                     Ok(instructions) => {
                         self.instructions = instructions.iter()
                             .map(|i| format!("[{}] {} - {}", i.id, i.instruction_type, i.status))
                             .collect();
+                        
+                        // Process pending test_command instructions
+                        for instruction in instructions {
+                            if instruction.instruction_type == "test_command" && instruction.status == "pending" {
+                                if let Some(command) = instruction.payload.get("command").and_then(|v| v.as_str()) {
+                                    let client_clone = client.clone();
+                                    let instruction_id = instruction.id;
+                                    let command_str = command.to_string();
+                                    
+                                    tokio::spawn(async move {
+                                        if let Err(e) = client_clone.process_test_command(instruction_id, &command_str).await {
+                                            tracing::error!("Failed to process test command: {}", e);
+                                        }
+                                    });
+                                }
+                            }
+                        }
                     }
                     Err(_e) => {
                         // Don't spam error messages

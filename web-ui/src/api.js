@@ -313,6 +313,23 @@ class ApiClient {
   async getAgents() {
     return this.request('/agents');
   }
+
+  async deleteAgent(agentId) {
+    return this.request(`/agents/${agentId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async testAgentCommand(agentId, command) {
+    return this.request(`/agents/${agentId}/test`, {
+      method: 'POST',
+      body: JSON.stringify({ command }),
+    });
+  }
+
+  async getInstruction(instructionId) {
+    return this.request(`/agents/instructions/${instructionId}`);
+  }
   
   async getAgentOutputLocation(agentId) {
     return this.request(`/agents/${agentId}/output-location`);

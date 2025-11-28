@@ -22,11 +22,13 @@ import {
   faChevronUp,
   faPowerOff,
   faHistory,
+  faTerminal,
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
 import { wsManager } from '../websocket';
 import Dropdown from '../components/Dropdown';
+import TestCommandModal from '../components/TestCommandModal';
 
 function formatRelativeTime(dateString) {
   if (!dateString) return 'Never';
@@ -62,6 +64,7 @@ export default function Agents() {
   const [editingOutputLocation, setEditingOutputLocation] = useState(null);
   const [outputLocationValue, setOutputLocationValue] = useState('');
   const [expandedJob, setExpandedJob] = useState(null);
+  const [testCommandModal, setTestCommandModal] = useState({ isOpen: false, agentId: null, agentName: null });
 
   // Fetch data on mount
   useEffect(() => {
@@ -291,6 +294,24 @@ export default function Agents() {
     }
   }, [fetchAgents]);
 
+  const handleDeleteAgent = useCallback(async (agentId) => {
+    if (!window.confirm('Are you sure you want to delete this agent? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      await api.deleteAgent(agentId);
+      toast.success('Agent deleted');
+      fetchAgents();
+    } catch (err) {
+      toast.error('Failed to delete agent: ' + err.message);
+    }
+  }, [fetchAgents]);
+
+  const handleTestAgent = useCallback((agentId, agentName) => {
+    setTestCommandModal({ isOpen: true, agentId, agentName });
+  }, []);
+
   const activeJobs = jobs.filter(job => job.status === 'processing' || job.status === 'assigned');
   const onlineAgents = agents.filter(agent => agent.status === 'online');
   const busyAgents = agents.filter(agent => agent.status === 'busy');
@@ -397,6 +418,12 @@ export default function Agents() {
                           {agent.ip_address && (
                             <div>IP: <span className="text-slate-400">{agent.ip_address}</span></div>
                           )}
+                          {agent.os_version && (
+                            <div>OS: <span className="text-slate-400">{agent.os_version}</span></div>
+                          )}
+                          {agent.os_arch && (
+                            <div>Architecture: <span className="text-slate-400">{agent.os_arch}</span></div>
+                          )}
                           {agent.topaz_version && (
                             <div>Topaz Video AI: <span className="text-cyan-400">{agent.topaz_version}</span></div>
                           )}
@@ -449,14 +476,30 @@ export default function Agents() {
                           {formatRelativeTime(agent.last_seen)}
                         </span>
                         {agent.status === 'online' && (
-                          <button
-                            onClick={() => handleDisconnectAgent(agent.agent_id)}
-                            className="px-2 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
-                            title="Disconnect agent"
-                          >
-                            <FontAwesomeIcon icon={faPowerOff} />
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleTestAgent(agent.agent_id, agent.name)}
+                              className="px-2 py-1 text-xs bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 rounded transition-colors"
+                              title="Test agent command"
+                            >
+                              <FontAwesomeIcon icon={faTerminal} />
+                            </button>
+                            <button
+                              onClick={() => handleDisconnectAgent(agent.agent_id)}
+                              className="px-2 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                              title="Disconnect agent"
+                            >
+                              <FontAwesomeIcon icon={faPowerOff} />
+                            </button>
+                          </>
                         )}
+                        <button
+                          onClick={() => handleDeleteAgent(agent.agent_id)}
+                          className="px-2 py-1 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                          title="Delete agent"
+                        >
+                          <FontAwesomeIcon icon={faTrash} />
+                        </button>
                         <button
                           onClick={() => setExpandedAgent(isExpanded ? null : agent.agent_id)}
                           className="text-slate-400 hover:text-slate-300 transition-colors"
@@ -749,23 +792,24 @@ export default function Agents() {
                       
                       {addingShowToProfile === profile.id && (
                         <div className="mb-3 p-3 bg-slate-900/50 rounded border border-slate-700">
-                          <select
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                handleAssociateShow(profile.id, parseInt(e.target.value));
+                          <Dropdown
+                            value=""
+                            options={[
+                              { value: '', label: 'Select a show...' },
+                              ...shows
+                                .filter(s => !associatedShowIds.includes(s.id))
+                                .map(show => ({
+                                  value: show.id.toString(),
+                                  label: show.name,
+                                }))
+                            ]}
+                            onChange={(value) => {
+                              if (value) {
+                                handleAssociateShow(profile.id, parseInt(value));
                                 setAddingShowToProfile(null);
                               }
                             }}
-                            className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-                            defaultValue=""
-                          >
-                            <option value="">Select a show...</option>
-                            {shows
-                              .filter(s => !associatedShowIds.includes(s.id))
-                              .map(show => (
-                                <option key={show.id} value={show.id}>{show.name}</option>
-                              ))}
-                          </select>
+                          />
                         </div>
                       )}
 
@@ -1000,6 +1044,14 @@ export default function Agents() {
           )}
         </div>
       )}
+
+      {/* Test Command Modal */}
+      <TestCommandModal
+        agentId={testCommandModal.agentId}
+        agentName={testCommandModal.agentName}
+        isOpen={testCommandModal.isOpen}
+        onClose={() => setTestCommandModal({ isOpen: false, agentId: null, agentName: null })}
+      />
     </div>
   );
 }

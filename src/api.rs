@@ -597,11 +597,14 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/agents/:agent_id/output-location", get(get_agent_output_location))
         .route("/agents/:agent_id/output-location", put(update_agent_output_location))
         .route("/agents/:agent_id/disconnect", post(disconnect_agent))
+        .route("/agents/:agent_id", delete(delete_agent))
+        .route("/agents/:agent_id/test", post(test_agent_command))
         .route("/agents/instructions", post(create_instruction))
         .route("/agents/instructions/:id/assign", post(assign_instruction))
         .route("/agents/instructions/:id/start", post(start_instruction))
         .route("/agents/instructions/:id/complete", post(complete_instruction))
         .route("/agents/instructions/:id/fail", post(fail_instruction))
+        .route("/agents/instructions/:id", get(get_instruction))
         .route("/agents/upload", post(upload_file))
         .route("/agents/download/:file_id", get(download_file))
         // Topaz Profile endpoints
@@ -1275,46 +1278,53 @@ async fn create_upscaling_job_for_rip(
         state.db.get_last_show_id().ok().flatten()
     };
     
-    // Get Topaz profile for the show
-    let profile_id = if let Some(sid) = show_id {
+    // Get Topaz profiles for the show
+    let profiles = if let Some(sid) = show_id {
         match state.db.get_profiles_for_show(sid) {
-            Ok(profiles) => profiles.first().and_then(|p| p.id),
+            Ok(profiles) => profiles,
             Err(e) => {
                 tracing::debug!("Failed to get profiles for show {}: {}", sid, e);
-                None
+                Vec::new()
             }
         }
     } else {
-        None
+        Vec::new()
     };
     
-    if profile_id.is_none() {
-        tracing::debug!("No Topaz profile found for show - skipping upscaling job creation");
-        return Ok(()); // No profile associated - skip upscaling
+    if profiles.is_empty() {
+        tracing::debug!("No Topaz profiles found for show - skipping upscaling job creation");
+        return Ok(()); // No profiles associated - skip upscaling
     }
     
-    // Create upscaling job for each MKV file
+    // Create upscaling job for each MKV file with each profile
     for mkv_file in mkv_files {
         let file_path = mkv_file.to_string_lossy().to_string();
-        let job_id = format!("upscale_{}_{}", 
-            std::path::Path::new(&file_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown"),
-            chrono::Utc::now().timestamp());
+        let file_stem = std::path::Path::new(&file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
         
-        match state.db.create_upscaling_job(
-            &job_id,
-            &file_path,
-            show_id,
-            profile_id,
-            0, // Default priority
-        ) {
-            Ok(_) => {
-                tracing::info!("Created upscaling job {} for {}", job_id, file_path);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to create upscaling job for {}: {}", file_path, e);
+        for profile in &profiles {
+            if let Some(profile_id) = profile.id {
+                let job_id = format!("upscale_{}_{}_{}", 
+                    file_stem,
+                    profile_id,
+                    chrono::Utc::now().timestamp());
+                
+                match state.db.create_upscaling_job(
+                    &job_id,
+                    &file_path,
+                    show_id,
+                    Some(profile_id),
+                    0, // Default priority
+                ) {
+                    Ok(_) => {
+                        tracing::info!("Created upscaling job {} for {} with profile {}", job_id, file_path, profile.name);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to create upscaling job for {} with profile {}: {}", file_path, profile.name, e);
+                    }
+                }
             }
         }
     }
@@ -2206,6 +2216,8 @@ struct AgentRegistrationRequest {
     capabilities: Option<String>,
     topaz_version: Option<String>,
     api_key: Option<String>,
+    os_version: Option<String>,
+    os_arch: Option<String>,
 }
 
 /// Register a new agent or update existing agent
@@ -2224,6 +2236,8 @@ async fn register_agent(
         request.capabilities.as_deref(),
         request.topaz_version.as_deref(),
         request.api_key.as_deref(),
+        request.os_version.as_deref(),
+        request.os_arch.as_deref(),
     ) {
         Ok(_) => {
             info!("Agent registered: {} ({})", request.name, request.agent_id);
@@ -2368,7 +2382,7 @@ async fn disconnect_agent(
     State(state): State<ApiState>,
     axum::extract::Path(agent_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
-    match state.db.disconnect_agent(&agent_id) {
+    match state.db.update_agent_heartbeat(&agent_id, Some("offline")) {
         Ok(_) => {
             // Broadcast agent status change via WebSocket
             let _ = state.event_tx.send(ApiEvent::AgentStatusChanged {
@@ -2386,6 +2400,74 @@ async fn disconnect_agent(
         }
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to disconnect agent: {}", e),
+        }),
+    }
+}
+
+/// Delete an agent
+async fn delete_agent(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.delete_agent(&agent_id) {
+        Ok(_) => {
+            // Broadcast agent status change via WebSocket
+            let _ = state.event_tx.send(ApiEvent::AgentStatusChanged {
+                agent_id: agent_id.clone(),
+                status: "deleted".to_string(),
+                last_seen: chrono::Utc::now().to_rfc3339(),
+                operation_id: None,
+            });
+            
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "agent_id": agent_id,
+                "message": "Agent deleted"
+            })))
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to delete agent: {}", e),
+        }),
+    }
+}
+
+/// Test command request
+#[derive(Debug, Deserialize)]
+struct TestCommandRequest {
+    command: String,
+}
+
+/// Test agent command (for validation)
+async fn test_agent_command(
+    State(state): State<ApiState>,
+    axum::extract::Path(agent_id): axum::extract::Path<String>,
+    Json(request): Json<TestCommandRequest>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    // Create a test instruction for the agent
+    let payload = serde_json::json!({
+        "command": request.command,
+        "test": true,
+    });
+    
+    match state.db.create_instruction("test_command", &payload) {
+        Ok(instruction_id) => {
+            // Assign to the specific agent
+            match state.db.assign_instruction_to_agent(instruction_id, &agent_id) {
+                Ok(_) => {
+                    Ok(Json(serde_json::json!({
+                        "success": true,
+                        "instruction_id": instruction_id,
+                        "agent_id": agent_id,
+                        "message": "Test command sent to agent"
+                    })))
+                }
+                Err(e) => Err(ErrorResponse {
+                    error: format!("Failed to assign test command: {}", e),
+                }),
+            }
+        }
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to create test command: {}", e),
         }),
     }
 }
@@ -2451,18 +2533,41 @@ async fn start_instruction(
     }
 }
 
+/// Complete instruction request
+#[derive(Debug, Deserialize)]
+struct CompleteInstructionRequest {
+    output: Option<String>,
+}
+
 /// Mark instruction as completed
 async fn complete_instruction(
     State(state): State<ApiState>,
     axum::extract::Path(instruction_id): axum::extract::Path<i64>,
+    Json(request): Json<CompleteInstructionRequest>,
 ) -> Result<Json<serde_json::Value>, ErrorResponse> {
-    match state.db.complete_instruction(instruction_id) {
+    match state.db.complete_instruction(instruction_id, request.output.as_deref()) {
         Ok(_) => Ok(Json(serde_json::json!({
             "success": true,
             "instruction_id": instruction_id
         }))),
         Err(e) => Err(ErrorResponse {
             error: format!("Failed to complete instruction: {}", e),
+        }),
+    }
+}
+
+/// Get instruction by ID
+async fn get_instruction(
+    State(state): State<ApiState>,
+    axum::extract::Path(instruction_id): axum::extract::Path<i64>,
+) -> Result<Json<serde_json::Value>, ErrorResponse> {
+    match state.db.get_instruction(instruction_id) {
+        Ok(Some(instruction)) => Ok(Json(instruction)),
+        Ok(None) => Err(ErrorResponse {
+            error: "Instruction not found".to_string(),
+        }),
+        Err(e) => Err(ErrorResponse {
+            error: format!("Failed to get instruction: {}", e),
         }),
     }
 }

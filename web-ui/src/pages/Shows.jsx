@@ -19,6 +19,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import toast from 'react-hot-toast';
 import { api } from '../api';
+import Dropdown from '../components/Dropdown';
 
 // Helper function to format relative time
 function formatRelativeTime(dateString) {
@@ -48,6 +49,7 @@ export default function Shows() {
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
+  const [editingProfiles, setEditingProfiles] = useState([]); // Array of profile IDs being edited
   const [selectedShowId, setSelectedShowId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('name-asc'); // name-asc, name-desc, date-asc, date-desc, last-used-asc, last-used-desc
@@ -55,11 +57,47 @@ export default function Shows() {
   const [bulkMode, setBulkMode] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(25);
+  const [profiles, setProfiles] = useState([]);
+  const [showProfiles, setShowProfiles] = useState({}); // show_id -> [profile_ids]
+  const [newShowProfiles, setNewShowProfiles] = useState([]); // Array of profile IDs for new show
 
   useEffect(() => {
     fetchShows();
     fetchLastShow();
+    fetchProfiles();
   }, []);
+
+  useEffect(() => {
+    // Fetch profiles for all shows when shows or profiles change
+    if (shows.length > 0 && profiles.length > 0) {
+      fetchShowProfiles();
+    }
+  }, [shows, profiles]);
+
+  const fetchProfiles = useCallback(async () => {
+    try {
+      const data = await api.getTopazProfiles();
+      setProfiles(data);
+    } catch (err) {
+      console.error('Failed to fetch profiles:', err);
+    }
+  }, []);
+
+  const fetchShowProfiles = useCallback(async () => {
+    const profilesMap = {};
+    for (const show of shows) {
+      if (show.id) {
+        try {
+          const showProfiles = await api.getProfilesForShow(show.id);
+          profilesMap[show.id] = showProfiles.map(p => p.id).filter(Boolean);
+        } catch (err) {
+          // Show might not have any profiles, which is fine
+          profilesMap[show.id] = [];
+        }
+      }
+    }
+    setShowProfiles(profilesMap);
+  }, [shows]);
 
   const fetchShows = useCallback(async () => {
     try {
@@ -96,15 +134,26 @@ export default function Shows() {
     }
 
     try {
-      await api.createShow(newShowName.trim());
+      // Create the show
+      const newShow = await api.createShow(newShowName.trim());
+      
+      // Associate profiles if any selected
+      if (newShowProfiles.length > 0 && newShow && newShow.id) {
+        for (const profileId of newShowProfiles) {
+          await api.associateProfileWithShow(profileId, newShow.id);
+        }
+      }
+      
       toast.success('Show added');
       setNewShowName('');
+      setNewShowProfiles([]);
       setIsAdding(false);
       fetchShows();
+      fetchShowProfiles();
     } catch (err) {
       toast.error('Failed to add show: ' + err.message);
     }
-  }, [newShowName, fetchShows]);
+  }, [newShowName, newShowProfiles, fetchShows, fetchShowProfiles]);
 
   const handleUpdateShow = useCallback(async (id) => {
     if (!editingName.trim()) {
@@ -113,15 +162,36 @@ export default function Shows() {
     }
 
     try {
+      // Update show name
       await api.updateShow(id, editingName.trim());
+      
+      // Update profile associations
+      const currentProfileIds = showProfiles[id] || [];
+      
+      // Remove profiles that are no longer selected
+      for (const profileId of currentProfileIds) {
+        if (!editingProfiles.includes(profileId)) {
+          await api.removeProfileFromShow(profileId, id);
+        }
+      }
+      
+      // Add new profiles
+      for (const profileId of editingProfiles) {
+        if (!currentProfileIds.includes(profileId)) {
+          await api.associateProfileWithShow(profileId, id);
+        }
+      }
+      
       toast.success('Show updated');
       setEditingId(null);
       setEditingName('');
+      setEditingProfiles([]);
       fetchShows();
+      fetchShowProfiles();
     } catch (err) {
       toast.error('Failed to update show: ' + err.message);
     }
-  }, [editingName, fetchShows]);
+  }, [editingName, editingProfiles, showProfiles, fetchShows, fetchShowProfiles]);
 
   const handleDeleteShow = useCallback(async (id, name) => {
     if (!confirm(`Delete "${name}"?`)) {
@@ -236,11 +306,15 @@ export default function Shows() {
   const startEdit = useCallback((show) => {
     setEditingId(show.id);
     setEditingName(show.name);
-  }, []);
+    // Load current profiles for this show
+    const currentProfileIds = showProfiles[show.id] || [];
+    setEditingProfiles([...currentProfileIds]);
+  }, [showProfiles]);
 
   const cancelEdit = useCallback(() => {
     setEditingId(null);
     setEditingName('');
+    setEditingProfiles([]);
   }, []);
 
   // Filter and sort shows
@@ -307,6 +381,7 @@ export default function Shows() {
       setSelectedShows(newSelected);
     }
   }, [selectedShows, paginatedShows]);
+
 
   if (loading) {
     return (
@@ -417,51 +492,108 @@ export default function Shows() {
               </button>
             )}
           </div>
-          <select
+          <Dropdown
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="px-4 py-3 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors sm:w-auto w-full"
-          >
-            <option value="name-asc">Name (A-Z)</option>
-            <option value="name-desc">Name (Z-A)</option>
-            <option value="date-desc">Newest First</option>
-            <option value="date-asc">Oldest First</option>
-            <option value="last-used-desc">Recently Used</option>
-            <option value="last-used-asc">Least Used</option>
-          </select>
+            options={[
+              { value: 'name-asc', label: 'Name (A-Z)' },
+              { value: 'name-desc', label: 'Name (Z-A)' },
+              { value: 'date-desc', label: 'Newest First' },
+              { value: 'date-asc', label: 'Oldest First' },
+              { value: 'last-used-desc', label: 'Recently Used' },
+              { value: 'last-used-asc', label: 'Least Used' },
+            ]}
+            onChange={setSortBy}
+            className="sm:w-auto w-full"
+          />
         </div>
       )}
 
       {/* Add New Show */}
       {isAdding && (
         <div className="bg-slate-800 rounded-lg p-5 border border-cyan-500">
-          <h2 className="text-lg font-semibold text-slate-100 mb-3">Add New Show</h2>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={newShowName}
-              onChange={(e) => setNewShowName(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleAddShow()}
-              placeholder="e.g., Foster's Home for Imaginary Friends"
-              className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
-              autoFocus
-            />
-            <button
-              onClick={handleAddShow}
-              className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
-            >
-              <FontAwesomeIcon icon={faSave} className="mr-2" />
-              Save
-            </button>
-            <button
-              onClick={() => {
-                setIsAdding(false);
-                setNewShowName('');
-              }}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-            >
-              <FontAwesomeIcon icon={faTimes} />
-            </button>
+          <h2 className="text-lg font-semibold text-slate-100 mb-4">Add New Show</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Show Name *</label>
+              <input
+                type="text"
+                value={newShowName}
+                onChange={(e) => setNewShowName(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleAddShow()}
+                placeholder="e.g., Foster's Home for Imaginary Friends"
+                className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                autoFocus
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-2">Topaz Profiles (Optional)</label>
+              <div className="space-y-2">
+                {/* Selected profiles as badges */}
+                {newShowProfiles.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {profiles
+                      .filter(p => newShowProfiles.includes(p.id))
+                      .map(profile => (
+                        <span
+                          key={profile.id}
+                          className="inline-flex items-center gap-1 px-3 py-1 bg-cyan-500/20 text-cyan-300 rounded-full text-sm border border-cyan-500/30"
+                        >
+                          {profile.name}
+                          <button
+                            onClick={() => setNewShowProfiles(prev => prev.filter(id => id !== profile.id))}
+                            className="text-cyan-300 hover:text-cyan-100 transition-colors"
+                          >
+                            <FontAwesomeIcon icon={faTimes} className="text-xs" />
+                          </button>
+                        </span>
+                      ))}
+                  </div>
+                )}
+                
+                {/* Dropdown to add profiles */}
+                <Dropdown
+                  value=""
+                  options={[
+                    { value: '', label: 'Add a profile...' },
+                    ...profiles
+                      .filter(p => !newShowProfiles.includes(p.id))
+                      .map(profile => ({
+                        value: profile.id.toString(),
+                        label: profile.name,
+                      }))
+                  ]}
+                  onChange={(value) => {
+                    if (value) {
+                      setNewShowProfiles(prev => [...prev, parseInt(value)]);
+                    }
+                  }}
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Selected profiles will automatically run upscaling jobs after ripping this show.
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex gap-2">
+              <button
+                onClick={handleAddShow}
+                className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
+              >
+                <FontAwesomeIcon icon={faSave} className="mr-2" />
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setIsAdding(false);
+                  setNewShowName('');
+                  setNewShowProfiles([]);
+                }}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+              >
+                <FontAwesomeIcon icon={faTimes} />
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -518,70 +650,141 @@ export default function Shows() {
                   )}
                   <div className="flex-1">
                     {editingId === show.id ? (
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={editingName}
-                    onChange={(e) => setEditingName(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleUpdateShow(show.id)}
-                    className="flex-1 px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
-                    autoFocus
-                  />
-                  <button
-                    onClick={() => handleUpdateShow(show.id)}
-                    className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
-                  >
-                    <FontAwesomeIcon icon={faSave} />
-                  </button>
-                  <button
-                    onClick={cancelEdit}
-                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-                  >
-                    <FontAwesomeIcon icon={faTimes} />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3 flex-1">
-                    {selectedShowId === show.id && (
-                      <FontAwesomeIcon
-                        icon={faCheck}
-                        className="text-cyan-400 text-lg"
-                      />
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">Show Name *</label>
+                          <input
+                            type="text"
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && handleUpdateShow(show.id)}
+                            className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500"
+                            autoFocus
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-slate-300 mb-2">Topaz Profiles (Optional)</label>
+                          <div className="space-y-2">
+                            {/* Selected profiles as badges */}
+                            {editingProfiles.length > 0 && (
+                              <div className="flex flex-wrap gap-2 mb-2">
+                                {profiles
+                                  .filter(p => editingProfiles.includes(p.id))
+                                  .map(profile => (
+                                    <span
+                                      key={profile.id}
+                                      className="inline-flex items-center gap-1 px-3 py-1 bg-cyan-500/20 text-cyan-300 rounded-full text-sm border border-cyan-500/30"
+                                    >
+                                      {profile.name}
+                                      <button
+                                        onClick={() => setEditingProfiles(prev => prev.filter(id => id !== profile.id))}
+                                        className="text-cyan-300 hover:text-cyan-100 transition-colors"
+                                      >
+                                        <FontAwesomeIcon icon={faTimes} className="text-xs" />
+                                      </button>
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
+                            
+                            {/* Dropdown to add profiles */}
+                            <Dropdown
+                              value=""
+                              options={[
+                                { value: '', label: 'Add a profile...' },
+                                ...profiles
+                                  .filter(p => !editingProfiles.includes(p.id))
+                                  .map(profile => ({
+                                    value: profile.id.toString(),
+                                    label: profile.name,
+                                  }))
+                              ]}
+                              onChange={(value) => {
+                                if (value) {
+                                  setEditingProfiles(prev => [...prev, parseInt(value)]);
+                                }
+                              }}
+                            />
+                            <p className="text-xs text-slate-500 mt-1">
+                              Selected profiles will automatically run upscaling jobs after ripping this show.
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleUpdateShow(show.id)}
+                            className="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-lg transition-colors"
+                          >
+                            <FontAwesomeIcon icon={faSave} className="mr-2" />
+                            Save
+                          </button>
+                          <button
+                            onClick={cancelEdit}
+                            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
+                          >
+                            <FontAwesomeIcon icon={faTimes} />
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3 flex-1">
+                          {selectedShowId === show.id && (
+                            <FontAwesomeIcon
+                              icon={faCheck}
+                              className="text-cyan-400 text-lg"
+                            />
+                          )}
+                          <div className="flex flex-col flex-1">
+                            <span className="text-slate-100 font-medium text-lg">
+                              {show.name}
+                            </span>
+                            <span className="text-slate-500 text-xs mt-0.5">
+                              Last used: {formatRelativeTime(show.last_used_at)}
+                            </span>
+                            {/* Profile badges */}
+                            {(showProfiles[show.id] || []).length > 0 && (
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                {profiles
+                                  .filter(p => (showProfiles[show.id] || []).includes(p.id))
+                                  .map(profile => (
+                                    <span
+                                      key={profile.id}
+                                      className="inline-flex items-center px-2 py-0.5 bg-cyan-500/20 text-cyan-300 rounded-full text-xs border border-cyan-500/30"
+                                    >
+                                      {profile.name}
+                                    </span>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          {selectedShowId !== show.id && (
+                            <button
+                              onClick={() => handleSelectShow(show.id)}
+                              className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-sm transition-colors"
+                            >
+                              Select
+                            </button>
+                          )}
+                          <button
+                            onClick={() => startEdit(show)}
+                            className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm transition-colors"
+                          >
+                            <FontAwesomeIcon icon={faEdit} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteShow(show.id, show.name)}
+                            className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded text-sm transition-colors"
+                          >
+                            <FontAwesomeIcon icon={faTrash} />
+                          </button>
+                        </div>
+                      </div>
                     )}
-                    <div className="flex flex-col">
-                      <span className="text-slate-100 font-medium text-lg">
-                        {show.name}
-                      </span>
-                      <span className="text-slate-500 text-xs mt-0.5">
-                        Last used: {formatRelativeTime(show.last_used_at)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    {selectedShowId !== show.id && (
-                      <button
-                        onClick={() => handleSelectShow(show.id)}
-                        className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-sm transition-colors"
-                      >
-                        Select
-                      </button>
-                    )}
-                    <button
-                      onClick={() => startEdit(show)}
-                      className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded text-sm transition-colors"
-                    >
-                      <FontAwesomeIcon icon={faEdit} />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteShow(show.id, show.name)}
-                      className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded text-sm transition-colors"
-                    >
-                      <FontAwesomeIcon icon={faTrash} />
-                    </button>
-                  </div>
-                </div>
-              )}
                   </div>
                 </div>
               </div>
@@ -593,16 +796,17 @@ export default function Shows() {
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 px-2">
               <div className="flex items-center gap-3">
                 <span className="text-slate-400 text-sm">Items per page:</span>
-                <select
-                  value={itemsPerPage}
-                  onChange={(e) => setItemsPerPage(Number(e.target.value))}
-                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-slate-100 focus:outline-none focus:border-cyan-500 transition-colors"
-                >
-                  <option value={10}>10</option>
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                </select>
+                <Dropdown
+                  value={itemsPerPage.toString()}
+                  options={[
+                    { value: '10', label: '10' },
+                    { value: '25', label: '25' },
+                    { value: '50', label: '50' },
+                    { value: '100', label: '100' },
+                  ]}
+                  onChange={(value) => setItemsPerPage(Number(value))}
+                  className="w-24"
+                />
                 <span className="text-slate-400 text-sm">
                   Showing {Math.min((currentPage - 1) * itemsPerPage + 1, filteredShows.length)} - {Math.min(currentPage * itemsPerPage, filteredShows.length)} of {filteredShows.length}
                 </span>

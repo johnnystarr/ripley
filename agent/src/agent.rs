@@ -55,6 +55,10 @@ impl AgentClient {
             "linux"
         };
         
+        // Get OS version and architecture
+        let os_version = self.get_os_version().await;
+        let os_arch = std::env::consts::ARCH.to_string();
+        
         // Check Topaz capabilities
         let (topaz_installed, topaz_version) = self.check_topaz_capabilities().await;
         let capabilities = serde_json::json!({
@@ -75,6 +79,8 @@ impl AgentClient {
             "capabilities": serde_json::to_string(&capabilities).unwrap_or_else(|_| "{}".to_string()),
             "topaz_version": topaz_version,
             "api_key": self.config.api_key.clone(),
+            "os_version": os_version,
+            "os_arch": os_arch,
         });
         
         let url = format!("{}/api/agents/register", self.config.server_url);
@@ -141,7 +147,21 @@ impl AgentClient {
                 .await?;
             
             if response.status().is_success() {
-                let instructions: Vec<Instruction> = response.json().await?;
+                let instructions_json: Vec<serde_json::Value> = response.json().await?;
+                let instructions: Vec<Instruction> = instructions_json
+                    .into_iter()
+                    .filter_map(|inst| {
+                        Some(Instruction {
+                            id: inst.get("id")?.as_i64()?,
+                            instruction_type: inst.get("instruction_type")?.as_str()?.to_string(),
+                            payload: inst.get("payload")?.clone(),
+                            status: inst.get("status")?.as_str()?.to_string(),
+                            assigned_to_agent_id: inst.get("assigned_to_agent_id")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string()),
+                        })
+                    })
+                    .collect();
                 Ok(instructions)
             } else {
                 Ok(vec![])
@@ -152,6 +172,57 @@ impl AgentClient {
     }
     
     /// Check Topaz capabilities (installed status and version)
+    /// Get OS version string
+    async fn get_os_version(&self) -> Option<String> {
+        #[cfg(target_os = "windows")]
+        {
+            // Use ver command or systeminfo
+            if let Ok(output) = tokio::process::Command::new("cmd")
+                .args(&["/C", "ver"])
+                .output()
+                .await
+            {
+                if let Ok(version_str) = String::from_utf8(output.stdout) {
+                    return Some(version_str.trim().to_string());
+                }
+            }
+        }
+        
+        #[cfg(target_os = "macos")]
+        {
+            // Use sw_vers
+            if let Ok(output) = tokio::process::Command::new("sw_vers")
+                .output()
+                .await
+            {
+                if let Ok(version_str) = String::from_utf8(output.stdout) {
+                    // Parse "ProductVersion: X.Y.Z" format
+                    for line in version_str.lines() {
+                        if line.starts_with("ProductVersion:") {
+                            return Some(line.split(':').nth(1).unwrap_or("").trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        #[cfg(target_os = "linux")]
+        {
+            // Try /etc/os-release
+            if let Ok(content) = tokio::fs::read_to_string("/etc/os-release").await {
+                for line in content.lines() {
+                    if line.starts_with("PRETTY_NAME=") {
+                        let version = line.split('=').nth(1)
+                            .map(|s| s.trim_matches('"').to_string());
+                        return version;
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+    
     pub async fn check_topaz_capabilities(&self) -> (bool, Option<String>) {
         if cfg!(target_os = "windows") {
             if let Some(topaz_path) = crate::topaz::TopazVideo::find_executable() {
@@ -411,6 +482,121 @@ impl AgentClient {
     }
     
     
+    /// Start an instruction
+    pub async fn start_instruction(&self, instruction_id: i64) -> Result<()> {
+        let url = format!("{}/api/agents/instructions/{}/start", self.config.server_url, instruction_id);
+        let response = self.http_client
+            .post(&url)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Failed to start instruction: {}", error_text));
+        }
+        
+        Ok(())
+    }
+
+    /// Complete an instruction with output
+    pub async fn complete_instruction(&self, instruction_id: i64, output: Option<&str>) -> Result<()> {
+        let url = format!("{}/api/agents/instructions/{}/complete", self.config.server_url, instruction_id);
+        let body = serde_json::json!({
+            "output": output,
+        });
+        
+        let response = self.http_client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Failed to complete instruction: {}", error_text));
+        }
+        
+        Ok(())
+    }
+
+    /// Fail an instruction
+    pub async fn fail_instruction(&self, instruction_id: i64, error_message: &str) -> Result<()> {
+        let url = format!("{}/api/agents/instructions/{}/fail", self.config.server_url, instruction_id);
+        let body = serde_json::json!({
+            "error_message": error_message,
+        });
+        
+        let response = self.http_client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await?;
+        
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow::anyhow!("Failed to fail instruction: {}", error_text));
+        }
+        
+        Ok(())
+    }
+
+    /// Process a test command instruction
+    pub async fn process_test_command(&self, instruction_id: i64, command: &str) -> Result<()> {
+        use tokio::process::Command;
+        
+        // Start the instruction
+        self.start_instruction(instruction_id).await?;
+        
+        // Execute the command
+        let output = if cfg!(target_os = "windows") {
+            Command::new("cmd")
+                .args(&["/C", command])
+                .output()
+                .await
+        } else {
+            Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .output()
+                .await
+        };
+        
+        match output {
+            Ok(result) => {
+                // Combine stdout and stderr
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                
+                let mut combined_output = String::new();
+                if !stdout.is_empty() {
+                    combined_output.push_str(&stdout);
+                }
+                if !stderr.is_empty() {
+                    if !combined_output.is_empty() {
+                        combined_output.push('\n');
+                    }
+                    combined_output.push_str(&stderr);
+                }
+                
+                if result.status.success() {
+                    self.complete_instruction(instruction_id, Some(&combined_output)).await?;
+                } else {
+                    let error_msg = if combined_output.is_empty() {
+                        format!("Command failed with exit code: {}", result.status.code().unwrap_or(-1))
+                    } else {
+                        combined_output
+                    };
+                    self.fail_instruction(instruction_id, &error_msg).await?;
+                }
+            }
+            Err(e) => {
+                self.fail_instruction(instruction_id, &format!("Failed to execute command: {}", e)).await?;
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Update upscaling job status
     pub async fn update_job_status(&self, job_id: &str, status: &str, progress: Option<f32>, error: Option<&str>) -> Result<()> {
         let url = format!("{}/api/upscaling-jobs/{}/status", self.config.server_url, job_id);
