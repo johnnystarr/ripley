@@ -7,6 +7,20 @@
 build:
 	@echo "🔨 Cleaning Web UI build artifacts..."
 	@rm -rf web-ui/dist
+	@echo "🔨 Copying sound files to Web UI..."
+	@mkdir -p web-ui/public/sounds
+	@if [ -f "$(HOME)/.config/ripley/sounds/complete.mp3" ]; then \
+		cp "$(HOME)/.config/ripley/sounds/complete.mp3" web-ui/public/sounds/complete.mp3 && \
+		echo "   ✓ Copied complete.mp3"; \
+	else \
+		echo "   ⚠️  complete.mp3 not found in ~/.config/ripley/sounds/ (will use fallback)"; \
+	fi
+	@if [ -f "$(HOME)/.config/ripley/sounds/error.mp3" ]; then \
+		cp "$(HOME)/.config/ripley/sounds/error.mp3" web-ui/public/sounds/error.mp3 && \
+		echo "   ✓ Copied error.mp3"; \
+	else \
+		echo "   ⚠️  error.mp3 not found in ~/.config/ripley/sounds/ (will use fallback)"; \
+	fi
 	@echo "🔨 Building Web UI..."
 	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (release mode)..."
@@ -21,6 +35,20 @@ build:
 debug:
 	@echo "🔨 Cleaning Web UI build artifacts..."
 	@rm -rf web-ui/dist
+	@echo "🔨 Copying sound files to Web UI..."
+	@mkdir -p web-ui/public/sounds
+	@if [ -f "$(HOME)/.config/ripley/sounds/complete.mp3" ]; then \
+		cp "$(HOME)/.config/ripley/sounds/complete.mp3" web-ui/public/sounds/complete.mp3 && \
+		echo "   ✓ Copied complete.mp3"; \
+	else \
+		echo "   ⚠️  complete.mp3 not found in ~/.config/ripley/sounds/ (will use fallback)"; \
+	fi
+	@if [ -f "$(HOME)/.config/ripley/sounds/error.mp3" ]; then \
+		cp "$(HOME)/.config/ripley/sounds/error.mp3" web-ui/public/sounds/error.mp3 && \
+		echo "   ✓ Copied error.mp3"; \
+	else \
+		echo "   ⚠️  error.mp3 not found in ~/.config/ripley/sounds/ (will use fallback)"; \
+	fi
 	@echo "🔨 Building Web UI..."
 	@cd web-ui && npm run build
 	@echo "🔨 Building Ripley (debug mode)..."

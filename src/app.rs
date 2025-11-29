@@ -478,6 +478,12 @@ async fn rip_dvd_disc(
                 add_log(&tui_state, &device, log_line).await;
             });
         },
+        move |_file_path: &std::path::Path, _title_num: u32| {
+            // TUI mode: no per-episode processing (legacy support)
+            Box::pin(async move {
+                Ok(())
+            })
+        },
     ).await;
 
     match result {

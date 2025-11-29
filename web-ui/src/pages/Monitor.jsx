@@ -20,6 +20,7 @@ import { api } from '../api';
 import { wsManager } from '../websocket';
 import toast from 'react-hot-toast';
 import Dropdown from '../components/Dropdown';
+import { playNotificationSound } from '../utils/sound';
 
 export default function Monitor() {
   const [operations, setOperations] = useState([]);
@@ -61,6 +62,7 @@ export default function Monitor() {
     }, 2000);
 
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, fetchOperationHistory]);
   
   // Auto-expand all operations when operations change (for initial load and new operations)
@@ -118,6 +120,8 @@ export default function Monitor() {
           ? { ...op, status: 'completed', progress: 100.0, completed_at: new Date().toISOString() }
           : op
       ));
+      // Play success sound for completed operations
+      playNotificationSound('success');
     });
 
     const unsubscribeOperationFailed = wsManager.on('OperationFailed', (data) => {
@@ -126,6 +130,8 @@ export default function Monitor() {
           ? { ...op, status: 'failed', error: data.error, completed_at: new Date().toISOString() }
           : op
       ));
+      // Play error sound for failed operations
+      playNotificationSound('error');
     });
 
     // Listen for log events and associate with operations
@@ -161,14 +167,55 @@ export default function Monitor() {
     };
   }, []);
 
-  // Auto-scroll logs when new entries are added
+  // Auto-scroll logs when they update (only for active operations)
+  // Use a ref to track previous log counts to only scroll when new logs arrive
+  const prevLogCounts = useRef({});
+  const operationStatuses = useRef({}); // Store operation statuses to avoid reading from state
+  
+  // Update operation statuses ref when operations change (but don't trigger scroll)
   useEffect(() => {
-    Object.keys(operationLogs).forEach(operationId => {
-      if (expandedOperations.has(operationId) && logEndRefs.current[operationId]) {
-        logEndRefs.current[operationId].scrollIntoView({ behavior: 'smooth' });
+    operations.forEach(op => {
+      operationStatuses.current[op.operation_id] = op.status;
+    });
+  }, [operations]);
+  
+  useEffect(() => {
+    // Only react to operationLogs changes, not operations (which includes progress updates)
+    Object.keys(operationLogs).forEach(opId => {
+      const currentLogCount = operationLogs[opId]?.length || 0;
+      const prevLogCount = prevLogCounts.current[opId] || 0;
+      
+      // Only scroll if new logs were actually added (count increased)
+      if (currentLogCount > prevLogCount) {
+        const opStatus = operationStatuses.current[opId];
+        if (opStatus === 'running' || opStatus === 'paused') {
+          // Update the count first
+          prevLogCounts.current[opId] = currentLogCount;
+          
+          // Use requestAnimationFrame to ensure DOM is updated, then scroll
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const logEndRef = logEndRefs.current[opId];
+              if (logEndRef) {
+                // Always scroll when new logs arrive
+                logEndRef.scrollIntoView({ behavior: 'smooth', block: 'end' });
+              }
+            });
+          });
+        } else {
+          // Update the count even if not scrolling
+          prevLogCounts.current[opId] = currentLogCount;
+        }
       }
     });
-  }, [operationLogs, expandedOperations]);
+    
+    // Initialize counts for new operations (but don't scroll)
+    Object.keys(operationLogs).forEach(opId => {
+      if (!(opId in prevLogCounts.current)) {
+        prevLogCounts.current[opId] = operationLogs[opId]?.length || 0;
+      }
+    });
+  }, [operationLogs]); // Only depend on operationLogs, NOT operations
 
   const fetchOperations = useCallback(async () => {
     try {
@@ -447,10 +494,6 @@ export default function Monitor() {
                             ))
                           )}
                           <div ref={el => {
-                            if (el && (operation.status === 'running' || operation.status === 'paused')) {
-                              // Auto-scroll to bottom for active operations
-                              setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'end' }), 100);
-                            }
                             logEndRefs.current[operation.operation_id] = el;
                           }} />
                         </div>

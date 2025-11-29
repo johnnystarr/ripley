@@ -23,16 +23,18 @@ fn parse_duration_to_minutes(duration: &str) -> Option<u32> {
 }
 
 /// Rip a DVD using makemkvcon
-pub async fn rip_dvd<F, L>(
+pub async fn rip_dvd<F, L, E>(
     device: &str,
     output_dir: &Path,
     metadata: Option<&DvdMetadata>,
     mut progress_callback: F,
     mut log_callback: L,
+    mut episode_callback: E,
 ) -> Result<()>
 where
     F: FnMut(RipProgress) + Send,
     L: FnMut(String) + Send,
+    E: for<'a> FnMut(&'a Path, u32) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> + Send,
 {
     info!("Starting DVD rip from {}", device);
     log_callback("Starting DVD rip...".to_string());
@@ -317,14 +319,41 @@ where
         
         log_callback(format!("✅ Title {} ripped", title_num));
         
-        // Rename this title's file immediately if we have metadata
-        if let Some(meta) = &metadata {
-            if let Err(e) = rename_single_title(output_dir, meta, *title_num).await {
-                warn!("Failed to rename title {}: {}", title_num, e);
-                log_callback(format!("⚠️  Could not rename title {}: {}", title_num, e));
-            } else {
-                log_callback(format!("📝 Title {} renamed", title_num));
+        // Find the ripped file for this title
+        let mut ripped_file: Option<std::path::PathBuf> = None;
+        if let Ok(mut entries) = tokio::fs::read_dir(output_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mkv") {
+                    // Check if this file was just created (within last 10 seconds)
+                    if let Ok(file_metadata) = tokio::fs::metadata(&path).await {
+                        if let Ok(modified) = file_metadata.modified() {
+                            let age = std::time::SystemTime::now()
+                                .duration_since(modified)
+                                .unwrap_or_default();
+                            if age.as_secs() < 10 {
+                                ripped_file = Some(path);
+                                break;
+                            }
+                        }
+                    }
+                }
             }
+        }
+        
+        // Process this episode immediately: OpenAI -> Validate -> Move to completed
+        if let Some(file_path) = ripped_file {
+            // Don't log here - let the callback handle logging to avoid duplicates
+            let file_path_for_callback = file_path.clone();
+            if let Err(e) = episode_callback(&file_path_for_callback, *title_num).await {
+                warn!("Failed to process episode {}: {}", title_num, e);
+                log_callback(format!("⚠️  Could not process title {}: {}", title_num, e));
+            } else {
+                log_callback(format!("✅ Title {} processed and moved to completed", title_num));
+            }
+        } else {
+            warn!("Could not find ripped file for title {}", title_num);
+            log_callback(format!("⚠️  Could not find file for title {}", title_num));
         }
     }
     
