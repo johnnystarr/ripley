@@ -266,26 +266,6 @@ CDDBURL="http://gnudb.gnudb.org/~cddb/cddb.cgi"
     Ok(config)
 }
 
-/// Convert string to PascalCase with periods (e.g., "Foster's Home for Imaginary Friends" -> "Fosters.Home.For.Imaginary.Friends")
-pub fn to_pascal_case_with_periods(name: &str) -> String {
-    // First, remove apostrophes to handle "Foster's" -> "Fosters"
-    let cleaned = name.replace('\'', "");
-    
-    cleaned
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(first) => {
-                    format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase())
-                }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(".")
-}
 
 /// Sanitize filename by removing invalid characters
 pub fn sanitize_filename(name: &str) -> String {

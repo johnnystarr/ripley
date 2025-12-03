@@ -18,7 +18,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-use crate::cli::RipArgs;
 use crate::config::Config;
 use crate::database::{Database, LogEntry, Issue, Show, RipQueueEntry, QueueStatus, AgentInfo, TopazProfile, UpscalingJob, JobStatus};
 
@@ -823,7 +822,7 @@ async fn start_rip(
     // Determine the drive identifier (use "default" if not specified)
     let drive = request.drive.clone();
     
-    let mut status = state.rip_status.write().await;
+    let status = state.rip_status.write().await;
     
     // Check if this specific drive (or any drive if not specified) is already ripping
     let drive_busy = if let Some(ref d) = drive {
@@ -1472,7 +1471,7 @@ async fn rip_disc_web_ui(
         tokio::fs::create_dir_all(&output_folder).await?;
     }
     
-    let device_progress = device.to_string();
+    let _device_progress = device.to_string();
     let state_progress = state.clone();
     let operation_id_progress = operation_id.to_string();
     let device_log = device.to_string();
@@ -1591,7 +1590,7 @@ async fn rip_dvd_disc_web_ui(
     title: Option<String>,
     request: &StartRipRequest,
     operation_id: &str,
-    eject_when_done: bool,
+    _eject_when_done: bool,
 ) -> anyhow::Result<()> {
     let media_name = match media_type {
         crate::drive::MediaType::BluRay => "Blu-ray",
@@ -1746,7 +1745,7 @@ async fn rip_dvd_disc_web_ui(
                 send_log_to_web_ui(&state, &device, "info", log_line, Some(&operation_id)).await;
             });
         },
-        move |file_path: &std::path::Path, title_num: u32| {
+        move |file_path: &std::path::Path, _title_num: u32| {
             let completed_dir = completed_dir_clone.clone();
             let metadata = metadata_for_episode.clone();
             let state = state_for_episode.clone();
@@ -1983,16 +1982,6 @@ async fn get_dvd_volume_name_linux(device: &str) -> anyhow::Result<String> {
     Err(anyhow::anyhow!("No volume name found for device {}", device))
 }
 
-/// Extract season/episode from filename like "Show.S01E02.Title.mkv"
-fn extract_episode_from_filename(filename: &str) -> Option<(u32, u32)> {
-    let re = regex::Regex::new(r"S(\d+)E(\d+)").ok()?;
-    if let Some(caps) = re.captures(filename) {
-        if let (Ok(season), Ok(episode)) = (caps[1].parse::<u32>(), caps[2].parse::<u32>()) {
-            return Some((season, episode));
-        }
-    }
-    None
-}
 
 fn create_dummy_metadata() -> crate::metadata::DiscMetadata {
     let track_count = 10;

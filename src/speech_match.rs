@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -168,44 +168,6 @@ async fn extract_and_transcribe_audio_segments(video_path: &Path) -> Result<Stri
     Ok(combined)
 }
 
-/// Extract audio from a specific segment (for retry attempts)
-pub async fn extract_and_transcribe_audio_segment(
-    video_path: &Path,
-    start_time: f64,
-    duration: f64,
-) -> Result<String> {
-    let audio_file = format!("/tmp/ripley_audio_retry_{}.wav", start_time as u64);
-    
-    // Extract segment
-    let extract_result = Command::new("ffmpeg")
-        .args([
-            "-ss", &start_time.to_string(),
-            "-i", video_path.to_str().unwrap(),
-            "-t", &duration.to_string(),
-            "-vn",  // No video
-            "-acodec", "pcm_s16le",  // PCM WAV format
-            "-ar", "16000",  // 16kHz sample rate (good for speech)
-            "-ac", "1",  // Mono
-            "-y",  // Overwrite
-            &audio_file
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await?;
-    
-    if !extract_result.success() {
-        return Err(anyhow::anyhow!("Failed to extract audio segment"));
-    }
-    
-    // Transcribe segment
-    let transcript = transcribe_with_openai_api(&audio_file).await?;
-    
-    // Clean up temp file
-    let _ = tokio::fs::remove_file(&audio_file).await;
-    
-    Ok(transcript)
-}
 
 /// Transcribe audio using OpenAI Whisper API (DISABLED)
 async fn transcribe_with_openai_api(_audio_path: &str) -> Result<String> {

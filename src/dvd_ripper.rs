@@ -153,7 +153,7 @@ where
     }
     
     // Match episodes to disc titles by duration if we have metadata
-    let metadata = if let Some(meta) = metadata {
+    let _metadata = if let Some(meta) = metadata {
         if meta.media_type == MediaType::TVShow && !meta.episodes.is_empty() {
             log_callback("Matching episodes to disc titles by duration...".to_string());
             let matched_episodes = crate::dvd_metadata::match_episodes_by_duration(
@@ -373,49 +373,6 @@ where
     Ok(())
 }
 
-/// Rename a single title's MKV file with simple DISC_LABEL-TIMESTAMP format
-async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_num: u32) -> Result<()> {
-    use tokio::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    
-    // Find the MKV file for this title (MakeMKV names them like title_t00.mkv, title_t01.mkv, etc.)
-    let expected_patterns = [
-        format!("title_t{:02}.mkv", title_num),
-        format!("title{:02}.mkv", title_num),
-        format!("t{:02}.mkv", title_num),
-    ];
-    
-    let mut entries = fs::read_dir(output_dir).await?;
-    let mut file_path = None;
-    
-    while let Some(entry) = entries.next_entry().await? {
-        let path = entry.path();
-        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-            if expected_patterns.iter().any(|pattern| filename.contains(pattern)) {
-                file_path = Some(path);
-                break;
-            }
-        }
-    }
-    
-    let file_path = file_path.ok_or_else(|| anyhow!("Could not find MKV file for title {}", title_num))?;
-    
-    // Simple naming: DISC_LABEL-TIMESTAMP.mkv
-    let disc_label = metadata.title.replace(' ', "_").replace("/", "_");
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    
-    let new_name = format!("{}-{}.mkv", disc_label, timestamp);
-    let new_path = output_dir.join(&new_name);
-    
-    info!("Renaming {} -> {}", file_path.display(), new_name);
-    
-    fs::rename(&file_path, &new_path).await?;
-    
-    Ok(())
-}
 
 /// Rename MKV files based on metadata (batch mode, kept for compatibility)
 #[allow(dead_code)]

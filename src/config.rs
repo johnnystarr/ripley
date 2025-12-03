@@ -199,6 +199,7 @@ impl Config {
     }
     
     /// Get the default rip profile
+    #[allow(dead_code)]
     pub fn get_default_profile(&self) -> Option<&RipProfile> {
         self.rip_profiles.iter()
             .find(|p| p.is_default)
@@ -206,6 +207,7 @@ impl Config {
     }
     
     /// Get a rip profile by name
+    #[allow(dead_code)]
     pub fn get_profile(&self, name: &str) -> Option<&RipProfile> {
         self.rip_profiles.iter().find(|p| p.name == name)
     }

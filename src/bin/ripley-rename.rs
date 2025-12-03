@@ -13,6 +13,7 @@ fn main() -> iced::Result {
 
 #[derive(Debug, Clone)]
 enum Message {
+    #[allow(dead_code)]
     LoadFiles,
     FilesLoaded(Vec<FileEntry>),
     FileSelected(usize),
@@ -172,9 +173,9 @@ impl Application for RenameApp {
                     self.success_message = None;
                     
                     // Extract preview
-                    let file_path = file.path.clone();
-                    let show_name = self.show_name.clone();
-                    let preview_settings = self.show_preview_settings.clone();
+                    let _file_path = file.path.clone();
+                    let _show_name = self.show_name.clone();
+                    let _preview_settings = self.show_preview_settings.clone();
                     
                     // Extract preview in background
                     let file_path_clone = file.path.clone();
@@ -452,7 +453,7 @@ impl Application for RenameApp {
         }
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let left_panel = self.view_file_list();
         let right_panel = self.view_file_details();
         
@@ -468,7 +469,7 @@ impl Application for RenameApp {
 }
 
 impl RenameApp {
-    fn view_file_list(&self) -> Element<Message> {
+    fn view_file_list(&self) -> Element<'_, Message> {
         let mut file_list = Column::new().spacing(8);
         
         for (index, file) in self.files.iter().enumerate() {
@@ -507,7 +508,7 @@ impl RenameApp {
         .into()
     }
     
-    fn view_file_details(&self) -> Element<Message> {
+    fn view_file_details(&self) -> Element<'_, Message> {
         if let Some(index) = self.selected_index {
             if index < self.files.len() {
                 let file = &self.files[index];
