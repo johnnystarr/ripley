@@ -2715,7 +2715,7 @@ impl Database {
             for show_seed in show_seeds {
                 let (show_name, profile_names) = match show_seed {
                     crate::config::ShowSeed::Simple(name) => (name, vec![]),
-                    crate::config::ShowSeed::WithProfiles { name, topaz_profiles } => {
+                    crate::config::ShowSeed::WithConfig { name, topaz_profiles, .. } => {
                         info!("Show '{}' has {} profiles to associate: {:?}", name, topaz_profiles.len(), topaz_profiles);
                         (name, topaz_profiles)
                     },

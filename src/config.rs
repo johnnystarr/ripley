@@ -71,17 +71,31 @@ pub struct TopazProfileSeed {
     pub command: String,
 }
 
-/// Show seed entry with optional Topaz profile associations
+/// Preview settings for show video extraction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShowPreview {
+    #[serde(default = "default_preview_start")]
+    pub start_time: u32, // seconds
+    #[serde(default = "default_preview_duration")]
+    pub duration: u32,   // seconds
+}
+
+fn default_preview_start() -> u32 { 0 }
+fn default_preview_duration() -> u32 { 10 }
+
+/// Show seed entry with optional Topaz profile associations and preview settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ShowSeed {
     /// Simple string format (backward compatible)
     Simple(String),
-    /// Object format with profile associations
-    WithProfiles {
+    /// Object format with profile associations and/or preview settings
+    WithConfig {
         name: String,
         #[serde(default)]
         topaz_profiles: Vec<String>, // Profile names to associate
+        #[serde(default)]
+        preview: Option<ShowPreview>, // Preview settings for ripley-rename
     },
 }
 

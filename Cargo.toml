@@ -57,6 +57,12 @@ regex = "1.10"
 urlencoding = "2.1"
 walkdir = "2.5"
 
+# GUI for ripley-rename
+iced = { version = "0.12", features = ["image", "tokio"] }
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[[bin]]
+name = "ripley-rename"
+path = "src/bin/ripley-rename.rs"

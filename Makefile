@@ -29,6 +29,7 @@ build:
 	@cd agent && cargo build --release
 	@echo "✅ Build complete:"
 	@echo "   - target/release/ripley"
+	@echo "   - target/release/ripley-rename"
 	@echo "   - agent/target/release/ripley-agent"
 
 # Build debug version (includes web UI and agent)
@@ -57,6 +58,7 @@ debug:
 	@cd agent && cargo build
 	@echo "✅ Debug build complete:"
 	@echo "   - target/debug/ripley"
+	@echo "   - target/debug/ripley-rename"
 	@echo "   - agent/target/debug/ripley-agent"
 
 # Run development server with hot reload
