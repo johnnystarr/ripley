@@ -5,7 +5,6 @@ use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub openai_api_key: Option<String>,
     pub tmdb_api_key: Option<String>,
     pub notifications: NotificationConfig,
     pub rsync: RsyncConfig,
@@ -111,7 +110,6 @@ pub struct SeedConfig {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            openai_api_key: None,
             tmdb_api_key: None, // All values should come from config.yaml
             notifications: NotificationConfig {
                 enabled: false,
@@ -184,15 +182,7 @@ impl Config {
     /// Load config from specific file
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let contents = std::fs::read_to_string(path)?;
-        let mut config: Config = serde_yaml::from_str(&contents)?;
-        
-        // Validate API keys
-        if let Some(ref key) = config.openai_api_key {
-            if key == "YOUR_API_KEY_HERE" || key.is_empty() {
-                warn!("OpenAI API key not configured in config.yaml");
-                config.openai_api_key = None;
-            }
-        }
+        let config: Config = serde_yaml::from_str(&contents)?;
         
         debug!("Config loaded: speech_match={}, filebot={}", 
                config.speech_match.enabled, !config.filebot.skip_by_default);
@@ -200,11 +190,7 @@ impl Config {
         Ok(config)
     }
     
-    /// Get OpenAI API key from config or environment variable
-    pub fn get_openai_api_key(&self) -> Option<String> {
-        self.openai_api_key.clone()
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-    }
+
     
     /// Get TMDB API key from config
     #[allow(dead_code)]
@@ -290,15 +276,7 @@ mod tests {
         assert!(filebot_config.use_for_music);
     }
 
-    #[test]
-    fn test_config_get_openai_key() {
-        let config = Config {
-            openai_api_key: Some("my_key".to_string()),
-            ..Default::default()
-        };
 
-        assert_eq!(config.get_openai_api_key(), Some("my_key".to_string()));
-    }
 
     #[test]
     fn test_config_get_tmdb_key() {
@@ -313,7 +291,6 @@ mod tests {
     #[test]
     fn test_config_serialization() {
         let config = Config {
-            openai_api_key: Some("test_key".to_string()),
             tmdb_api_key: Some("tmdb_test".to_string()),
             speech_match: SpeechMatchConfig {
                 enabled: true,
@@ -331,8 +308,7 @@ mod tests {
         };
 
         let yaml = serde_yaml::to_string(&config).unwrap();
-        assert!(yaml.contains("openai_api_key"));
-        assert!(yaml.contains("test_key"));
+        assert!(yaml.contains("tmdb_api_key"));
         assert!(yaml.contains("audio_duration: 200"));
         assert!(yaml.contains("database: Custom"));
     }

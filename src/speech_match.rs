@@ -207,41 +207,9 @@ pub async fn extract_and_transcribe_audio_segment(
     Ok(transcript)
 }
 
-/// Transcribe audio using OpenAI Whisper API
-async fn transcribe_with_openai_api(audio_path: &str) -> Result<String> {
-    // Load config and get API key
-    let config = crate::config::Config::load()?;
-    let api_key = config.get_openai_api_key()
-        .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured in config.yaml or OPENAI_API_KEY env var"))?;
-    
-    info!("Using OpenAI Whisper API for transcription");
-    
-    // Use curl to upload audio file to OpenAI Whisper API
-    let output = Command::new("curl")
-        .args([
-            "-X", "POST",
-            "https://api.openai.com/v1/audio/transcriptions",
-            "-H", &format!("Authorization: Bearer {}", api_key),
-            "-F", &format!("file=@{}", audio_path),
-            "-F", "model=whisper-1"
-        ])
-        .output()
-        .await?;
-    
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("OpenAI API request failed"));
-    }
-    
-    let response = String::from_utf8_lossy(&output.stdout);
-    
-    // Parse JSON response
-    let json: serde_json::Value = serde_json::from_str(&response)?;
-    let transcript = json["text"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No transcript in response"))?
-        .to_string();
-    
-    Ok(transcript)
+/// Transcribe audio using OpenAI Whisper API (DISABLED)
+async fn transcribe_with_openai_api(_audio_path: &str) -> Result<String> {
+    Err(anyhow::anyhow!("OpenAI API support has been removed from Ripley"))
 }
 
 /// Match transcript against TMDB episodes using OpenAI
@@ -255,129 +223,12 @@ pub async fn match_episode_by_transcript(
 
 /// Match transcript against TMDB episodes using OpenAI, excluding a specific episode
 pub async fn match_episode_by_transcript_with_exclusion(
-    show_name: &str,
-    transcript: &str,
-    episodes: &[crate::dvd_metadata::Episode],
-    exclude_episode: Option<(u32, u32)>, // (season, episode) to exclude
+    _show_name: &str,
+    _transcript: &str,
+    _episodes: &[crate::dvd_metadata::Episode],
+    _exclude_episode: Option<(u32, u32)>, // (season, episode) to exclude
 ) -> Result<EpisodeMatch> {
-    info!("Matching transcript against {} episodes", episodes.len());
-    
-    // Load config and get API key
-    let config = crate::config::Config::load()?;
-    let api_key = config.get_openai_api_key()
-        .ok_or_else(|| anyhow::anyhow!("OpenAI API key not configured in config.yaml or OPENAI_API_KEY env var"))?;
-    
-    // Build episode list with summaries for better context
-    let episode_list: Vec<String> = episodes.iter()
-        .map(|ep| {
-            if let Some(overview) = &ep.overview {
-                format!("S{:02}E{:02}: {} - {}", ep.season, ep.episode, ep.title, overview)
-            } else {
-                format!("S{:02}E{:02}: {}", ep.season, ep.episode, ep.title)
-            }
-        })
-        .collect();
-    
-    // Filter out excluded episode if specified
-    let filtered_episodes: Vec<String> = if let Some((ex_season, ex_episode)) = exclude_episode {
-        episodes.iter()
-            .filter(|ep| !(ep.season == ex_season && ep.episode == ex_episode))
-            .map(|ep| {
-                if let Some(overview) = &ep.overview {
-                    format!("S{:02}E{:02}: {} - {}", ep.season, ep.episode, ep.title, overview)
-                } else {
-                    format!("S{:02}E{:02}: {}", ep.season, ep.episode, ep.title)
-                }
-            })
-            .collect()
-    } else {
-        episode_list
-    };
-    
-    let exclusion_note = if let Some((ex_season, ex_episode)) = exclude_episode {
-        format!("\n\nIMPORTANT: This transcript is NOT from S{:02}E{:02}. Do not match to that episode.", ex_season, ex_episode)
-    } else {
-        String::new()
-    };
-    
-    let prompt = format!(
-        r#"You are matching a TV episode transcript to the correct episode.
-
-Show: {}
-
-Available episodes (with plot summaries):
-{}
-
-Dialogue transcript from the episode:
-{}{}
-
-Task: Match this dialogue to the correct episode by:
-1. Identifying key plot points, character interactions, and story elements from the dialogue
-2. Comparing these elements to each episode's plot summary
-3. Finding the episode whose summary best matches the events/dialogue shown
-
-Respond with episode code and confidence (0-100).
-Format: S##E## <confidence>
-Example: S01E13 95"#,
-        show_name,
-        filtered_episodes.join("\n"),
-        transcript.chars().take(3000).collect::<String>(),
-        exclusion_note
-    );
-    
-    debug!("Sending to OpenAI: {} chars", prompt.len());
-    
-    // Call OpenAI API
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&serde_json::json!({
-            "model": "gpt-4o",
-            "messages": [
-                {"role": "system", "content": "You are a TV episode identification assistant with expertise in analyzing dialogue and matching it to episode summaries. Respond with only the episode code and confidence."},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.2
-        }))
-        .send()
-        .await?;
-    
-    let result: serde_json::Value = response.json().await?;
-    let answer = result["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("No response from OpenAI"))?;
-    
-    debug!("OpenAI response: {}", answer);
-    
-    // Parse response like "S02E05" or "S02E05\n85" or "S02E05 confidence: 85"
-    // Use regex to extract season/episode numbers and confidence
-    let re = regex::Regex::new(r"S(\d+)E(\d+)").unwrap();
-    let caps = re.captures(answer)
-        .ok_or_else(|| anyhow::anyhow!("Could not parse episode format from: {}", answer))?;
-    
-    let season: u32 = caps[1].parse()?;
-    let episode: u32 = caps[2].parse()?;
-    
-    // Find matching episode for title
-    let matched_ep = episodes.iter()
-        .find(|ep| ep.season == season && ep.episode == episode)
-        .ok_or_else(|| anyhow::anyhow!("Episode S{:02}E{:02} not found in metadata", season, episode))?;
-    
-    // Extract confidence - look for any number after the episode code
-    let confidence_re = regex::Regex::new(r"(\d+)\s*$").unwrap();
-    let confidence = if let Some(conf_caps) = confidence_re.captures(answer) {
-        conf_caps[1].parse::<f32>().unwrap_or(85.0)
-    } else {
-        85.0  // Default to 85% if not specified
-    };
-    
-    Ok(EpisodeMatch {
-        season,
-        episode,
-        title: matched_ep.title.clone(),
-        confidence,
-    })
+    Err(anyhow::anyhow!("OpenAI API support has been removed from Ripley"))
 }
 
 #[cfg(test)]

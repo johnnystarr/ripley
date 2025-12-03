@@ -373,9 +373,10 @@ where
     Ok(())
 }
 
-/// Rename a single title's MKV file immediately after ripping
+/// Rename a single title's MKV file with simple DISC_LABEL-TIMESTAMP format
 async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_num: u32) -> Result<()> {
     use tokio::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
     
     // Find the MKV file for this title (MakeMKV names them like title_t00.mkv, title_t01.mkv, etc.)
     let expected_patterns = [
@@ -399,33 +400,19 @@ async fn rename_single_title(output_dir: &Path, metadata: &DvdMetadata, title_nu
     
     let file_path = file_path.ok_or_else(|| anyhow!("Could not find MKV file for title {}", title_num))?;
     
-    // Don't trust episode titles from database - DVD order doesn't match
-    // Use minimal naming to force Filebot to analyze actual video content
-    if metadata.media_type == MediaType::TVShow {
-        let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
-        
-        // Use minimal naming: ShowName.01.mkv, ShowName.02.mkv, etc.
-        // This forces Filebot to analyze the actual video duration/content
-        // to match against the correct broadcast order episodes
-        let new_name = format!("{}.{:02}.mkv", show_name, title_num);
-        let new_path = output_dir.join(&new_name);
-        
-        info!("Renaming {} -> {} (DVD Title {} - Filebot will analyze)", 
-              file_path.display(), new_name, title_num);
-        
-        fs::rename(&file_path, &new_path).await?;
-    } else if metadata.media_type == MediaType::Movie {
-        let movie_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
-        let new_name = if let Some(year) = &metadata.year {
-            format!("{}.{}.mkv", movie_name, year)
-        } else {
-            format!("{}.mkv", movie_name)
-        };
-        
-        let new_path = output_dir.join(&new_name);
-        info!("Renaming {} -> {}", file_path.display(), new_name);
-        fs::rename(&file_path, &new_path).await?;
-    }
+    // Simple naming: DISC_LABEL-TIMESTAMP.mkv
+    let disc_label = metadata.title.replace(' ', "_").replace("/", "_");
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    let new_name = format!("{}-{}.mkv", disc_label, timestamp);
+    let new_path = output_dir.join(&new_name);
+    
+    info!("Renaming {} -> {}", file_path.display(), new_name);
+    
+    fs::rename(&file_path, &new_path).await?;
     
     Ok(())
 }
@@ -449,54 +436,31 @@ async fn rename_dvd_files(output_dir: &Path, metadata: &DvdMetadata) -> Result<(
     // Sort files by name to ensure consistent ordering
     mkv_files.sort();
     
-    match metadata.media_type {
-        MediaType::TVShow => {
-            // Rename as episodes with PascalCase.With.Periods format
-            // Match files to episodes by title_index from duration matching
-            for (file_idx, file_path) in mkv_files.iter().enumerate() {
-                // Find episode that corresponds to this MakeMKV title
-                // MakeMKV outputs files as title_t00.mkv, title_t01.mkv, etc.
-                // where the number corresponds to the title index
-                if let Some(episode) = metadata.episodes.iter().find(|e| e.title_index == file_idx as u32) {
-                    let show_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
-                    let episode_title = crate::ripper::to_pascal_case_with_periods(&episode.title);
-                    let new_name = format!(
-                        "{}.S{:02}E{:02}.{}.mkv",
-                        show_name,
-                        episode.season,
-                        episode.episode,
-                        episode_title
-                    );
-                    
-                    let new_path = output_dir.join(&new_name);
-                    
-                    info!("Renaming {} -> {} (Title {} = S{:02}E{:02})", 
-                          file_path.display(), new_name, file_idx, episode.season, episode.episode);
-                    fs::rename(file_path, &new_path).await?;
-                } else {
-                    info!("Skipping file {} (no episode match for title {})", file_path.display(), file_idx);
-                }
-            }
-        }
-        MediaType::Movie => {
-            // Rename single movie file with PascalCase.With.Periods format
-            if let Some(file_path) = mkv_files.first() {
-                let movie_name = crate::ripper::to_pascal_case_with_periods(&metadata.title);
-                let new_name = if let Some(year) = &metadata.year {
-                    format!("{}.{}.mkv", movie_name, year)
-                } else {
-                    format!("{}.mkv", movie_name)
-                };
-                
-                let new_path = output_dir.join(&new_name);
-                
-                info!("Renaming {} -> {}", file_path.display(), new_name);
-                fs::rename(file_path, &new_path).await?;
-            }
-        }
-        MediaType::Unknown => {
-            // Don't rename if we don't know the type
-            debug!("Skipping rename for unknown media type");
+    // Simple naming: DISC_LABEL-TIMESTAMP.mkv for all files
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let disc_label = metadata.title.replace(' ', "_").replace("/", "_");
+    
+    for (file_idx, file_path) in mkv_files.iter().enumerate() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        
+        // Add file index if multiple files
+        let new_name = if mkv_files.len() > 1 {
+            format!("{}-{}-{:02}.mkv", disc_label, timestamp, file_idx + 1)
+        } else {
+            format!("{}-{}.mkv", disc_label, timestamp)
+        };
+        
+        let new_path = output_dir.join(&new_name);
+        
+        info!("Renaming {} -> {}", file_path.display(), new_name);
+        fs::rename(file_path, &new_path).await?;
+        
+        // Small delay to ensure different timestamps if processing quickly
+        if mkv_files.len() > 1 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
     
